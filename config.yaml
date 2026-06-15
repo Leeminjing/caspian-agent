@@ -1,0 +1,41 @@
+models:
+  - name: deepseek-v4-flash
+    display_name: Other OpenAI-compatible / deepseek-v4-flash
+    use: langchain_openai:ChatOpenAI
+    model: deepseek-v4-flash
+    api_key: $OPENAI_API_KEY
+    base_url: https://api.deepseek.com
+
+tool_groups:
+  - name: web
+  - name: file:read
+  - name: file:write
+  - name: bash
+
+tools:
+  - name: ls
+    group: file:read
+    use: deerflow.sandbox.tools:ls_tool
+  - name: read_file
+    group: file:read
+    use: deerflow.sandbox.tools:read_file_tool
+  - name: glob
+    group: file:read
+    use: deerflow.sandbox.tools:glob_tool
+    max_results: 200
+  - name: grep
+    group: file:read
+    use: deerflow.sandbox.tools:grep_tool
+    max_results: 100
+  - name: write_file
+    group: file:write
+    use: deerflow.sandbox.tools:write_file_tool
+  - name: str_replace
+    group: file:write
+    use: deerflow.sandbox.tools:str_replace_tool
+  - name: bash
+    group: bash
+    use: deerflow.sandbox.tools:bash_tool
+
+skills:
+  container_path: /mnt/skills

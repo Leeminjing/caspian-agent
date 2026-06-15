@@ -1,0 +1,105 @@
+"""
+本文件对外提供 get_app_config、reload_app_config 两个公开函数，以及 AppConfig 配置聚合类。
+
+AppConfig: 声明式配置数据模型，聚合 models / tool_groups / tools / skills 四类配置
+get_app_config: 组合根入口，将 config.yaml 加载为全局单例 AppConfig 对象
+reload_app_config: 强制刷新全局单例，修改 config.yaml 后立即生效
+
+完整加载工作流：
+_load_yaml 读取 YAML 文件 → _resolve_env_vars 解析 $ENV_VAR 环境变量引用
+→ AppConfig.model_validate 由 dict 递归生成 AppConfig + 子 Pydantic 对象
+→ 写入模块级 _app_config 单例缓存，后续 get_app_config 直接返回
+"""
+
+import os
+from pathlib import Path
+
+import yaml
+from pydantic import BaseModel, ConfigDict
+
+from lead_agent.config.model_config import ModelConfig
+from lead_agent.config.skills_config import SkillsConfig
+from lead_agent.config.tool_config import ToolConfig
+from lead_agent.config.tool_group_config import ToolGroupConfig
+
+
+class AppConfig(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    models: list[ModelConfig]
+    tool_groups: list[ToolGroupConfig]
+    tools: list[ToolConfig]
+    skills: SkillsConfig
+
+    def _normalize_name(self, name: str) -> str:
+        return name.strip()
+
+    @staticmethod
+    def _get_model_path(use: str) -> tuple[str, str]:
+        parts = use.split(":", 1)
+        if len(parts) != 2:
+            raise ValueError(f"无效的 use 格式: '{use}'，应为 'module:Class'")
+        return parts[0], parts[1]
+
+    def get_model(self, name: str) -> ModelConfig:
+        normalized = self._normalize_name(name)
+        for m in self.models:
+            if m.name == normalized:
+                return m
+        raise KeyError(f"未找到模型配置: '{name}'")
+
+    def get_tools_by_group(self, group: str) -> list[ToolConfig]:
+        return [t for t in self.tools if t.group == group]
+
+
+_app_config: AppConfig | None = None
+
+
+def _load_yaml(path: str) -> dict:
+    yaml_path = Path(path)
+    if not yaml_path.exists():
+        raise FileNotFoundError(f"配置文件不存在: {path}")
+    with open(yaml_path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _resolve_env_vars(data: dict) -> dict:
+    resolved = {}
+    for key, value in data.items():
+        if isinstance(value, dict):
+            resolved[key] = _resolve_env_vars(value)
+        elif isinstance(value, list):
+            resolved[key] = [
+                _resolve_env_vars(item) if isinstance(item, dict) else _resolve_env_item(item)
+                for item in value
+            ]
+        else:
+            resolved[key] = _resolve_env_item(value)
+    return resolved
+
+
+def _resolve_env_item(value):
+    if isinstance(value, str) and value.startswith("$"):
+        env_var = value[1:]
+        env_value = os.environ.get(env_var)
+        if env_value is None:
+            raise KeyError(f"环境变量未设置: {env_var}")
+        return env_value
+    return value
+
+
+def get_app_config(yaml_path: str) -> AppConfig:
+    global _app_config
+    if _app_config is None:
+        raw = _load_yaml(yaml_path)
+        resolved = _resolve_env_vars(raw)
+        _app_config = AppConfig.model_validate(resolved)
+    return _app_config
+
+
+def reload_app_config(yaml_path: str) -> AppConfig:
+    global _app_config
+    raw = _load_yaml(yaml_path)
+    resolved = _resolve_env_vars(raw)
+    _app_config = AppConfig.model_validate(resolved)
+    return _app_config
