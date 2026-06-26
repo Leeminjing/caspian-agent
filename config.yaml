@@ -39,3 +39,6 @@ tools:
 
 skills:
   container_path: /mnt/skills
+
+sandbox:
+  use: lead_agent.sandbox.local:LocalSandbox

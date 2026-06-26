@@ -1,7 +1,7 @@
 """
 本文件对外提供 get_app_config、reload_app_config 两个公开函数，以及 AppConfig 配置聚合类。
 
-AppConfig: 声明式配置数据模型，聚合 models / tool_groups / tools / skills 四类配置
+AppConfig: 声明式配置数据模型，聚合 models / tool_groups / tools / skills / extensions 五类配置
 get_app_config: 组合根入口，将 config.yaml 加载为全局单例 AppConfig 对象
 reload_app_config: 强制刷新全局单例，修改 config.yaml 后立即生效
 
@@ -17,7 +17,9 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from lead_agent.config.extensions_config import ExtensionsConfig
 from lead_agent.config.model_config import ModelConfig
+from lead_agent.config.sandbox_config import SandboxConfig
 from lead_agent.config.skills_config import SkillsConfig
 from lead_agent.config.tool_config import ToolConfig
 from lead_agent.config.tool_group_config import ToolGroupConfig
@@ -30,6 +32,8 @@ class AppConfig(BaseModel):
     tool_groups: list[ToolGroupConfig]
     tools: list[ToolConfig]
     skills: SkillsConfig
+    sandbox: SandboxConfig
+    extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

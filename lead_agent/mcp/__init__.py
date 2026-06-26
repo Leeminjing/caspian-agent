@@ -1,0 +1,19 @@
+"""
+lead_agent MCP 模块。
+
+对外提供:
+    client.py — 纯翻译层，McpServerConfig → MultiServerMCPClient 可消费 dict
+    tools.py — 连接 MCP Server 获取远端工具列表
+    cache.py — 基于 mtime 的工具缓存与热更新
+"""
+
+from lead_agent.mcp.cache import get_mcp_tools_cached
+from lead_agent.mcp.client import build_server_params, build_servers_config
+from lead_agent.mcp.tools import get_mcp_tools
+
+__all__ = [
+    "build_server_params",
+    "build_servers_config",
+    "get_mcp_tools",
+    "get_mcp_tools_cached",
+]
