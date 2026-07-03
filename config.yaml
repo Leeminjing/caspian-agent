@@ -13,29 +13,15 @@ tool_groups:
   - name: bash
 
 tools:
-  - name: ls
-    group: file:read
-    use: deerflow.sandbox.tools:ls_tool
   - name: read_file
     group: file:read
-    use: deerflow.sandbox.tools:read_file_tool
-  - name: glob
-    group: file:read
-    use: deerflow.sandbox.tools:glob_tool
-    max_results: 200
-  - name: grep
-    group: file:read
-    use: deerflow.sandbox.tools:grep_tool
-    max_results: 100
+    use: lead_agent.sandbox.tools:read_file_tool
   - name: write_file
     group: file:write
-    use: deerflow.sandbox.tools:write_file_tool
-  - name: str_replace
-    group: file:write
-    use: deerflow.sandbox.tools:str_replace_tool
+    use: lead_agent.sandbox.tools:write_file_tool
   - name: bash
     group: bash
-    use: deerflow.sandbox.tools:bash_tool
+    use: lead_agent.sandbox.tools:run_shell_tool
 
 skills:
   container_path: /mnt/skills
