@@ -21,6 +21,7 @@ from lead_agent.config.extensions_config import ExtensionsConfig
 from lead_agent.config.model_config import ModelConfig
 from lead_agent.config.sandbox_config import SandboxConfig
 from lead_agent.config.skills_config import SkillsConfig
+from lead_agent.config.stream_bridge_config import StreamBridgeConfig
 from lead_agent.config.tool_config import ToolConfig
 from lead_agent.config.tool_group_config import ToolGroupConfig
 
@@ -33,6 +34,7 @@ class AppConfig(BaseModel):
     tools: list[ToolConfig]
     skills: SkillsConfig
     sandbox: SandboxConfig
+    stream_bridge: StreamBridgeConfig = StreamBridgeConfig()
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
 
     def _normalize_name(self, name: str) -> str:

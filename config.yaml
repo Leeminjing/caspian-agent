@@ -28,3 +28,7 @@ skills:
 
 sandbox:
   use: lead_agent.sandbox.local:LocalSandbox
+
+stream_bridge:
+  type: memory
+  queue_maxsize: 512
