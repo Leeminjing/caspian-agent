@@ -1,0 +1,134 @@
+"""
+本文件对外提供 `start_run` 异步函数，作为 core-aob 链路的编排层核心。
+
+对外提供:
+    start_run — 编排实现层需要的参数与对象，最后创建 asyncio task 调用实现层
+
+输入:
+    body: Any — RunCreateRequest 解析后的请求体
+    thread_id: str — 请求查询参数中的 thread_id
+    request: Request — FastAPI Request 对象，用于获取 app.state 中的资源
+
+输出:
+    RunRecord — 新创建的 run 运行时档案
+
+具体工作流:
+    (1) 从 request.app.state 获取 StreamBridge、RunManager
+    (2) 通过 get_app_config("config.yaml") 获取 AppConfig
+    (3) 创建 RunRecord（初始状态 pending）
+    (4) 组装参数：input → HumanMessage、RunnableConfig、context、stream_modes
+    (5) asyncio.create_task(run_agent(...)) 启动 worker
+    (6) record.task = task，返回 RunRecord
+
+示例:
+    @router.post("/{thread_id}/runs/stream")
+    async def stream_run(thread_id: str, body: RunCreateRequest, request: Request):
+        record = await start_run(body, thread_id, request)
+        return StreamingResponse(sse_consumer(...))
+"""
+
+import asyncio
+import logging
+from typing import Any
+
+from fastapi import Request
+from langchain_core.messages import HumanMessage
+from langchain_core.runnables import RunnableConfig
+
+from lead_agent.config.app_config import get_app_config
+from lead_agent.runtime.runs.manager import RunManager, RunRecord
+from lead_agent.runtime.runs.schemas import DisconnectMode
+from lead_agent.runtime.runs.worker import run_agent
+from lead_agent.runtime.stream_bridge.base import StreamBridge
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_RECURSION_LIMIT = 25
+
+
+async def start_run(
+    body: Any,
+    thread_id: str,
+    request: Request,
+) -> RunRecord:
+    # (1) 从 request.app.state 获取资源
+    bridge: StreamBridge = request.app.state.stream_bridge
+    run_manager: RunManager = request.app.state.run_manager
+
+    # (2) 获取 AppConfig
+    app_config = get_app_config("config.yaml")
+
+    # (3) 创建 RunRecord
+    model_name = None
+    if hasattr(body, "context") and body.context:
+        model_name = body.context.get("model_name") if isinstance(body.context, dict) else getattr(body.context, "model_name", None)
+
+    record = run_manager.create(
+        thread_id=thread_id,
+        on_disconnect=DisconnectMode.cancel,
+        model_name=model_name,
+    )
+    logger.info("RunRecord 已创建: run_id='%s', thread_id='%s'", record.run_id, thread_id)
+
+    # (4) 组装参数
+
+    # input → HumanMessage
+    graph_input: dict = {}
+    if hasattr(body, "input") and body.input:
+        raw_input = body.input
+        if isinstance(raw_input, dict):
+            msgs = raw_input.get("messages", [])
+            messages = []
+            for m in msgs:
+                if isinstance(m, HumanMessage):
+                    messages.append(m)
+                elif isinstance(m, dict):
+                    role = m.get("role", "user")
+                    content = m.get("content", "")
+                    if role == "user":
+                        messages.append(HumanMessage(content=content))
+            graph_input["messages"] = messages
+        else:
+            graph_input = raw_input
+
+    # RunnableConfig
+    runnable_config: RunnableConfig = {
+        "max_concurrency": None,
+        "recursion_limit": _DEFAULT_RECURSION_LIMIT,
+        "configurable": {
+            "thread_id": thread_id,
+            "run_id": record.run_id,
+        },
+    }
+
+    # LangGraph context
+    langgraph_context: dict = {
+        "model_name": model_name,
+        "app_config": app_config,
+    }
+
+    # stream_modes
+    stream_modes: list[str] | str | None = None
+    if hasattr(body, "stream_mode") and body.stream_mode:
+        stream_modes = body.stream_mode
+    if stream_modes is None:
+        stream_modes = ["values"]
+
+    # (5) asyncio.create_task 启动 worker
+    task = asyncio.create_task(
+        run_agent(
+            record=record,
+            bridge=bridge,
+            run_manager=run_manager,
+            app_config=app_config,
+            graph_input=graph_input,
+            runnable_config=runnable_config,
+            stream_modes=stream_modes,
+            langgraph_context=langgraph_context,
+        )
+    )
+
+    # (6) 挂载 task 并返回
+    record.task = task
+    logger.info("worker 已启动: run_id='%s'", record.run_id)
+    return record

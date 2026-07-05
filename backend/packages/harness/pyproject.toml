@@ -1,0 +1,25 @@
+[project]
+name = "caspian-harness"
+version = "0.1.0"
+description = "Caspian agent harness — lead_agent core runtime"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langgraph>=0.3.0",
+    "langchain-openai>=0.3.0",
+    "pyyaml>=6.0",
+]
+[project.optional-dependencies]
+mcp = ["langchain-mcp-adapters>=0.1.0"]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["lead_agent*"]
+
+[tool.setuptools.package-dir]
+"" = "."
