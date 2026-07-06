@@ -41,6 +41,7 @@ class StreamEvent:
         id:   单调递增的事件 ID，用作 SSE 的 `id:` 字段，支持通过 `Last-Event-ID` 断线重连。
         event: SSE 事件名称，例如 "metadata"、"updates"、"events"、"error"、"end"。
         data:  可序列化为 JSON 的载荷数据，即真正要传的事件本体。
+              MUST 在 publish 前由 producer 确保为 JSON 可序列化（dict/list/str/int/float/bool/None 及其嵌套组合）。
     """
 
     id: str

@@ -41,6 +41,7 @@
     app.include_router(router, prefix="/api/threads")
 """
 
+import asyncio
 import json
 import logging
 from typing import Any
@@ -90,11 +91,28 @@ def format_sse(event_type: str, data: Any, event_id: str) -> str:
             data: <JSON 数据>
             id: <流事件 ID>
 
+    工作流:
+        (1) 若 data 已是 str → 直接用作 data 字段值
+        (2) 否则尝试 json.dumps() 序列化
+        (3) 若序列化失败（TypeError）→ 降级为 str(data)，记录 WARNING
+
     示例:
         frame = format_sse("metadata", {"run_id": "abc"}, "1")
         # → "event: metadata\\ndata: {"run_id": "abc"}\\nid: 1\\n\\n"
     """
-    data_str = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
+    if isinstance(data, str):
+        data_str = data
+    else:
+        try:
+            data_str = json.dumps(data, ensure_ascii=False)
+        except TypeError:
+            data_str = str(data)
+            logger.warning(
+                "format_sse: json.dumps 失败，降级为 str(data): event_type='%s', event_id='%s'",
+                event_type,
+                event_id,
+                exc_info=True,
+            )
     return f"event: {event_type}\ndata: {data_str}\nid: {event_id}\n\n"
 
 
@@ -152,8 +170,11 @@ async def sse_consumer(
                 return
 
             yield format_sse(event.event, event.data, event.id)
+    except asyncio.CancelledError:
+        logger.info("sse_consumer 被取消: run_id='%s'", run_id)
     except Exception:
-        logger.error("sse_consumer 异常: run_id='%s'", run_id, exc_info=True)
+        logger.error("sse_consumer 致命异常: run_id='%s'", run_id, exc_info=True)
+        yield format_sse("error", {"error": "internal stream error"}, "error")
 
 
 @router.post("/{thread_id}/runs/stream")

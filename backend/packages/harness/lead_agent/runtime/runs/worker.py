@@ -43,7 +43,9 @@
 """
 
 import logging
+from typing import Any
 
+from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
 from lead_agent.agents.lead import make_lead_agent
@@ -114,6 +116,41 @@ def _build_chunk_event(event_type: str, data: dict | None = None) -> StreamEvent
     return StreamEvent(id="", event=event_type, data=data)
 
 
+def _serialize_chunk(data: Any) -> Any:
+    """递归转换 chunk 中的 LangChain Message 对象为 JSON 可序列化的 dict。
+
+    输入:
+        data: Any — agent.astream 产出的 chunk（可能含 BaseMessage 子类实例）
+
+    输出:
+        Any — JSON 可序列化的等价值
+
+    工作流:
+        (1) 若 data 是 BaseMessage 实例 → 调用 .model_dump() 转为 dict
+        (2) 若 data 是 dict → 递归处理每个 value，保留原始 key
+        (3) 若 data 是 list 或 tuple → 递归处理每个元素，保留原始容器类型
+        (4) 其他类型 → 原样返回
+
+    示例:
+        >>> chunk = {"messages": [HumanMessage(content="你好")]}
+        >>> serialized = _serialize_chunk(chunk)
+        >>> json.dumps(serialized)  # 不再抛 TypeError
+    """
+    if isinstance(data, BaseMessage):
+        return data.model_dump()
+
+    if isinstance(data, dict):
+        return {key: _serialize_chunk(value) for key, value in data.items()}
+
+    if isinstance(data, list):
+        return [_serialize_chunk(item) for item in data]
+
+    if isinstance(data, tuple):
+        return tuple(_serialize_chunk(item) for item in data)
+
+    return data
+
+
 async def run_agent(
     *,
     record: RunRecord,
@@ -160,8 +197,9 @@ async def run_agent(
                 logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
                 break
 
-            # 每个 chunk 转换为 SSE 事件 publish 到 bridge
-            chunk_event = _build_chunk_event("events", chunk)
+            # 每个 chunk 序列化后转换为 SSE 事件 publish 到 bridge
+            serialized_chunk = _serialize_chunk(chunk)
+            chunk_event = _build_chunk_event("events", serialized_chunk)
             bridge.publish(record.run_id, chunk_event)
 
         # (6) 终态处理
