@@ -32,3 +32,14 @@ sandbox:
 stream_bridge:
   type: memory
   queue_maxsize: 512
+
+database:
+  backend: postgres
+  url: postgresql+asyncpg://caspian:qweasdzxc123@localhost:5432/caspian
+  echo: false
+  pool_size: 5
+  max_overflow: 10
+  pool_timeout: 30
+  pool_pre_ping: true
+  pool_recycle: -1
+  isolation_level: READ COMMITTED

@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from lead_agent.config.database_config import DatabaseConfig
 from lead_agent.config.extensions_config import ExtensionsConfig
 from lead_agent.config.model_config import ModelConfig
 from lead_agent.config.sandbox_config import SandboxConfig
@@ -35,6 +36,7 @@ class AppConfig(BaseModel):
     skills: SkillsConfig
     sandbox: SandboxConfig
     stream_bridge: StreamBridgeConfig = StreamBridgeConfig()
+    database: DatabaseConfig | None = None
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
 
     def _normalize_name(self, name: str) -> str:

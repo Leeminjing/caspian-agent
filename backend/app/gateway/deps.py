@@ -15,9 +15,12 @@
     (1) 创建 AsyncExitStack 统一管理多个异步上下文资源
     (2) 通过 create_stream_bridge(app_config) 创建 StreamBridge → 挂载到 app.state.stream_bridge
         → 注册到 ExitStack（create_stream_bridge 自带 cleanup on exit）
-    (3) 创建 RunManager 实例 → 挂载到 app.state.run_manager
-    (4) yield — 此时 FastAPI 开始接收请求
-    (5) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
+    (3) 若 app_config.database 非空，初始化 AsyncEngine 和 session factory 全局单例
+        → 通过 stack.callback 注册 dispose_engine 以确保退出时释放连接池
+        → 不挂载到 app.state
+    (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
+    (5) yield — 此时 FastAPI 开始接收请求
+    (6) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
 
 示例:
     from backend.app.gateway.deps import langgraph_runtime
@@ -55,11 +58,19 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         app.state.stream_bridge = stream_bridge
         logger.info("StreamBridge 已挂载到 app.state.stream_bridge")
 
-        # (3) 创建 RunManager 实例，每进程唯一
+        # (3) 数据库引擎初始化（全局单例，不挂载 app.state）
+        if app_config.database is not None:
+            from lead_agent.persistence.engine import dispose_engine, init_engine
+
+            init_engine(app_config)
+            stack.callback(dispose_engine)
+            logger.info("数据库引擎已初始化 (backend=%s)", app_config.database.backend)
+
+        # (4) 创建 RunManager 实例，每进程唯一
         run_manager = RunManager()
         app.state.run_manager = run_manager
         logger.info("RunManager 已挂载到 app.state.run_manager")
 
-        # (4) ... 待扩展更多资源
+        # (5) ... 待扩展更多资源
 
         yield

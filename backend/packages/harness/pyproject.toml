@@ -10,9 +10,12 @@ dependencies = [
     "langgraph>=0.3.0",
     "langchain-openai>=0.3.0",
     "pyyaml>=6.0",
+    "sqlalchemy[asyncio]>=2.0",
 ]
 [project.optional-dependencies]
 mcp = ["langchain-mcp-adapters>=0.1.0"]
+postgres = ["asyncpg"]
+sqlite = ["aiosqlite"]
 
 [build-system]
 requires = ["setuptools>=75.0"]
