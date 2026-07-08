@@ -185,7 +185,7 @@ async def run_agent(
             tool_groups=tool_groups,
         )
 
-        # (5) agent.astream 主循环
+        # (4) agent.astream 主循环
         async for chunk in agent.astream(
             graph_input,
             config=runnable_config,
