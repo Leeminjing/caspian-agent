@@ -18,6 +18,8 @@
     (3) 若 app_config.database 非空，初始化 AsyncEngine 和 session factory 全局单例
         → 通过 stack.callback 注册 dispose_engine 以确保退出时释放连接池
         → 不挂载到 app.state
+    (3.5) 通过 create_checkpointer(app_config) 创建 Checkpointer → 挂载到 app.state.checkpointer
+        → 通过 stack.push_async_callback 注册 dispose_checkpointer 以确保退出时释放连接
     (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
     (5) yield — 此时 FastAPI 开始接收请求
     (6) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
@@ -65,6 +67,14 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
             init_engine(app_config)
             stack.callback(dispose_engine)
             logger.info("数据库引擎已初始化 (backend=%s)", app_config.database.backend)
+
+        # (3.5) Checkpointer 资源初始化
+        from lead_agent.runtime.checkpointer import create_checkpointer, dispose_checkpointer
+
+        checkpointer = await create_checkpointer(app_config)
+        app.state.checkpointer = checkpointer
+        stack.push_async_callback(dispose_checkpointer, checkpointer)
+        logger.info("Checkpointer 已挂载到 app.state.checkpointer (type=%s)", app_config.checkpointer.type)
 
         # (4) 创建 RunManager 实例，每进程唯一
         run_manager = RunManager()

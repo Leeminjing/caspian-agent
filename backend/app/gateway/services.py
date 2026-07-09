@@ -13,7 +13,7 @@
     RunRecord — 新创建的 run 运行时档案
 
 具体工作流:
-    (1) 从 request.app.state 获取 StreamBridge、RunManager
+    (1) 从 request.app.state 获取 StreamBridge、RunManager、Checkpointer
     (2) 通过 get_app_config("config.yaml") 获取 AppConfig
     (3) 创建 RunRecord（初始状态 pending）
     (4) 组装参数：input → HumanMessage、RunnableConfig、context、stream_modes
@@ -54,6 +54,7 @@ async def start_run(
     # (1) 从 request.app.state 获取资源
     bridge: StreamBridge = request.app.state.stream_bridge
     run_manager: RunManager = request.app.state.run_manager
+    checkpointer = request.app.state.checkpointer
 
     # (2) 获取 AppConfig
     app_config = get_app_config("config.yaml")
@@ -125,6 +126,7 @@ async def start_run(
             runnable_config=runnable_config,
             stream_modes=stream_modes,
             langgraph_context=langgraph_context,
+            checkpointer=checkpointer,
         )
     )
 

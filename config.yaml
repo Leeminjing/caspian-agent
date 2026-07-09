@@ -33,6 +33,9 @@ stream_bridge:
   type: memory
   queue_maxsize: 512
 
+checkpointer:
+  type: postgres
+
 database:
   backend: postgres
   url: postgresql+asyncpg://caspian:qweasdzxc123@localhost:7221/caspian

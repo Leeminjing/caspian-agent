@@ -1,5 +1,5 @@
 """
-本文件为 lead_agent.runtime 包的入口，负责重导出 runs 和 stream_bridge 子包的公开 API。
+本文件为 lead_agent.runtime 包的入口，负责重导出 runs、stream_bridge 和 checkpointer 子包的公开 API。
 
 对外提供:
     RunStatus — run 生命周期状态枚举
@@ -14,6 +14,8 @@
     StreamBridge — 流式桥接抽象基类
     MemoryStreamBridge — StreamBridge 的进程内内存实现
     create_stream_bridge — 异步上下文管理器工厂函数
+    create_checkpointer — 基于 AppConfig 创建 BaseCheckpointSaver 实例的异步工厂函数
+    dispose_checkpointer — 释放 checkpointer 持有的资源
 """
 
 from lead_agent.runtime.runs import (
@@ -32,8 +34,15 @@ from lead_agent.runtime.stream_bridge import (
     StreamEvent,
     create_stream_bridge,
 )
+from lead_agent.runtime.checkpointer import (
+    create_checkpointer,
+    dispose_checkpointer,
+)
 
 __all__ = [
+    "create_checkpointer",
+    "create_stream_bridge",
+    "dispose_checkpointer",
     "DisconnectMode",
     "END_SENTINEL",
     "HEARTBEAT_SENTINEL",

@@ -15,18 +15,20 @@
     agent_name: str | None — agent 名称
     tool_groups: list[str] | None — 工具分组过滤
     langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取
+    checkpointer: BaseCheckpointSaver | None — checkpoint 持久化器，None 时不启用
 
 输出:
     SSE 事件流 → bridge → 前端；最终状态 → run_manager
 
 具体工作流:
     (1) 设置 run 状态为 running，发布 metadata 事件（含 run_id + thread_id）
-    (2) langgraph_context 作为 context= 参数传入 agent.astream()，LangGraph 据此构建 Runtime
+    (2) 读取当前 thread 的旧 checkpoint 保存为 rollback 快照（checkpointer 可用时）
     (3) 从 record.model_name 取模型名，创建 agent
+    (3.5) 将 checkpointer 挂载到 agent.checkpointer，使 LangGraph 执行过程中自动读写 checkpoint
     (4) 翻译 stream_modes（前端名称 → LangGraph 内部名称）
     (5) 调用 agent.astream()，每轮检查 abort_event
     (6) 每个 chunk 转换为 SSE 事件 publish 到 bridge
-    (7) 终态处理：success / interrupted / error
+    (7) 终态处理：success / interrupted（rollback 时用旧 checkpoint 恢复 thread 状态）/ error
     (8) finally: publish_end 关流 + 延迟缓存清理
 
 示例:
@@ -47,6 +49,8 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
 
 from lead_agent.agents.lead import make_lead_agent
 from lead_agent.config.app_config import AppConfig
@@ -163,6 +167,7 @@ async def run_agent(
     agent_name: str | None = None,
     tool_groups: list[str] | None = None,
     langgraph_context: dict | None = None,
+    checkpointer: BaseCheckpointSaver | None = None,
 ) -> None:
     try:
         # (1) 置 running，发 metadata 事件
@@ -175,6 +180,20 @@ async def run_agent(
         })
         bridge.publish(record.run_id, metadata_event)
 
+        # (2) 读取旧 checkpoint 保存 rollback 快照
+        rollback_snapshot = None
+        if checkpointer is not None:
+            try:
+                config_for_latest = {"configurable": {"thread_id": record.thread_id}}
+                latest = await checkpointer.aget_tuple(config_for_latest)
+                if latest is not None:
+                    rollback_snapshot = latest
+                    logger.info("run '%s' 已保存 rollback 快照 (checkpoint_id=%s)", record.run_id, latest.checkpoint.get("id", "?"))
+                else:
+                    logger.info("run '%s' thread 无旧 checkpoint，rollback 快照为空", record.run_id)
+            except Exception:
+                logger.warning("run '%s' 读取旧 checkpoint 失败，rollback 不可用", record.run_id, exc_info=True)
+
         # (3) 从 record.model_name 取模型名，创建 agent
         model_name = record.model_name or (app_config.models[0].name if app_config.models else None)
         mapped_stream_modes = _map_stream_modes(stream_modes)
@@ -184,6 +203,10 @@ async def run_agent(
             agent_name=agent_name,
             tool_groups=tool_groups,
         )
+
+        # (3.5) 挂载 checkpointer 到 agent
+        if checkpointer is not None:
+            agent.checkpointer = checkpointer
 
         # (4) agent.astream 主循环
         async for chunk in agent.astream(
@@ -206,9 +229,20 @@ async def run_agent(
         if record.abort_event.is_set():
             action = record.abort_action
             if action == "rollback":
-                # rollback 快照能力尚未实现，标记 error
-                logger.warning("run '%s' abort+rollback，快照能力未实现，标记 error", record.run_id)
-                run_manager.update(record.run_id, status=RunStatus.error, error="abort with rollback (快照未实现)")
+                if rollback_snapshot is not None and checkpointer is not None:
+                    try:
+                        await checkpointer.aput(
+                            rollback_snapshot.config,
+                            rollback_snapshot.checkpoint,
+                            rollback_snapshot.metadata,
+                            {},
+                        )
+                        logger.info("run '%s' rollback 已恢复旧 checkpoint", record.run_id)
+                    except Exception:
+                        logger.error("run '%s' rollback 恢复 checkpoint 失败", record.run_id, exc_info=True)
+                else:
+                    logger.info("run '%s' rollback 无旧快照可恢复", record.run_id)
+                run_manager.update(record.run_id, status=RunStatus.interrupted)
             else:
                 run_manager.update(record.run_id, status=RunStatus.interrupted)
                 logger.info("run '%s' 状态 → interrupted", record.run_id)

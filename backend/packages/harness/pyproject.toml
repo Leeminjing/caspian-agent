@@ -15,7 +15,7 @@ dependencies = [
 ]
 [project.optional-dependencies]
 mcp = ["langchain-mcp-adapters>=0.1.0"]
-postgres = ["asyncpg"]
+postgres = ["asyncpg", "langgraph-checkpoint-postgres"]
 sqlite = ["aiosqlite"]
 
 [build-system]

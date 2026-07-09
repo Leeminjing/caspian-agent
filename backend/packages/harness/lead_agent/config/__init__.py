@@ -3,6 +3,7 @@
 
 对外提供:
     AppConfig — 聚合所有子配置的顶层配置模型
+    CheckpointerConfig — checkpointer 配置段的数据模型
     DatabaseConfig — 数据库连接配置的数据模型
     ExtensionsConfig — extensions_config.json 的 Pydantic 模型
     McpServerConfig — 单个 MCP Server 的配置模型
@@ -13,6 +14,7 @@
 """
 
 from lead_agent.config.app_config import AppConfig, get_app_config, reload_app_config
+from lead_agent.config.checkpointer_config import CheckpointerConfig
 from lead_agent.config.database_config import DatabaseConfig
 from lead_agent.config.extensions_config import (
     ExtensionsConfig,
@@ -24,6 +26,7 @@ from lead_agent.config.stream_bridge_config import StreamBridgeConfig
 
 __all__ = [
     "AppConfig",
+    "CheckpointerConfig",
     "DatabaseConfig",
     "ExtensionsConfig",
     "McpServerConfig",
