@@ -15,8 +15,11 @@
     _resolve_path (受保护 helper):
     调用 path_utils.resolve_path 完成虚拟路径 → 真实路径映射
 
-    read_file / write_file / run_shell:
+    read_file / write_file:
     各自调用 _resolve_path 解析路径后执行对应操作
+
+    run_shell:
+    在 workspace 子目录下执行 shell 命令并返回结果
 
 示例:
     sandbox = LocalSandbox(thread_id="abc123")
@@ -58,7 +61,7 @@ class LocalSandbox(Sandbox):
             shell=True,
             capture_output=True,
             text=True,
-            cwd=self._real_root,
+            cwd=os.path.join(self._real_root, "workspace"),
         )
         output = result.stdout
         if result.stderr:

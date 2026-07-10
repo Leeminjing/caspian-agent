@@ -7,6 +7,7 @@
     SUBDIRS: 预创子目录列表 ["workspace", "uploads", "outputs"]
     resolve_path: 输入虚拟路径 + thread_id，输出真实磁盘路径
     validate_path: 校验解析后的真实路径是否在沙箱根目录内，越界抛 SecurityError
+    validate_subdir: 校验虚拟路径的第一级子目录是否在白名单内，越界抛 SecurityError
 
 工作流:
     resolve_path:
@@ -31,6 +32,29 @@ SUBDIRS = ["workspace", "uploads", "outputs"]
 
 class SecurityError(Exception):
     pass
+
+
+def validate_subdir(vpath: str, allowed: set[str]) -> None:
+    """校验虚拟路径的第一级子目录是否在白名单内，否则抛 SecurityError。
+
+    输入:
+        vpath: 完整虚拟路径，如 "/mnt/user-data/workspace/foo.py"
+        allowed: 允许的子目录名集合，如 {"workspace", "outputs"}
+
+    工作流:
+        (1) 去掉 VRROOT 前缀，取剩余部分的第一级目录名
+        (2) 若该目录名不在 allowed 中，抛 SecurityError
+
+    示例:
+        validate_subdir("/mnt/user-data/uploads/a.txt", {"uploads", "workspace"})  # 通过
+        validate_subdir("/mnt/user-data/outputs/b.txt", {"uploads", "workspace"})  # 抛 SecurityError
+    """
+    relative = vpath[len(VRROOT):].lstrip("/")
+    subdir = relative.split("/")[0]
+    if subdir not in allowed:
+        raise SecurityError(
+            f"子目录 '{subdir}' 不在允许列表中: {sorted(allowed)}"
+        )
 
 
 def resolve_path(vpath: str, thread_id: str) -> str:
