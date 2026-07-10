@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from lead_agent.config.checkpointer_config import CheckpointerConfig
 from lead_agent.config.database_config import DatabaseConfig
 from lead_agent.config.extensions_config import ExtensionsConfig
+from lead_agent.config.langgraph_store_config import LanggraphStoreConfig
 from lead_agent.config.model_config import ModelConfig
 from lead_agent.config.sandbox_config import SandboxConfig
 from lead_agent.config.skills_config import SkillsConfig
@@ -39,6 +40,7 @@ class AppConfig(BaseModel):
     stream_bridge: StreamBridgeConfig = StreamBridgeConfig()
     database: DatabaseConfig | None = None
     checkpointer: CheckpointerConfig = CheckpointerConfig()
+    langgraph_store: LanggraphStoreConfig = LanggraphStoreConfig()
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
 
     def _normalize_name(self, name: str) -> str:
@@ -89,7 +91,7 @@ def _resolve_env_vars(data: dict) -> dict:
 
 
 def _resolve_env_item(value):
-    if isinstance(value, str) and value.startswith("$"):
+    if isinstance(value, str) and len(value) > 1 and value.startswith("$"):
         env_var = value[1:]
         env_value = os.environ.get(env_var)
         if env_value is None:

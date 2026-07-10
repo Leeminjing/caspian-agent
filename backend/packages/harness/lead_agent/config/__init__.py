@@ -22,6 +22,7 @@ from lead_agent.config.extensions_config import (
     get_enabled_mcp_servers,
     get_extensions_config,
 )
+from lead_agent.config.langgraph_store_config import LanggraphStoreConfig
 from lead_agent.config.stream_bridge_config import StreamBridgeConfig
 
 __all__ = [
@@ -29,6 +30,7 @@ __all__ = [
     "CheckpointerConfig",
     "DatabaseConfig",
     "ExtensionsConfig",
+    "LanggraphStoreConfig",
     "McpServerConfig",
     "StreamBridgeConfig",
     "get_app_config",

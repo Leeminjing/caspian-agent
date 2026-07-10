@@ -16,6 +16,7 @@
     tool_groups: list[str] | None — 工具分组过滤
     langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取
     checkpointer: BaseCheckpointSaver | None — checkpoint 持久化器，None 时不启用
+    store: BaseStore | None — 跨 thread 长期记忆存储，None 时不启用
 
 输出:
     SSE 事件流 → bridge → 前端；最终状态 → run_manager
@@ -24,7 +25,7 @@
     (1) 设置 run 状态为 running，发布 metadata 事件（含 run_id + thread_id）
     (2) 读取当前 thread 的旧 checkpoint 保存为 rollback 快照（checkpointer 可用时）
     (3) 从 record.model_name 取模型名，创建 agent
-    (3.5) 将 checkpointer 挂载到 agent.checkpointer，使 LangGraph 执行过程中自动读写 checkpoint
+    (3.5) 将 checkpointer 挂载到 agent.checkpointer，将 store 挂载到 agent.store
     (4) 翻译 stream_modes（前端名称 → LangGraph 内部名称）
     (5) 调用 agent.astream()，每轮检查 abort_event
     (6) 每个 chunk 转换为 SSE 事件 publish 到 bridge
@@ -51,6 +52,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import RunnableConfig
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.store.base import BaseStore
 
 from lead_agent.agents.lead import make_lead_agent
 from lead_agent.config.app_config import AppConfig
@@ -168,6 +170,7 @@ async def run_agent(
     tool_groups: list[str] | None = None,
     langgraph_context: dict | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
+    store: BaseStore | None = None,
 ) -> None:
     try:
         # (1) 置 running，发 metadata 事件
@@ -204,9 +207,11 @@ async def run_agent(
             tool_groups=tool_groups,
         )
 
-        # (3.5) 挂载 checkpointer 到 agent
+        # (3.5) 挂载 checkpointer 和 store 到 agent
         if checkpointer is not None:
             agent.checkpointer = checkpointer
+        if store is not None:
+            agent.store = store
 
         # (4) agent.astream 主循环
         async for chunk in agent.astream(

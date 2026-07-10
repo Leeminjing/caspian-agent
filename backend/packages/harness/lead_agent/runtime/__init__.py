@@ -16,6 +16,8 @@
     create_stream_bridge — 异步上下文管理器工厂函数
     create_checkpointer — 基于 AppConfig 创建 BaseCheckpointSaver 实例的异步工厂函数
     dispose_checkpointer — 释放 checkpointer 持有的资源
+    create_store — 基于 AppConfig 创建 BaseStore 实例的异步工厂函数
+    dispose_store — 释放 store 持有的资源
 """
 
 from lead_agent.runtime.runs import (
@@ -38,11 +40,17 @@ from lead_agent.runtime.checkpointer import (
     create_checkpointer,
     dispose_checkpointer,
 )
+from lead_agent.runtime.store import (
+    create_store,
+    dispose_store,
+)
 
 __all__ = [
     "create_checkpointer",
+    "create_store",
     "create_stream_bridge",
     "dispose_checkpointer",
+    "dispose_store",
     "DisconnectMode",
     "END_SENTINEL",
     "HEARTBEAT_SENTINEL",

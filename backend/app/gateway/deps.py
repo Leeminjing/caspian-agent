@@ -20,6 +20,8 @@
         → 不挂载到 app.state
     (3.5) 通过 create_checkpointer(app_config) 创建 Checkpointer → 挂载到 app.state.checkpointer
         → 通过 stack.push_async_callback 注册 dispose_checkpointer 以确保退出时释放连接
+    (3.6) 通过 create_store(app_config) 创建 Store → 挂载到 app.state.store
+        → 通过 stack.push_async_callback 注册 dispose_store 以确保退出时释放连接
     (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
     (5) yield — 此时 FastAPI 开始接收请求
     (6) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
@@ -75,6 +77,14 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         app.state.checkpointer = checkpointer
         stack.push_async_callback(dispose_checkpointer, checkpointer)
         logger.info("Checkpointer 已挂载到 app.state.checkpointer (type=%s)", app_config.checkpointer.type)
+
+        # (3.6) Store 资源初始化
+        from lead_agent.runtime.store import create_store, dispose_store
+
+        store = await create_store(app_config)
+        app.state.store = store
+        stack.push_async_callback(dispose_store, store)
+        logger.info("Store 已挂载到 app.state.store (backend=%s)", app_config.langgraph_store.backend)
 
         # (4) 创建 RunManager 实例，每进程唯一
         run_manager = RunManager()

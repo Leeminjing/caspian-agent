@@ -36,6 +36,13 @@ stream_bridge:
 checkpointer:
   type: postgres
 
+langgraph_store:
+  backend: async_postgres
+  vector_enabled: true
+  embed: text-embedding-v4
+  dims: 1024
+  fields: ["$"]
+
 database:
   backend: postgres
   url: postgresql+asyncpg://caspian:qweasdzxc123@localhost:7221/caspian
