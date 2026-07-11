@@ -10,7 +10,7 @@ tool_groups:
   - name: web
   - name: file:read
   - name: file:write
-  - name: bash
+  - name: shell
 
 tools:
   - name: read_file
@@ -20,8 +20,17 @@ tools:
     group: file:write
     use: lead_agent.sandbox.tools:write_file_tool
   - name: bash
-    group: bash
-    use: lead_agent.sandbox.tools:run_shell_tool
+    group: shell
+    use: lead_agent.sandbox.tools:bash_tool
+  - name: powershell
+    group: shell
+    use: lead_agent.sandbox.tools:powershell_tool
+  - name: cmd
+    group: shell
+    use: lead_agent.sandbox.tools:cmd_tool
+  - name: sh
+    group: shell
+    use: lead_agent.sandbox.tools:sh_tool
 
 skills:
   container_path: /mnt/skills

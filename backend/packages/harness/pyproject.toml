@@ -12,6 +12,11 @@ dependencies = [
     "pyyaml>=6.0",
     "sqlalchemy[asyncio]>=2.0",
     "alembic>=1.0",
+    "pypdf>=5.0",
+    "pypdfium2>=4.0",
+    "pytesseract>=0.3",
+    "python-docx>=1.0",
+    "olefile>=0.47",
 ]
 [project.optional-dependencies]
 mcp = ["langchain-mcp-adapters>=0.1.0"]

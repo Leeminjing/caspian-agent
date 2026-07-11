@@ -15,23 +15,44 @@
     _resolve_path (受保护 helper):
     调用 path_utils.resolve_path 完成虚拟路径 → 真实路径映射
 
-    read_file / write_file:
-    各自调用 _resolve_path 解析路径后执行对应操作
+    read_file:
+    (1) 调用 _resolve_path 解析路径
+    (2) 根据扩展名分发至 readers 模块: .pdf → _read_pdf / .docx → _read_docx / .doc → _read_doc / 其他 → UTF-8
+    (3) 所有异常通过 _sanitize_error 清洗真实路径后重新抛出
+
+    _sanitize_error (受保护 helper):
+    捕获异常，将异常信息中的真实路径替换为虚拟路径后重新抛出，不泄露磁盘路径
+
+    write_file:
+    调用 _resolve_path 解析路径后写入文件内容
 
     run_shell:
-    在 workspace 子目录下执行 shell 命令并返回结果
+    在 workspace 子目录下以指定 shell 类型执行命令。
+    支持 bash / powershell / cmd / sh，通过 SHELL_MAP 查找对应可执行文件，
+    以显式调用方式（shell=False）执行。找不到目标 shell 时抛出 RuntimeError。
 
 示例:
     sandbox = LocalSandbox(thread_id="abc123")
     content = sandbox.read_file("/mnt/user-data/workspace/hello.py")
+    text = sandbox.read_file("/mnt/user-data/uploads/report.pdf")
+    sandbox.run_shell("ls -la", shell_type="bash")
 """
 
 import os
+import re
+import shutil
 import subprocess
 
 from lead_agent.sandbox.base import Sandbox
 from lead_agent.sandbox.path_utils import REAL_ROOT, SUBDIRS, resolve_path
+from lead_agent.sandbox.readers import _read_pdf, _read_docx, _read_doc
 
+SHELL_MAP = {
+    "bash":       ("bash",            ["-c"]),
+    "sh":         ("sh",              ["-c"]),
+    "cmd":        ("cmd.exe",         ["/c"]),
+    "powershell": ("powershell.exe",  ["-Command"]),
+}
 
 class LocalSandbox(Sandbox):
 
@@ -46,8 +67,20 @@ class LocalSandbox(Sandbox):
 
     def read_file(self, path: str) -> str:
         real_path = self._resolve_path(path)
-        with open(real_path, "r", encoding="utf-8") as f:
-            return f.read()
+        ext = os.path.splitext(real_path)[1].lower()
+
+        try:
+            if ext == ".pdf":
+                return _read_pdf(real_path)
+            elif ext == ".docx":
+                return _read_docx(real_path)
+            elif ext == ".doc":
+                return _read_doc(real_path)
+            else:
+                with open(real_path, "r", encoding="utf-8") as f:
+                    return f.read()
+        except Exception as e:
+            raise self._sanitize_error(e, path, real_path) from None
 
     def write_file(self, path: str, content: str) -> None:
         real_path = self._resolve_path(path)
@@ -55,10 +88,20 @@ class LocalSandbox(Sandbox):
         with open(real_path, "w", encoding="utf-8") as f:
             f.write(content)
 
-    def run_shell(self, command: str) -> str:
+    def run_shell(self, command: str, shell_type: str) -> str:
+        entry = SHELL_MAP.get(shell_type)
+        if entry is None:
+            raise ValueError(
+                f"不支持的 shell 类型: '{shell_type}'，"
+                f"有效值: {sorted(SHELL_MAP.keys())}"
+            )
+        exe_name, args = entry
+        exe_path = shutil.which(exe_name)
+        if exe_path is None:
+            raise RuntimeError(f"Shell '{shell_type}' not found in PATH (looked for: {exe_name})")
         result = subprocess.run(
-            command,
-            shell=True,
+            [exe_path, *args, command],
+            shell=False,
             capture_output=True,
             text=True,
             cwd=os.path.join(self._real_root, "workspace"),
@@ -67,3 +110,16 @@ class LocalSandbox(Sandbox):
         if result.stderr:
             output += result.stderr
         return output
+
+    def _sanitize_error(self, error: Exception, vpath: str, real_path: str) -> Exception:
+        """清洗异常信息中的真实路径，替换为虚拟路径。"""
+        msg = str(error)
+        # 统一用 os.path.normpath 归一化斜杠方向后再替换
+        norm_path = os.path.normpath(real_path)
+        norm_root = os.path.normpath(self._real_root)
+        for candidate in (real_path, norm_path, self._real_root, norm_root):
+            if candidate in msg:
+                msg = msg.replace(candidate, vpath)
+        # 兜底：正则替换含 ".lead_agent" 的路径片段
+        msg = re.sub(r'\S*\.lead_agent\S*', '[sandbox]', msg)
+        return type(error)(f"读取文件失败: {vpath}: {msg}")
