@@ -43,11 +43,11 @@ stream_bridge:
   queue_maxsize: 512
 
 checkpointer:
-  type: postgres
+  type: memory
 
 langgraph_store:
-  backend: async_postgres
-  vector_enabled: true
+  backend: memory
+  vector_enabled: false
   embed: text-embedding-v4
   dims: 1024
   fields: ["$"]
@@ -62,3 +62,11 @@ database:
   pool_pre_ping: true
   pool_recycle: -1
   isolation_level: READ COMMITTED
+
+auth:
+  jwt_secret: $JWT_SECRET
+  token_expiry_days: 7
+  cookie_name: access_token
+  csrf_cookie_name: csrf_token
+  login_limit_window: 60
+  login_limit_max_attempts: 5

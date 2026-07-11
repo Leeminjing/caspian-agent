@@ -42,7 +42,9 @@ async def create_checkpointer(config: AppConfig) -> BaseCheckpointSaver:
         if config.database is None:
             raise RuntimeError("AppConfig.database 为空，无法创建 PostgresSaver")
 
-        conn = await asyncpg.connect(dsn=config.database.url)
+        # ponytail: 去掉 SQLAlchemy 的 +asyncpg 驱动前缀，asyncpg 只需要 postgresql://
+        dsn = config.database.url.replace("postgresql+asyncpg://", "postgresql://")
+        conn = await asyncpg.connect(dsn=dsn)
         from langgraph.checkpoint.postgres import PostgresSaver
 
         checkpointer = PostgresSaver(conn)
@@ -72,6 +74,11 @@ async def dispose_checkpointer(checkpointer: BaseCheckpointSaver) -> None:
         (1) 若为 PostgresSaver → 关闭底层 asyncpg 连接
         (2) 若为 InMemorySaver → 无需操作
     """
+    from langgraph.checkpoint.memory import InMemorySaver
+
+    if isinstance(checkpointer, InMemorySaver):
+        return
+
     from langgraph.checkpoint.postgres import PostgresSaver
 
     if isinstance(checkpointer, PostgresSaver):

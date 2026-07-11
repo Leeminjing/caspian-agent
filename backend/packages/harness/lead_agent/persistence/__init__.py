@@ -16,6 +16,7 @@ import lead_agent.persistence.checkpoint_models  # noqa: F401
 # 导入 store ORM 模型以注册到 Base.metadata（供 Alembic autogenerate 发现）
 import lead_agent.persistence.store_models  # noqa: F401
 
+
 __all__ = [
     "dispose_engine",
     "get_session",

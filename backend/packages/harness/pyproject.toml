@@ -17,6 +17,8 @@ dependencies = [
     "pytesseract>=0.3",
     "python-docx>=1.0",
     "olefile>=0.47",
+    "PyJWT>=2.0",
+    "bcrypt>=4.0",
 ]
 [project.optional-dependencies]
 mcp = ["langchain-mcp-adapters>=0.1.0"]
