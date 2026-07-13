@@ -15,10 +15,11 @@
 具体工作流:
     (1) 从 request.app.state 获取 StreamBridge、RunManager、Checkpointer、Store
     (2) 通过 get_app_config("config.yaml") 获取 AppConfig
-    (3) 创建 RunRecord（初始状态 pending）
-    (4) 组装参数：input → HumanMessage、RunnableConfig、context、stream_modes
-    (5) asyncio.create_task(run_agent(...)) 启动 worker
-    (6) record.task = task，返回 RunRecord
+    (3) 从 request.state.current_user.id 提取 user_id
+    (4) 创建 RunRecord（初始状态 pending）
+    (5) 组装参数：input → HumanMessage、RunnableConfig、context（含 user_id）、stream_modes
+    (6) asyncio.create_task(run_agent(...)) 启动 worker
+    (7) record.task = task，返回 RunRecord
 
 示例:
     @router.post("/{thread_id}/runs/stream")
@@ -104,9 +105,11 @@ async def start_run(
     }
 
     # LangGraph context
+    user_id = str(request.state.current_user.id)
     langgraph_context: dict = {
         "model_name": model_name,
         "app_config": app_config,
+        "user_id": user_id,
     }
 
     # stream_modes

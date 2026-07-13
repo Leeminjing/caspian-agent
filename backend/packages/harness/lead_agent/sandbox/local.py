@@ -5,11 +5,11 @@
     LocalSandbox(Sandbox): 本机文件系统下的沙箱实现
 
 输入:
-    LocalSandbox.__init__(thread_id): 线程标识，用于隔离不同 thread 的沙箱目录
+    LocalSandbox.__init__(user_id, thread_id): 用户标识+线程标识，用于按用户隔离沙箱目录
 
 工作流:
     __init__ (初始化即建目录):
-    (1) 根据 thread_id 构建真实路径根目录 .lead_agent/threads/<thread_id>/user-data/
+    (1) 根据 user_id + thread_id 构建真实路径根目录 .lead_agent/users/<user_id>/threads/<thread_id>/user-data/
     (2) 调用 os.makedirs 创建根目录及 workspace/uploads/outputs 三个子目录
 
     _resolve_path (受保护 helper):
@@ -32,7 +32,7 @@
     以显式调用方式（shell=False）执行。找不到目标 shell 时抛出 RuntimeError。
 
 示例:
-    sandbox = LocalSandbox(thread_id="abc123")
+    sandbox = LocalSandbox(user_id="uuid-xxx", thread_id="abc123")
     content = sandbox.read_file("/mnt/user-data/workspace/hello.py")
     text = sandbox.read_file("/mnt/user-data/uploads/report.pdf")
     sandbox.run_shell("ls -la", shell_type="bash")
@@ -56,14 +56,15 @@ SHELL_MAP = {
 
 class LocalSandbox(Sandbox):
 
-    def __init__(self, thread_id: str):
+    def __init__(self, user_id: str, thread_id: str):
+        self._user_id = user_id
         self._thread_id = thread_id
-        self._real_root = os.path.abspath(REAL_ROOT.format(thread_id=thread_id))
+        self._real_root = os.path.abspath(REAL_ROOT.format(user_id=user_id, thread_id=thread_id))
         for sub in SUBDIRS:
             os.makedirs(os.path.join(self._real_root, sub), exist_ok=True)
 
     def _resolve_path(self, vpath: str) -> str:
-        return resolve_path(vpath, self._thread_id)
+        return resolve_path(vpath, self._user_id, self._thread_id)
 
     def read_file(self, path: str) -> str:
         real_path = self._resolve_path(path)

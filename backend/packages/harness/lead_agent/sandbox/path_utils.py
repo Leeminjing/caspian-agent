@@ -5,28 +5,28 @@
     VRROOT: 虚拟路径前缀常量 "/mnt/user-data"
     REAL_ROOT: 真实路径根模板 ".lead_agent/threads/{thread_id}/user-data"
     SUBDIRS: 预创子目录列表 ["workspace", "uploads", "outputs"]
-    resolve_path: 输入虚拟路径 + thread_id，输出真实磁盘路径
+    resolve_path: 输入虚拟路径 + user_id + thread_id，输出真实磁盘路径
     validate_path: 校验解析后的真实路径是否在沙箱根目录内，越界抛 SecurityError
     validate_subdir: 校验虚拟路径的第一级子目录是否在白名单内，越界抛 SecurityError
 
 工作流:
     resolve_path:
     (1) 校验虚拟路径必须以 VRROOT 开头，否则抛 SecurityError
-    (2) 根据 thread_id 构建真实根目录
+    (2) 根据 user_id + thread_id 构建真实根目录
     (3) 将虚拟路径去掉 VRROOT 前缀，拼接到真实根目录后
     (4) 调用 validate_path 二次确认未越界
     (5) 返回真实路径
 
 示例:
-    resolve_path("/mnt/user-data/workspace/script.py", "abc123")
-    → ".lead_agent/threads/abc123/user-data/workspace/script.py"
+    resolve_path("/mnt/user-data/workspace/script.py", "uuid-xxx", "abc123")
+    → ".lead_agent/users/uuid-xxx/threads/abc123/user-data/workspace/script.py"
 """
 
 import os
 
 
 VRROOT = "/mnt/user-data"
-REAL_ROOT = ".lead_agent/threads/{thread_id}/user-data"
+REAL_ROOT = ".lead_agent/users/{user_id}/threads/{thread_id}/user-data"
 SUBDIRS = ["workspace", "uploads", "outputs"]
 
 
@@ -57,13 +57,13 @@ def validate_subdir(vpath: str, allowed: set[str]) -> None:
         )
 
 
-def resolve_path(vpath: str, thread_id: str) -> str:
+def resolve_path(vpath: str, user_id: str, thread_id: str) -> str:
     if not vpath.startswith(VRROOT + "/"):
         raise SecurityError(
             f"虚拟路径越界: '{vpath}'，必须以 '{VRROOT}/' 开头"
         )
 
-    real_root = REAL_ROOT.format(thread_id=thread_id)
+    real_root = REAL_ROOT.format(user_id=user_id, thread_id=thread_id)
     relative = vpath[len(VRROOT):]
     real_path = os.path.join(real_root, relative.lstrip("/"))
 

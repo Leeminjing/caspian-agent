@@ -7,15 +7,15 @@
 
 SandboxProvider 工作流:
     (1) 外部代码调用 get_sandbox_provider() 获取全局 provider
-    (2) 调用 provider.acquire(thread_id) 获取 sandbox_id（sandbox_id == thread_id）
-    (3) 如果该 thread 的沙箱不存在，就创建沙箱
+    (2) 调用 provider.acquire(user_id, thread_id) 获取 sandbox_id（(user_id, thread_id) 复合键）
+    (3) 如果该 (user_id, thread_id) 的沙箱不存在，就创建沙箱
     (4) 调用 provider.get(sandbox_id) 取回沙箱实例
 
 SandboxProvider 创建沙箱时的类型由 SandboxConfig.use 决定，通过 resolve_class 动态导入。
 
 示例:
     provider = get_sandbox_provider()
-    sid = provider.acquire("abc123")
+    sid = provider.acquire("uuid-xxx", "abc123")
     sb = provider.get(sid)
     content = sb.read_file("/mnt/user-data/workspace/main.py")
 """
@@ -31,14 +31,14 @@ class SandboxProvider:
         self._sandbox_config = sandbox_config
         self._sandboxes: dict[str, Sandbox] = {}
 
-    def _create_sandbox(self, thread_id: str) -> Sandbox:
+    def _create_sandbox(self, user_id: str, thread_id: str) -> Sandbox:
         sandbox_cls = resolve_class(self._sandbox_config.use)
-        return sandbox_cls(thread_id=thread_id)
+        return sandbox_cls(user_id=user_id, thread_id=thread_id)
 
-    def acquire(self, thread_id: str) -> str:
-        sandbox_id = thread_id
+    def acquire(self, user_id: str, thread_id: str) -> str:
+        sandbox_id = (user_id, thread_id)
         if sandbox_id not in self._sandboxes:
-            self._sandboxes[sandbox_id] = self._create_sandbox(thread_id)
+            self._sandboxes[sandbox_id] = self._create_sandbox(user_id, thread_id)
         return sandbox_id
 
     def get(self, sandbox_id: str) -> Sandbox:
