@@ -1,9 +1,8 @@
 """
-本文件对外提供 LeadAgentState 类及三个辅助 TypedDict 和两个自定义 reducer。
+本文件对外提供 LeadAgentState 类及两个辅助 TypedDict 和两个自定义 reducer。
 
-LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展 6 个业务字段
+LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展 4 个业务字段
 SandboxState: 沙箱绑定状态
-ThreadDataState: 线程目录路径状态
 ViewedImageData: 已查看图片数据
 
 merge_artifacts: artifacts 字段的 reducer，只增不减，去重保序
@@ -26,12 +25,6 @@ from typing_extensions import Annotated, NotRequired
 
 class SandboxState(TypedDict):
     sandbox_id: NotRequired[str | None]
-
-
-class ThreadDataState(TypedDict):
-    workspace_path: NotRequired[str | None]
-    uploads_path: NotRequired[str | None]
-    outputs_path: NotRequired[str | None]
 
 
 class ViewedImageData(TypedDict):
@@ -66,8 +59,6 @@ def merge_viewed_images(
 
 class LeadAgentState(AgentState):
     sandbox: NotRequired[SandboxState | None]
-    thread_data: NotRequired[ThreadDataState | None]
     title: NotRequired[str | None]
     artifacts: Annotated[list[str], merge_artifacts]
-    uploaded_files: NotRequired[list[dict] | None]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]

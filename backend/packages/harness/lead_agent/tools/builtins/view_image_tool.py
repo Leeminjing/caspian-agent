@@ -15,22 +15,21 @@
 
 具体工作流:
     (1) view_image_tool 接收 ToolRuntime、image_path
-    (2) 从 ToolRuntime.state 读取当前线程的 thread_data
-    (3) 检查 image_path 是否位于允许访问的虚拟目录中
-    (4) 校验 image_path 是否符合本地工具访问规则
-    (5) 将虚拟路径解析为后端真实文件路径
-    (6) 检查真实路径是否存在
-    (7) 检查真实路径是否是文件（非目录）
-    (8) 根据文件扩展名判断图片格式是否受支持
-    (9) 根据 mimetypes 和扩展名确定期望 MIME 类型
-    (10) 读取文件大小，拒绝超过最大限制
-    (11) 读取图片二进制内容
-    (12) 根据二进制头部识别真实 MIME 类型
-    (13) 校验真实 MIME 类型与扩展名对应 MIME 类型是否一致
-    (14) 将图片二进制内容编码为 base64
-    (15) 构造 viewed_images 状态数据
-    (16) 返回包含 viewed_images 和成功 ToolMessage 的 Command
-    (17) 任一步骤失败则经 _sanitize_image_error 脱敏后返回错误 ToolMessage
+    (2) 检查 image_path 是否位于允许访问的虚拟目录中
+    (3) 校验 image_path 是否符合本地工具访问规则
+    (4) 从 runtime 获取 user_id 和 thread_id，将虚拟路径解析为后端真实文件路径
+    (5) 检查真实路径是否存在
+    (6) 检查真实路径是否是文件（非目录）
+    (7) 根据文件扩展名判断图片格式是否受支持
+    (8) 根据 mimetypes 和扩展名确定期望 MIME 类型
+    (9) 读取文件大小，拒绝超过最大限制
+    (10) 读取图片二进制内容
+    (11) 根据二进制头部识别真实 MIME 类型
+    (12) 校验真实 MIME 类型与扩展名对应 MIME 类型是否一致
+    (13) 将图片二进制内容编码为 base64
+    (14) 构造 viewed_images 状态数据
+    (15) 返回包含 viewed_images 和成功 ToolMessage 的 Command
+    (16) 任一步骤失败则经 _sanitize_image_error 脱敏后返回错误 ToolMessage
 
 示例:
     runtime: ToolRuntime = ...
@@ -128,23 +127,18 @@ Args:
 """
     real_path = ""
     try:
-        # (2) 读取 thread_data
-        thread_data = runtime.state.get("thread_data")
-        if thread_data is None:
-            raise ValueError("thread_data 未初始化")
-
-        # (3) 检查 image_path 是否位于允许的虚拟目录
+        # (2) 检查 image_path 是否位于允许的虚拟目录
         if not _is_allowed_image_virtual_path(image_path):
             raise ValueError(
                 f"图片路径不允许访问: '{image_path}'，"
                 f"仅允许 workspace、uploads、outputs 目录下的图片"
             )
 
-        # (4) 校验本地工具访问规则 — 确保以 /mnt/user-data/ 开头
+        # (3) 校验本地工具访问规则 — 确保以 /mnt/user-data/ 开头
         if not image_path.startswith(VRROOT + "/"):
             raise ValueError(f"图片路径必须以 {VRROOT}/ 开头")
 
-        # (5) 虚拟路径解析为后端真实文件路径
+        # (4) 虚拟路径解析为后端真实文件路径
         from lead_agent.sandbox.path_utils import resolve_path
 
         thread_id = None
@@ -153,17 +147,27 @@ Args:
         if thread_id is None:
             raise ValueError("无法获取当前线程 ID")
 
-        real_path = resolve_path(image_path, thread_id)
+        user_id = None
+        try:
+            ctx = runtime.context
+            if ctx and isinstance(ctx, dict):
+                user_id = ctx.get("user_id")
+        except Exception:
+            pass
+        if user_id is None:
+            raise ValueError("无法获取 user_id")
 
-        # (6) 检查真实路径是否存在
+        real_path = resolve_path(image_path, user_id, thread_id)
+
+        # (5) 检查真实路径是否存在
         if not os.path.exists(real_path):
             raise ValueError("图片文件不存在")
 
-        # (7) 检查真实路径是否是文件
+        # (6) 检查真实路径是否是文件
         if not os.path.isfile(real_path):
             raise ValueError("路径指向的不是文件")
 
-        # (8) 根据文件扩展名判断图片格式是否受支持
+        # (7) 根据文件扩展名判断图片格式是否受支持
         _, ext = os.path.splitext(image_path)
         ext = ext.lower()
         if ext not in _SUPPORTED_EXTENSIONS:
@@ -171,7 +175,7 @@ Args:
                 f"不支持的图片格式: '{ext}'，仅支持 jpg、jpeg、png、webp"
             )
 
-        # (9) 根据 mimetypes 和扩展名确定期望 MIME 类型
+        # (8) 根据 mimetypes 和扩展名确定期望 MIME 类型
         expected_mime = _MIME_BY_EXTENSION.get(ext)
         if expected_mime is None:
             mime_type, _ = mimetypes.guess_type(image_path)
@@ -179,38 +183,38 @@ Args:
         if expected_mime is None:
             raise ValueError(f"无法根据扩展名确定 MIME 类型: '{ext}'")
 
-        # (10) 读取文件大小，拒绝超过最大限制
+        # (9) 读取文件大小，拒绝超过最大限制
         file_size = os.path.getsize(real_path)
         if file_size > _MAX_FILE_SIZE:
             raise ValueError(
                 f"图片文件过大: {file_size} 字节，最大允许 {_MAX_FILE_SIZE} 字节"
             )
 
-        # (11) 读取图片二进制内容
+        # (10) 读取图片二进制内容
         with open(real_path, "rb") as f:
             image_data = f.read()
 
-        # (12) 根据二进制头部识别真实 MIME 类型
+        # (11) 根据二进制头部识别真实 MIME 类型
         detected_mime = _detect_image_mime(image_data)
         if detected_mime is None:
             raise ValueError("无法识别的图片格式，文件内容不是有效的 jpg、png 或 webp")
 
-        # (13) 校验真实 MIME 类型与扩展名对应 MIME 类型是否一致
+        # (12) 校验真实 MIME 类型与扩展名对应 MIME 类型是否一致
         if detected_mime != expected_mime:
             raise ValueError(
                 f"文件扩展名与真实内容不一致: 扩展名对应 {expected_mime}，实际内容为 {detected_mime}"
             )
 
-        # (14) 将图片二进制内容编码为 base64
+        # (13) 将图片二进制内容编码为 base64
         base64_content = base64.b64encode(image_data).decode("ascii")
 
-        # (15) 构造 viewed_images 状态数据
+        # (14) 构造 viewed_images 状态数据
         viewed_entry = {
             "base64": base64_content,
             "mime_type": detected_mime,
         }
 
-        # (16) 返回包含 viewed_images 和成功 ToolMessage 的 Command
+        # (15) 返回包含 viewed_images 和成功 ToolMessage 的 Command
         return Command(
             update={
                 "viewed_images": {image_path: viewed_entry},
@@ -224,7 +228,7 @@ Args:
         )
 
     except Exception as e:
-        # (17) 失败则经 _sanitize_image_error 脱敏后返回错误 ToolMessage
+        # (16) 失败则经 _sanitize_image_error 脱敏后返回错误 ToolMessage
         sanitized = _sanitize_image_error(e, real_path=real_path, image_path=image_path)
         return Command(
             update={

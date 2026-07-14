@@ -17,7 +17,7 @@
     (1) present_file_tool 接收 filepaths 列表
     (2) 对每个路径调用 _normalize_presented_filepath
     (3) _normalize_presented_filepath 先通过 _get_thread_id 解析当前线程 ID
-    (4) 从 ToolRuntime.state["thread_data"] 读取 outputs_path
+    (4) 从 runtime.context 获取 user_id，结合 REAL_ROOT 模板构造 outputs_path
     (5) 若传入虚拟路径则解析为真实路径，若传入真实路径则展开为绝对路径
     (6) 校验真实路径是否位于当前线程 outputs 目录中
     (7) 路径合法则转换回 /mnt/user-data/outputs/... 虚拟路径
@@ -74,17 +74,21 @@ def _normalize_presented_filepath(filepath: str, runtime: ToolRuntime) -> str:
     if thread_id is None:
         raise ValueError("无法获取当前线程 ID，present_files 只能在 Agent 运行上下文中使用")
 
-    thread_data = runtime.state.get("thread_data")
-    if thread_data is None:
-        raise ValueError("thread_data 未初始化，无法解析文件路径")
-    outputs_path = thread_data.get("outputs_path")
-    if outputs_path is None:
-        raise ValueError("thread_data 中缺少 outputs_path")
+    user_id = None
+    try:
+        ctx = runtime.context
+        if ctx and isinstance(ctx, dict):
+            user_id = ctx.get("user_id")
+    except Exception:
+        pass
+    if user_id is None:
+        raise ValueError("无法获取 user_id，present_files 只能在 Agent 运行上下文中使用")
 
+    outputs_path = os.path.join(REAL_ROOT.format(user_id=user_id, thread_id=thread_id), "outputs")
     outputs_path_abs = os.path.abspath(outputs_path)
 
     if filepath.startswith(VRROOT + "/"):
-        real_path = resolve_path(filepath, thread_id)
+        real_path = resolve_path(filepath, user_id, thread_id)
         real_path_abs = os.path.abspath(real_path)
     else:
         real_path_abs = os.path.abspath(filepath)
