@@ -7,7 +7,7 @@
 
 SandboxProvider 工作流:
     (1) 外部代码调用 get_sandbox_provider() 获取全局 provider
-    (2) 调用 provider.acquire(user_id, thread_id) 获取 sandbox_id（(user_id, thread_id) 复合键）
+    (2) 调用 provider.acquire(user_id, thread_id) 获取 sandbox_id（local:{user_id}:{thread_id} 格式字符串）
     (3) 如果该 (user_id, thread_id) 的沙箱不存在，就创建沙箱
     (4) 调用 provider.get(sandbox_id) 取回沙箱实例
 
@@ -15,7 +15,7 @@ SandboxProvider 创建沙箱时的类型由 SandboxConfig.use 决定，通过 re
 
 示例:
     provider = get_sandbox_provider()
-    sid = provider.acquire("uuid-xxx", "abc123")
+    sid = provider.acquire("uuid-xxx", "abc123")  # → "local:uuid-xxx:abc123"
     sb = provider.get(sid)
     content = sb.read_file("/mnt/user-data/workspace/main.py")
 """
@@ -36,7 +36,7 @@ class SandboxProvider:
         return sandbox_cls(user_id=user_id, thread_id=thread_id)
 
     def acquire(self, user_id: str, thread_id: str) -> str:
-        sandbox_id = (user_id, thread_id)
+        sandbox_id = f"local:{user_id}:{thread_id}"
         if sandbox_id not in self._sandboxes:
             self._sandboxes[sandbox_id] = self._create_sandbox(user_id, thread_id)
         return sandbox_id
