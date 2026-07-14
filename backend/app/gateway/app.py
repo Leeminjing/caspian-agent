@@ -107,7 +107,9 @@ logger.info("AuthMiddleware 和 CSRFMiddleware 已注册")
 # 注册路由
 from backend.app.gateway.routers.thread_runs import router as thread_runs_router
 from backend.app.gateway.routers.auth import router as auth_router
+from backend.app.gateway.routers.uploads import router as uploads_router
 
 app.include_router(thread_runs_router, prefix="/api/threads")
+app.include_router(uploads_router, prefix="/api/threads")
 app.include_router(auth_router)
-logger.info("路由已注册: thread_runs, auth")
+logger.info("路由已注册: thread_runs, uploads, auth")

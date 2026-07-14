@@ -1,5 +1,5 @@
 """
-本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路唯一对外接口 `POST /api/threads/{thread_id}/runs/stream`。
+本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路的 SSE 流式接口 `POST /api/threads/{thread_id}/runs/stream`。
 
 对外提供:
     router: APIRouter — 已注册 thread runs 相关路由的 FastAPI Router，供 app 挂载
@@ -64,7 +64,7 @@ router = APIRouter()
 
 
 class RunCreateRequest(BaseModel):
-    """POST /api/threads/{thread_id}/runs/stream 的请求体。"""
+    """POST /api/threads/{thread_id}/runs/stream 的请求体。input.messages[] 中的消息支持 additional_kwargs.files 字段，携带本轮上传文件元数据。"""
 
     input: dict[str, Any] | None = Field(
         default=None,

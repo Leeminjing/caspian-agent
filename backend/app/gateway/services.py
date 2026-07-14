@@ -17,7 +17,7 @@
     (2) 通过 get_app_config("config.yaml") 获取 AppConfig
     (3) 从 request.state.current_user.id 提取 user_id
     (4) 创建 RunRecord（初始状态 pending）
-    (5) 组装参数：input → HumanMessage、RunnableConfig、context（含 user_id）、stream_modes
+    (5) 组装参数：input → HumanMessage（保留 additional_kwargs.files）、RunnableConfig、context（含 user_id）、stream_modes
     (6) asyncio.create_task(run_agent(...)) 启动 worker
     (7) record.task = task，返回 RunRecord
 
@@ -89,7 +89,21 @@ async def start_run(
                     role = m.get("role", "user")
                     content = m.get("content", "")
                     if role == "user":
-                        messages.append(HumanMessage(content=content))
+                        additional_kwargs = m.get("additional_kwargs")
+                        if additional_kwargs is not None and isinstance(additional_kwargs, dict):
+                            # 只保留 files 字段，过滤其他未预期的键
+                            files_val = additional_kwargs.get("files")
+                            if files_val is not None:
+                                additional_kwargs = {"files": files_val}
+                            else:
+                                additional_kwargs = None
+                        else:
+                            additional_kwargs = None
+
+                        kw = {}
+                        if additional_kwargs:
+                            kw["additional_kwargs"] = additional_kwargs
+                        messages.append(HumanMessage(content=content, **kw))
             graph_input["messages"] = messages
         else:
             graph_input = raw_input

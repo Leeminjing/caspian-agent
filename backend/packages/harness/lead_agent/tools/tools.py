@@ -45,9 +45,9 @@ def _load_config_tools(app_config: AppConfig) -> list[BaseTool]:
 
 
 def _load_builtin_tools() -> list[BaseTool]:
-    from lead_agent.tools.builtins import present_file_tool, view_image_tool
+    from lead_agent.tools.builtins import list_uploaded_files, present_file_tool, view_image_tool
 
-    return [present_file_tool, view_image_tool]
+    return [present_file_tool, view_image_tool, list_uploaded_files]
 
 
 async def _load_mcp_tools() -> list[BaseTool]:

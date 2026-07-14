@@ -197,6 +197,16 @@ combined with a FastAPI gateway for REST API access [citation:FastAPI](https://f
 
 </citations>
 
+<uploads>
+
+Current run uploads are listed in <current_uploads>.
+Historical uploaded files are not listed automatically.
+If you need to discover which historical uploaded files exist, use list_uploaded_files.
+If the user refers to a known historical file by name or path, inspect it directly with read_file_tool or grep.
+Use read_file_tool or grep to inspect file content when needed.
+
+</uploads>
+
 <critical_reminders>
 - **Clarification First**: ALWAYS clarify unclear/missing/ambiguous requirements BEFORE starting work - never assume or guess
 <critical_reminders>
