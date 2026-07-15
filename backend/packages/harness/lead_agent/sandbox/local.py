@@ -28,8 +28,15 @@
 
     run_shell:
     在 workspace 子目录下以指定 shell 类型执行命令。
-    支持 bash / powershell / cmd / sh，通过 SHELL_MAP 查找对应可执行文件，
-    以显式调用方式（shell=False）执行。找不到目标 shell 时抛出 RuntimeError。
+    (1) 校验 shell_type 是否在 SHELL_MAP 中
+    (2) 调用 validate_shell_command(command) 做四维全局安全扫描（维度①③④）
+    (3) 调用 validate_local_bash_cd_target(command, shell_type) 做 cd/pushd/popd 目标校验（维度②）
+    (4) 通过 shutil.which 查找目标 shell 可执行文件
+    (5) 以显式调用方式（shell=False）执行命令，cwd=workspace
+    (6) 若 validate_shell_command 返回 warn 字符串，追加到命令输出末尾
+
+    支持 bash / powershell / cmd / sh，通过 SHELL_MAP 查找对应可执行文件。
+    找不到目标 shell 时抛出 RuntimeError。
 
 示例:
     sandbox = LocalSandbox(user_id="uuid-xxx", thread_id="abc123")
@@ -38,14 +45,22 @@
     sandbox.run_shell("ls -la", shell_type="bash")
 """
 
+import logging
 import os
 import re
 import shutil
 import subprocess
 
 from lead_agent.sandbox.base import Sandbox
-from lead_agent.sandbox.path_utils import REAL_ROOT, SUBDIRS, resolve_path
+from lead_agent.sandbox.path_utils import (
+    REAL_ROOT,
+    SUBDIRS,
+    resolve_path,
+    validate_shell_command,
+)
 from lead_agent.sandbox.readers import _read_pdf, _read_docx, _read_doc
+
+logger = logging.getLogger(__name__)
 
 SHELL_MAP = {
     "bash":       ("bash",            ["-c"]),
@@ -96,6 +111,10 @@ class LocalSandbox(Sandbox):
                 f"不支持的 shell 类型: '{shell_type}'，"
                 f"有效值: {sorted(SHELL_MAP.keys())}"
             )
+
+        # shell 命令四维路径安全检查（防线 0→1→2→3→4，维度③ warn）
+        warn_msg = validate_shell_command(command, shell_type)
+
         exe_name, args = entry
         exe_path = shutil.which(exe_name)
         if exe_path is None:
@@ -110,6 +129,11 @@ class LocalSandbox(Sandbox):
         output = result.stdout
         if result.stderr:
             output += result.stderr
+
+        # 追加 PATH= 风险提示
+        if warn_msg:
+            output += f"\n{warn_msg}"
+
         return output
 
     def _sanitize_error(self, error: Exception, vpath: str, real_path: str) -> Exception:
