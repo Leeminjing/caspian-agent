@@ -8,7 +8,7 @@
     REAL_ROOT: 真实路径根模板 ".lead_agent/users/{user_id}/threads/{thread_id}/user-data"
     SUBDIRS: 预创子目录列表 ["workspace", "uploads", "outputs"]
 
-shell 命令安全四维防护常量：
+shell 命令安全三维防护常量：
     _ABSOLUTE_PATH_PATTERN: 匹配 Unix 和 Windows 绝对路径
     _DOTDOT_PATH_SEGMENT_PATTERN: 匹配 .. 路径段
     _CD_IN_COMMAND_SUBSTITUTION_PATTERN: 匹配命令替换/scriptblock 中的 cd/pushd/popd
@@ -26,11 +26,11 @@ shell 命令安全四维防护常量：
 
     validate_shell_command:
     (1) 防线 0: _CD_IN_COMMAND_SUBSTITUTION_PATTERN 检测命令替换/scriptblock 中的 cd/pushd
-    (2) 防线 2: _ABSOLUTE_PATH_PATTERN 匹配所有绝对路径，逐一检查白名单
-    (3) 防线 3: _DOTDOT_PATH_SEGMENT_PATTERN 检测 .. 路径段
-    (4) 防线 4: "file://" 子串检测
-    (5) 维度③: PATH= 模式检测 → warn（记录日志，放行）
-    (6) 任一 block 防线命中 → SecurityError
+    (2) 防线 1: cd/pushd/popd 目标独立校验（若 shell_type 提供）
+    (3) 防线 2: _ABSOLUTE_PATH_PATTERN 匹配所有绝对路径，逐一检查白名单
+    (4) 防线 3: _DOTDOT_PATH_SEGMENT_PATTERN 检测 .. 路径段
+    (5) 防线 4: "file://" 子串检测
+    (6) 任一防线命中 → SecurityError；全部通过 → None
 
     validate_local_bash_cd_target:
     (1) 按 shell_type 查找 _CD_PATTERNS 对应的 cd/pushd/popd 正则
@@ -42,7 +42,7 @@ shell 命令安全四维防护常量：
     → ".lead_agent/users/uuid-xxx/threads/abc123/user-data/workspace/script.py"
 
     validate_shell_command("cat /etc/passwd")  → SecurityError
-    validate_shell_command("cat /mnt/user-data/workspace/foo.py")  → None (放行)
+    validate_shell_command("cat /mnt/user-data/workspace/foo.py")  → None
 """
 
 import logging
@@ -61,7 +61,7 @@ class SecurityError(Exception):
 
 
 # ---------------------------------------------------------------------------
-# shell 命令安全四维防护 — 常量
+# shell 命令安全三维防护 — 常量
 # ---------------------------------------------------------------------------
 
 _ABSOLUTE_PATH_PATTERN: re.Pattern = re.compile(
@@ -106,10 +106,6 @@ _CD_PATTERNS: dict[str, re.Pattern] = {
     "powershell": re.compile(r"\b(?:Set-Location|Push-Location|Pop-Location|sl|cd)(?:\s+|$)"),
 }
 
-_PATH_PATTERN: re.Pattern = re.compile(
-    r"PATH\s*="
-)
-
 # 匹配 PATH= 赋值中引用的绝对路径（如 PATH=/tmp:$PATH 中的 /tmp）
 _PATH_ASSIGNMENT_ABS_PATH: re.Pattern = re.compile(
     r"PATH\s*=\s*([^\s;&|]+)"
@@ -153,7 +149,8 @@ def _check_absolute_paths(command: str, whitelist: frozenset[str]) -> None:
     工作流:
         跳过 URL（如 https://）和 PATH= 赋值上下文中的路径
     """
-    # 收集 PATH= 上下文中的路径（这些路径由维度③ warn 处理，不 block）
+    # 收集 PATH= 上下文中的路径（PATH 变量值而非文件访问路径，不 block；
+    # PATH= 毒化检测由 SandboxAuditMiddleware 统一处理）
     path_assignment_paths = _find_path_assignment_paths(command)
 
     for match in _ABSOLUTE_PATH_PATTERN.finditer(command):
@@ -174,18 +171,6 @@ def _check_absolute_paths(command: str, whitelist: frozenset[str]) -> None:
             )
 
 
-def _check_path_warn(command: str) -> str | None:
-    """检测 PATH= 环境变量修改模式，命中时返回风险提示。
-
-    输入:
-        command: str — shell 命令字符串
-
-    输出:
-        str | None — 命中时返回风险提示字符串，未命中返回 None
-    """
-    if _PATH_PATTERN.search(command):
-        return f"[shell-path-guard] PATH 毒化风险: 检测到 PATH= 环境变量修改（命令: {command[:80]}）"
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -238,15 +223,15 @@ def validate_path(real_path: str, real_root: str) -> str:
     return real_path
 
 
-def validate_shell_command(command: str, shell_type: str | None = None) -> str | None:
-    """shell 命令全局安全扫描（维度①③④）。
+def validate_shell_command(command: str, shell_type: str | None = None) -> None:
+    """shell 命令全局安全扫描（三维路径防护）。
 
     输入:
         command: str — 待执行的 shell 命令字符串
         shell_type: str | None — shell 类型，提供时在防线 0 之后、防线 2 之前执行防线 1（cd 目标校验）
 
     输出:
-        str | None — 维度③ PATH= 命中时返回风险提示字符串，全部通过返回 None
+        None — 全部通过；任一防线命中 → SecurityError
 
     工作流:
         (0) 防线 0: 命令替换/scriptblock 中 cd/pushd 拦截 → SecurityError
@@ -254,13 +239,11 @@ def validate_shell_command(command: str, shell_type: str | None = None) -> str |
         (2) 防线 2: 全局绝对路径白名单检查 → SecurityError
         (3) 防线 3: .. 路径段检测 → SecurityError
         (4) 防线 4: file:// 子串检测 → SecurityError
-        (5) 维度③: PATH= 模式检测 → 命中返回 warn 字符串，不抛异常
 
     示例:
         validate_shell_command("cat /etc/passwd")            → SecurityError
         validate_shell_command("ls -la")                      → None
         validate_shell_command("cd /tmp && ls", "bash")       → SecurityError (防线 1)
-        validate_shell_command("export PATH=/tmp:$PATH; ls")  → "PATH 毒化风险: ..."
     """
     # 防线 0: 命令替换/scriptblock 中 cd/pushd 拦截
     if _CD_IN_COMMAND_SUBSTITUTION_PATTERN.search(command):
@@ -286,13 +269,6 @@ def validate_shell_command(command: str, shell_type: str | None = None) -> str |
         raise SecurityError(
             f"禁止使用 file:// URL: {command[:80]}"
         )
-
-    # 维度③: PATH= 模式检测 → warn（不 block）
-    warn = _check_path_warn(command)
-    if warn:
-        logger.warning("shell-path-guard: %s", warn)
-
-    return warn
 
 
 def validate_local_bash_cd_target(command: str, shell_type: str) -> None:

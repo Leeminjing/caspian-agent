@@ -18,9 +18,10 @@
     (2) 非 shell 工具 → 直接调用 handler(request) 放行
     (3) shell 工具 → 提取 command 参数 → _classify(shell_type, command) 判定风险等级
     (4) block → 返回 status="error" 的 ToolMessage，不执行命令
-    (5) warn → 调用 handler(request) 执行，在结果中追加风险提示
-    (6) pass → 调用 handler(request) 返回原始结果
-    (7) 整个审计逻辑外裹 try/except，异常时 fallback 到 handler(request) 放行
+    (5) 命令执行后执行 PATH= 毒化检测（shell 类型无关）→ 命中追加专用告警
+    (6) warn → 调用 handler(request) 执行，在结果中追加风险提示
+    (7) pass → 调用 handler(request) 返回原始结果
+    (8) 整个审计逻辑外裹 try/except，异常时 fallback 到 handler(request) 放行
 
 示例:
     from lead_agent.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
@@ -41,6 +42,8 @@ from langgraph.types import Command
 logger = logging.getLogger(__name__)
 
 _SHELL_TOOLS: frozenset = frozenset({"bash_tool", "powershell_tool", "cmd_tool", "sh_tool"})
+
+_PATH_PATTERN: re.Pattern = re.compile(r"PATH\s*=")
 
 # ---------------------------------------------------------------------------
 # bash/sh 高危规则 — block
@@ -258,6 +261,31 @@ class SandboxAuditMiddleware(AgentMiddleware):
         # Command 类型不追加 warning（避免破坏控制流语义），直接返回
         return result
 
+    @staticmethod
+    def _append_path_warning(result, command: str) -> ToolMessage | Command:
+        """在工具执行结果中追加 PATH 毒化风险提示。
+
+        输入:
+            result: ToolMessage | Command — 原始执行结果
+            command: str — 执行的命令
+
+        输出:
+            ToolMessage | Command — 追加了 PATH 毒化风险提示的结果
+        """
+        warning = (
+            f"\n\n[SandboxAudit] ⚠️ PATH 毒化风险: 检测到 PATH= 环境变量修改。\n"
+            f"命令: {command}\n"
+            f"请确认操作的安全性。"
+        )
+        if isinstance(result, ToolMessage):
+            return ToolMessage(
+                content=(result.content or "") + warning,
+                tool_call_id=result.tool_call_id,
+                name=getattr(result, "name", None),
+            )
+        # Command 类型不追加 warning（避免破坏控制流语义），直接返回
+        return result
+
     # ------------------------------------------------------------------
     # 核心审计逻辑（sync + async 共用）
     # ------------------------------------------------------------------
@@ -292,8 +320,12 @@ class SandboxAuditMiddleware(AgentMiddleware):
 
         result = handler(request)
 
+        # PATH= 毒化检测（shell 类型无关，warn 级别）
+        if _PATH_PATTERN.search(command):
+            result = self._append_path_warning(result, command)
+
         if level == "warn":
-            return self._append_warning(result, tool_name, command)
+            result = self._append_warning(result, tool_name, command)
 
         return result
 
