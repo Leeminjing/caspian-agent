@@ -37,6 +37,18 @@ skills:
 
 sandbox:
   use: lead_agent.sandbox.local:LocalSandbox
+  # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
+  # use: lead_agent.community.aio_sandbox:AioSandbox
+  # image: ghcr.io/agent-infra/sandbox:latest
+  # port: 8080
+  # replicas: 3
+  # container_prefix: caspian-sandbox
+  # mounts:
+  #   - host_path: /path/to/extra
+  #     container_path: /mnt/extra
+  #     read_only: false
+  # environment:
+  #   MY_KEY: value
 
 stream_bridge:
   type: memory

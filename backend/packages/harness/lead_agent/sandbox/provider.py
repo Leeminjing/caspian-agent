@@ -50,11 +50,28 @@ class SandboxProvider:
 _sandbox_provider: SandboxProvider | None = None
 
 
-def get_sandbox_provider() -> SandboxProvider:
+def get_sandbox_provider():
+    """返回沙箱 provider 实例。
+
+    根据 sandbox.use 配置值决定返回 SandboxProvider (LocalSandbox) 或
+    AioSandboxProvider (AioSandbox)。两者实现相同的外部接口 (acquire / get)。
+
+    输入: 无（内部通过 get_app_config 获取配置）
+
+    输出:
+        SandboxProvider | AioSandboxProvider — 全局单例 provider
+    """
     global _sandbox_provider
     if _sandbox_provider is None:
         from lead_agent.config import get_app_config
 
         app_config = get_app_config("config.yaml")
-        _sandbox_provider = SandboxProvider(app_config.sandbox)
+        use = app_config.sandbox.use
+
+        if use.startswith("lead_agent.community.aio_sandbox"):
+            from lead_agent.community.aio_sandbox.aio_sandbox_provider import AioSandboxProvider
+            _sandbox_provider = AioSandboxProvider(app_config)
+        else:
+            _sandbox_provider = SandboxProvider(app_config.sandbox)
+
     return _sandbox_provider

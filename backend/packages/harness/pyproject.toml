@@ -24,6 +24,7 @@ dependencies = [
 mcp = ["langchain-mcp-adapters>=0.1.0"]
 postgres = ["asyncpg", "langgraph-checkpoint-postgres"]
 sqlite = ["aiosqlite"]
+aiosandbox = ["agent-sandbox", "docker"]
 
 [build-system]
 requires = ["setuptools>=75.0"]
