@@ -3,18 +3,23 @@
 
 输入:
     agent_name: str | None — Agent 名称，None 时使用默认值 "Caspian"
+    skill_names: str — 已启用 skill 名称的逗号分隔列表，填充 {names} 占位符
+    container_base_path: str | None — skill 文件挂载路径，填充 {container_base_path} 占位符
 
 输出:
     str — 填充后的完整 system prompt 字符串
 
 工作流:
     (1) 若 agent_name 为 None，取默认值 "Caspian"
-    (2) 调用 SYSTEM_PROMPT_TEMPLATE.format(agent_name=...) 填入占位符
-    (3) 返回填充后的 system prompt
+    (2) 若 skill_names 为 ""，{names} 渲染为空，<skill_index> 无内容
+    (3) 若 container_base_path 为 None，{container_base_path} 渲染为空
+    (4) 调用 SYSTEM_PROMPT_TEMPLATE.format(...) 填入占位符
+    (5) 返回填充后的 system prompt
 
 示例:
     prompt = apply_prompt_template()  → agent_name="Caspian"
     prompt = apply_prompt_template("DeepSeek")  → agent_name="DeepSeek"
+    prompt = apply_prompt_template(skill_names="pdf, code-review", container_base_path="/mnt/skills")
 """
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -197,6 +202,22 @@ combined with a FastAPI gateway for REST API access [citation:FastAPI](https://f
 
 </citations>
 
+<skill_system>
+You have access to skills that provide optimized workflows for specific tasks.
+
+**Skill Discovery:**
+1. Check <skill_index> for a skill name that matches your task
+2. Call describe_skill(name) to fetch its description and capabilities
+3. If the skill matches, call read_file on the returned location to load full instructions
+4. Follow the skill's instructions precisely
+
+<skill_index>
+{names}
+</skill_index>
+
+Skills are located at: {container_base_path}
+</skill_system>
+
 <uploads>
 
 Current run uploads are listed in <current_uploads>.
@@ -214,7 +235,13 @@ Use read_file_tool or grep to inspect file content when needed.
 """
 
 
-def apply_prompt_template(agent_name: str | None = None) -> str:
+def apply_prompt_template(
+    agent_name: str | None = None,
+    skill_names: str = "",
+    container_base_path: str | None = None,
+) -> str:
     return SYSTEM_PROMPT_TEMPLATE.format(
         agent_name=agent_name or "Caspian",
+        names=skill_names,
+        container_base_path=container_base_path or "",
     )

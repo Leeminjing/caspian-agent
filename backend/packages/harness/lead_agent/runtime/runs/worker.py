@@ -14,7 +14,7 @@
     stream_modes: list[str] | str | None — 前端传入的 stream mode
     agent_name: str | None — agent 名称
     tool_groups: list[str] | None — 工具分组过滤
-    langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取
+    langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取；其中 user_id 传给 make_lead_agent 用于定位 per-user custom skills
     checkpointer: BaseCheckpointSaver | None — checkpoint 持久化器，None 时不启用
     store: BaseStore | None — 跨 thread 长期记忆存储，None 时不启用
 
@@ -24,7 +24,7 @@
 具体工作流:
     (1) 设置 run 状态为 running，发布 metadata 事件（含 run_id + thread_id）
     (2) 读取当前 thread 的旧 checkpoint 保存为 rollback 快照（checkpointer 可用时）
-    (3) 从 record.model_name 取模型名，创建 agent
+    (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
     (3.5) 将 checkpointer 挂载到 agent.checkpointer，将 store 挂载到 agent.store
     (4) 翻译 stream_modes（前端名称 → LangGraph 内部名称）
     (5) 调用 agent.astream()，每轮检查 abort_event
@@ -41,7 +41,7 @@
         graph_input={"messages": [HumanMessage(content="你好")]},
         runnable_config={"configurable": {"thread_id": "th-001"}},
         stream_modes=["values"],
-        langgraph_context={"model_name": "deepseek-v4-flash", "app_config": app_config},
+        langgraph_context={"model_name": "deepseek-v4-flash", "app_config": app_config, "user_id": "uuid-xxx"},
     ))
 """
 
@@ -197,14 +197,16 @@ async def run_agent(
             except Exception:
                 logger.warning("run '%s' 读取旧 checkpoint 失败，rollback 不可用", record.run_id, exc_info=True)
 
-        # (3) 从 record.model_name 取模型名，创建 agent
+        # (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
         model_name = record.model_name or (app_config.models[0].name if app_config.models else None)
         mapped_stream_modes = _map_stream_modes(stream_modes)
+        user_id = langgraph_context.get("user_id") if langgraph_context else None
 
         agent = await make_lead_agent(
             model_name=model_name or None,
             agent_name=agent_name,
             tool_groups=tool_groups,
+            user_id=user_id,
         )
 
         # (3.5) 挂载 checkpointer 和 store 到 agent

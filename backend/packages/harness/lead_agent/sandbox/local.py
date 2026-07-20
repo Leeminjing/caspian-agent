@@ -16,9 +16,10 @@
     调用 path_utils.resolve_path 完成虚拟路径 → 真实路径映射
 
     read_file:
-    (1) 调用 _resolve_path 解析路径
-    (2) 根据扩展名分发至 readers 模块: .pdf → _read_pdf / .docx → _read_docx / .doc → _read_doc / 其他 → UTF-8
-    (3) 所有异常通过 _sanitize_error 清洗真实路径后重新抛出
+    (1) 若路径以 /mnt/skills/ 开头 → resolve_skill_path 解析后 UTF-8 直接读取
+    (2) 否则调用 _resolve_path 解析路径
+    (3) 根据扩展名分发至 readers 模块: .pdf → _read_pdf / .docx → _read_docx / .doc → _read_doc / 其他 → UTF-8
+    (4) 所有异常通过 _sanitize_error 清洗真实路径后重新抛出
 
     _sanitize_error (受保护 helper):
     捕获异常，将异常信息中的真实路径替换为虚拟路径后重新抛出，不泄露磁盘路径
@@ -41,6 +42,7 @@
     sandbox = LocalSandbox(user_id="uuid-xxx", thread_id="abc123")
     content = sandbox.read_file("/mnt/user-data/workspace/hello.py")
     text = sandbox.read_file("/mnt/user-data/uploads/report.pdf")
+    sandbox.read_file("/mnt/skills/public/pdf/SKILL.md")
     sandbox.run_shell("ls -la", shell_type="bash")
 """
 
@@ -53,8 +55,10 @@ import subprocess
 from lead_agent.sandbox.base import Sandbox
 from lead_agent.sandbox.path_utils import (
     REAL_ROOT,
+    SKILLS_VROOT,
     SUBDIRS,
     resolve_path,
+    resolve_skill_path,
     validate_shell_command,
 )
 from lead_agent.sandbox.readers import _read_pdf, _read_docx, _read_doc
@@ -81,6 +85,14 @@ class LocalSandbox(Sandbox):
         return resolve_path(vpath, self._user_id, self._thread_id)
 
     def read_file(self, path: str) -> str:
+        if path.startswith(SKILLS_VROOT + "/"):
+            real_path = resolve_skill_path(path, user_id=self._user_id)
+            try:
+                with open(real_path, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception as e:
+                raise self._sanitize_error(e, path, real_path) from None
+
         real_path = self._resolve_path(path)
         ext = os.path.splitext(real_path)[1].lower()
 

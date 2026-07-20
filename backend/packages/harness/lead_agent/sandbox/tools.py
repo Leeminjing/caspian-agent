@@ -1,12 +1,14 @@
 """
-本文件将 Sandbox 实例的三个方法包装为 LangChain @tool，并在调用前校验子目录白名单。
+本文件对外提供 sandbox_to_tools，将 Sandbox 实例的三个方法包装为 LangChain @tool。
 
 对外提供:
     sandbox_to_tools: 输入 Sandbox 实例，返回 LangChain Tool 列表
 
 工作流:
     使用 @tool 装饰器分别包装 sandbox.read_file / sandbox.write_file / sandbox.run_shell
-    read_file_tool 允许访问 uploads / workspace / outputs 三个子目录
+    read_file_tool 支持两种路径前缀:
+        /mnt/user-data/ → validate_subdir 后委托 sandbox.read_file
+        /mnt/skills/    → 直接委托 sandbox.read_file（路径解析由 sandbox 内部处理）
     write_file_tool 允许访问 workspace / outputs 两个子目录（禁止写入 uploads）
     run_shell 按 shell 类型拆分为 4 个独立工具:
         bash_tool / powershell_tool / cmd_tool / sh_tool
@@ -25,7 +27,8 @@
 from langchain_core.tools import tool
 
 from lead_agent.sandbox.base import Sandbox
-from lead_agent.sandbox.path_utils import validate_subdir
+from lead_agent.sandbox.path_utils import SKILLS_VROOT, validate_subdir
+
 
 def sandbox_to_tools(sandbox: Sandbox) -> list:
 
@@ -33,11 +36,16 @@ def sandbox_to_tools(sandbox: Sandbox) -> list:
     def read_file_tool(path: str) -> str:
         """读取沙箱中指定虚拟路径的文件内容。
 
-        允许访问的子目录: uploads / workspace / outputs
+        支持两种路径前缀:
+        - /mnt/user-data/...: 沙箱内文件，允许访问 uploads / workspace / outputs
+        - /mnt/skills/...: skill 文件，只读
 
         Args:
-            path: 虚拟路径，以 /mnt/user-data/uploads/、/mnt/user-data/workspace/ 或 /mnt/user-data/outputs/ 开头
+            path: 虚拟路径，以 /mnt/user-data/ 或 /mnt/skills/ 开头
         """
+        if path.startswith(SKILLS_VROOT + "/"):
+            return sandbox.read_file(path)
+
         validate_subdir(path, {"uploads", "workspace", "outputs"})
         return sandbox.read_file(path)
 

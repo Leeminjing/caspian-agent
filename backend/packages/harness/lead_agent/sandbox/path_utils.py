@@ -1,12 +1,15 @@
 """
 本文件对外提供：
-    虚拟路径与真实路径之间的映射函数及越界校验：resolve_path / validate_path / validate_subdir / SecurityError
+    虚拟路径与真实路径之间的映射函数及越界校验：resolve_path / validate_path / validate_subdir / resolve_skill_path / SecurityError
     shell 命令路径安全校验：validate_shell_command / validate_local_bash_cd_target
 
 常量：
     VRROOT: 虚拟路径前缀常量 "/mnt/user-data"
+    SKILLS_VROOT: skills 虚拟路径前缀常量 "/mnt/skills"
     REAL_ROOT: 真实路径根模板 ".lead_agent/users/{user_id}/threads/{thread_id}/user-data"
     SUBDIRS: 预创子目录列表 ["workspace", "uploads", "outputs"]
+    SKILLS_PUBLIC_REAL_ROOT: public skills 宿主机存储路径 "skills"
+    SKILLS_CUSTOM_REAL_ROOT: custom skills 宿主机存储路径模板 ".lead_agent/users/{user_id}/skills"
 
 shell 命令安全三维防护常量：
     _ABSOLUTE_PATH_PATTERN: 匹配 Unix 和 Windows 绝对路径
@@ -23,6 +26,14 @@ shell 命令安全三维防护常量：
     (3) 将虚拟路径去掉 VRROOT 前缀，拼接到真实根目录后
     (4) 调用 validate_path 二次确认未越界
     (5) 返回真实路径
+
+    resolve_skill_path:
+    (1) 校验虚拟路径必须以 SKILLS_VROOT 开头，否则抛 SecurityError
+    (2) 去掉前缀后取第一段作为 category（public / custom）
+    (3) public → 拼接到 SKILLS_PUBLIC_REAL_ROOT 后
+    (4) custom → 用 user_id 填充 SKILLS_CUSTOM_REAL_ROOT 模板后拼接
+    (5) 调用 validate_path 二次确认未越界
+    (6) 返回真实路径
 
     validate_shell_command:
     (1) 防线 0: _CD_IN_COMMAND_SUBSTITUTION_PATTERN 检测命令替换/scriptblock 中的 cd/pushd
@@ -41,6 +52,12 @@ shell 命令安全三维防护常量：
     resolve_path("/mnt/user-data/workspace/script.py", "uuid-xxx", "abc123")
     → ".lead_agent/users/uuid-xxx/threads/abc123/user-data/workspace/script.py"
 
+    resolve_skill_path("/mnt/skills/public/pdf/SKILL.md", user_id="u-1")
+    → "skills/public/pdf/SKILL.md" 的绝对路径
+
+    resolve_skill_path("/mnt/skills/custom/my-skill/SKILL.md", user_id="u-1")
+    → ".lead_agent/users/u-1/skills/custom/my-skill/SKILL.md" 的绝对路径
+
     validate_shell_command("cat /etc/passwd")  → SecurityError
     validate_shell_command("cat /mnt/user-data/workspace/foo.py")  → None
 """
@@ -52,8 +69,11 @@ import re
 logger = logging.getLogger(__name__)
 
 VRROOT = "/mnt/user-data"
+SKILLS_VROOT = "/mnt/skills"
 REAL_ROOT = ".lead_agent/users/{user_id}/threads/{thread_id}/user-data"
 SUBDIRS = ["workspace", "uploads", "outputs"]
+SKILLS_PUBLIC_REAL_ROOT = "skills"
+SKILLS_CUSTOM_REAL_ROOT = ".lead_agent/users/{user_id}/skills"
 
 
 class SecurityError(Exception):
@@ -221,6 +241,59 @@ def validate_path(real_path: str, real_root: str) -> str:
             f"真实路径越界: '{real_path_abs}' 不在沙箱根目录 '{real_root_abs}' 内"
         )
     return real_path
+
+
+def resolve_skill_path(vpath: str, user_id: str) -> str:
+    """将 /mnt/skills/ 虚拟路径映射为宿主机真实路径。
+
+    输入:
+        vpath: str — skills 虚拟路径，如 "/mnt/skills/public/pdf/SKILL.md"
+        user_id: str — 用户标识，用于 custom skills 的 per-user 路径填充
+
+    输出:
+        str — 宿主机真实路径的绝对路径
+
+    工作流:
+        (1) 校验虚拟路径必须以 SKILLS_VROOT 开头，否则抛 SecurityError
+        (2) 去掉前缀后取第一段作为 category
+        (3) category == "public" → 拼接到 SKILLS_PUBLIC_REAL_ROOT 后
+        (4) category == "custom" → 用 user_id 填充 SKILLS_CUSTOM_REAL_ROOT 模板后拼接
+        (5) 未知 category → 抛 SecurityError
+        (6) 调用 validate_path 二次确认未越界
+        (7) 返回真实路径
+
+    示例:
+        resolve_skill_path("/mnt/skills/public/pdf/SKILL.md", user_id="u-1")
+        → "<cwd>/skills/public/pdf/SKILL.md"
+        resolve_skill_path("/mnt/skills/custom/my-skill/SKILL.md", user_id="u-1")
+        → "<cwd>/.lead_agent/users/u-1/skills/custom/my-skill/SKILL.md"
+    """
+    if not vpath.startswith(SKILLS_VROOT + "/"):
+        raise SecurityError(
+            f"虚拟路径越界: '{vpath}'，必须以 '{SKILLS_VROOT}/' 开头"
+        )
+
+    relative = vpath[len(SKILLS_VROOT):].lstrip("/")
+    parts = relative.split("/", 1)
+    if len(parts) < 2:
+        raise SecurityError(
+            f"skills 路径格式无效: '{vpath}'，需为 /mnt/skills/<category>/<path>"
+        )
+
+    category, rest = parts[0], parts[1]
+
+    if category == "public":
+        real_root = os.path.abspath(SKILLS_PUBLIC_REAL_ROOT)
+        real_path = os.path.join(real_root, rest)
+        return validate_path(real_path, real_root)
+    elif category == "custom":
+        real_root = os.path.abspath(SKILLS_CUSTOM_REAL_ROOT.format(user_id=user_id))
+        real_path = os.path.join(real_root, rest)
+        return validate_path(real_path, real_root)
+    else:
+        raise SecurityError(
+            f"未知的 skill 类别: '{category}'，仅支持 public/custom"
+        )
 
 
 def validate_shell_command(command: str, shell_type: str | None = None) -> None:
