@@ -27,6 +27,7 @@ import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from backend.app.gateway.auth.config import AuthConfig
@@ -34,6 +35,9 @@ from backend.app.gateway.deps import langgraph_runtime
 
 # 导入 gateway models 以注册到 Base.metadata（供 Alembic autogenerate 发现）
 import backend.app.gateway.models  # noqa: F401
+
+# 在所有配置加载之前注入 .env 环境变量
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
