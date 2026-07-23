@@ -1,0 +1,212 @@
+"""
+本文件对外提供 make_lead_agent 异步工厂函数和 _build_middlewares 内部函数，
+作为 lead_agent 装配的唯一对外入口。
+
+对外提供:
+    make_lead_agent — 装配并返回可执行的 CompiledStateGraph
+    _build_middlewares — 组装 lead_agent 的中间件链（通用 + 专属）
+
+输入:
+    make_lead_agent:
+        model_name: str | None — 目标模型名，None 时取 config.yaml 中 models[0] 作为默认
+        agent_name: str | None — system prompt 中的 agent 名称，None 时使用默认值 "Caspian"
+        tool_groups: list[str] | None — 需要加载的工具分组名列表，None 表示加载全部
+        user_id: str | None — 用户标识，用于定位 per-user custom skills 路径，None 时跳过 custom
+
+输出:
+    CompiledStateGraph — langchain.agents.create_agent() 产出的可执行 agent graph
+
+具体工作流:
+    (1) 调用 create_chat_model(name=model_name) 获取 BaseChatModel 实例
+    (2) 加载 skills:
+        (2a) 读 extensions_config.json 获取 enabled skill 名称集合
+        (2b) public: SKILLS_PUBLIC_REAL_ROOT 下扫描 skills/public/ 发现 SKILL.md
+        (2c) custom: SKILLS_CUSTOM_REAL_ROOT.format(user_id=user_id) 下扫描 skills/custom/（user_id 为 None 时跳过）
+        (2d) 逐个 parse_skill_file() 解析 + _validate_skill_frontmatter 校验
+        (2e) 过滤 enabled=true 的 Skill → 构建 SkillCatalog
+        (2f) skill_names = catalog.names → 逗号分隔字符串
+    (3) await get_available_tools(tool_groups=tool_groups) 汇集全局工具
+        (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
+        (3b) 合并: [describe_skill_tool] + global_tools
+    (4) 调用 _build_middlewares() 获取中间件列表
+        (4a) 调用 build_general_middlewares() 获取通用中间件链
+        (4b) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
+    (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt
+    (6) 调用 langchain.agents.create_agent(model, tools, middleware, system_prompt, state_schema=LeadAgentState)
+    (7) 返回 CompiledStateGraph
+
+示例:
+    graph = await make_lead_agent()
+    graph = await make_lead_agent(model_name="deepseek-v4-flash", agent_name="DeepSeek")
+    graph = await make_lead_agent(tool_groups=["file:read", "bash"])
+    graph = await make_lead_agent(user_id="uuid-xxx")
+"""
+
+import json
+import logging
+from pathlib import Path
+
+from langchain.agents import create_agent
+from langchain.agents.middleware import AgentMiddleware
+from langgraph.graph.state import CompiledStateGraph
+
+from caspian.agents.lead.prompt import apply_prompt_template
+from caspian.agents.lead_agent_state import LeadAgentState
+from caspian.agents.middlewares.builder import build_general_middlewares
+from caspian.models import create_chat_model
+from caspian.tools import get_available_tools
+
+logger = logging.getLogger(__name__)
+
+
+def _build_middlewares() -> list[AgentMiddleware]:
+    """组装 lead_agent 的中间件链：通用链 + lead_agent 专属中间件。
+
+    输入: 无
+
+    输出:
+        list[AgentMiddleware] — 按顺序排列的中间件列表
+
+    工作流:
+        (1) 调用 build_general_middlewares() 获取通用中间件链
+        (2) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
+        (3) 返回完整列表
+    """
+    middlewares = build_general_middlewares()
+    # ponytail: lead_agent 专属中间件预留扩展点
+    return middlewares
+
+
+def _load_enabled_skill_names() -> frozenset[str]:
+    """从 extensions_config.json 读取已启用的 skill 名称集合。
+
+    输入: 无
+
+    输出:
+        frozenset[str] — enabled=true 的 skill 名称集合
+
+    工作流:
+        (1) 读取 extensions_config.json
+        (2) 提取 skills 段
+        (3) 过滤 enabled=true → 返回名称 frozenset
+        (4) 文件不存在或 skills 段为空 → 返回空 frozenset
+    """
+    try:
+        with open("extensions_config.json", "r", encoding="utf-8") as f:
+            raw = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return frozenset()
+
+    skills_cfg = raw.get("skills")
+    if not isinstance(skills_cfg, dict):
+        return frozenset()
+
+    return frozenset(
+        name for name, cfg in skills_cfg.items()
+        if isinstance(cfg, dict) and cfg.get("enabled") is True
+    )
+
+
+def _discover_and_build_catalog(
+    enabled_names: frozenset[str],
+    host_base_path: str | None,
+    user_id: str | None = None,
+) -> "SkillCatalog":
+    """扫描宿主机文件系统发现 SKILL.md，解析并构建 SkillCatalog。
+
+    输入:
+        enabled_names: frozenset[str] — extensions_config.json 中 enabled=true 的 skill 名称
+        host_base_path: str | None — skills 根目录的宿主机路径，None 时从 SKILLS_PUBLIC_REAL_ROOT 取默认值
+        user_id: str | None — 用户标识，用于定位 per-user custom skills 路径，None 时跳过 custom
+
+    输出:
+        SkillCatalog — 包含所有已启用 skill 的不可变索引
+
+    工作流:
+        (1) public: 遍历 SKILLS_PUBLIC_REAL_ROOT 下的 SKILL.md
+        (2) custom: 若 user_id 非 None，遍历 SKILLS_CUSTOM_REAL_ROOT.format(user_id=user_id) 下的 SKILL.md
+        (3) 逐个 parse_skill_file() 解析
+        (4) 根据 enabled_names 过滤 enabled=true
+        (5) 构建 SkillCatalog 并返回
+    """
+    from caspian.sandbox.path_utils import SKILLS_CUSTOM_REAL_ROOT, SKILLS_PUBLIC_REAL_ROOT
+    from caspian.skills.catalog import SkillCatalog
+    from caspian.skills.parser import parse_skill_file
+    from caspian.skills.types import SKILL_MD_FILE, SkillCategory
+
+    base_path = Path(host_base_path) if host_base_path else Path(SKILLS_PUBLIC_REAL_ROOT)
+
+    categories: list[tuple[Path, SkillCategory]] = [
+        (base_path, SkillCategory.PUBLIC),
+    ]
+
+    if user_id is not None:
+        custom_base = Path(SKILLS_CUSTOM_REAL_ROOT.format(user_id=user_id))
+        categories.append((custom_base, SkillCategory.CUSTOM))
+
+    skills: list = []
+    for cat_dir, category in categories:
+        if not cat_dir.is_dir():
+            continue
+        for skill_file in cat_dir.rglob(SKILL_MD_FILE):
+            skill = parse_skill_file(
+                skill_file=skill_file,
+                category=category,
+                relative_path=skill_file.parent.relative_to(cat_dir),
+            )
+            if skill is None:
+                continue
+            # 设置 enabled 状态
+            skill.enabled = skill.name in enabled_names
+            if skill.enabled:
+                skills.append(skill)
+
+    return SkillCatalog(skills)
+
+
+async def make_lead_agent(
+    model_name: str | None = None,
+    agent_name: str | None = None,
+    tool_groups: list[str] | None = None,
+    user_id: str | None = None,
+) -> CompiledStateGraph:
+    # (1) 创建模型
+    model = create_chat_model(name=model_name)
+
+    # (2) 加载 skills
+    from caspian.config import get_app_config
+
+    app_config = get_app_config("config.yaml")
+    # container_base_path 用于 system prompt（沙箱内的 skill 路径），host 路径用 SKILLS_PUBLIC_REAL_ROOT
+    container_base_path = app_config.skills.container_path if app_config.skills else None
+
+    enabled_names = _load_enabled_skill_names()
+    catalog = _discover_and_build_catalog(enabled_names, host_base_path=None, user_id=user_id)
+    skill_names = ", ".join(sorted(catalog.names))
+
+    # (3) 汇集工具
+    tools = await get_available_tools(tool_groups=tool_groups)
+
+    from caspian.tools.builtins.describe_skill_tool import build_describe_skill_tool
+
+    describe_skill_tool = build_describe_skill_tool(catalog)
+    tools = [describe_skill_tool] + tools
+
+    # (4) system prompt
+    system_prompt = apply_prompt_template(
+        agent_name=agent_name,
+        skill_names=skill_names,
+        container_base_path=container_base_path,
+    )
+
+    # (5) middleware
+    middleware = _build_middlewares()
+
+    # (6) create_agent
+    return create_agent(
+        model=model,
+        tools=tools,
+        middleware=middleware,
+        system_prompt=system_prompt,
+        state_schema=LeadAgentState,
+    )

@@ -36,11 +36,11 @@ from fastapi import Request
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 
-from lead_agent.config.app_config import get_app_config
-from lead_agent.runtime.runs.manager import RunManager, RunRecord
-from lead_agent.runtime.runs.schemas import DisconnectMode
-from lead_agent.runtime.runs.worker import run_agent
-from lead_agent.runtime.stream_bridge.base import StreamBridge
+from caspian.config.app_config import get_app_config
+from caspian.runtime.runs.manager import RunManager, RunRecord
+from caspian.runtime.runs.schemas import DisconnectMode
+from caspian.runtime.runs.worker import run_agent
+from caspian.runtime.stream_bridge.base import StreamBridge
 
 logger = logging.getLogger(__name__)
 

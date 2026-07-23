@@ -50,9 +50,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from lead_agent.runtime.runs.manager import RunManager, RunRecord
-from lead_agent.runtime.stream_bridge.base import StreamBridge
-from lead_agent.runtime.stream_bridge.schemas import (
+from caspian.runtime.runs.manager import RunManager, RunRecord
+from caspian.runtime.stream_bridge.base import StreamBridge
+from caspian.runtime.stream_bridge.schemas import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     StreamEvent,

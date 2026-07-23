@@ -16,7 +16,7 @@
 
 具体工作流:
     (1) 从 request.state.current_user.id 获取 user_id
-    (2) 构造沙箱 uploads 目录真实路径: .lead_agent/users/{user_id}/threads/{thread_id}/user-data/uploads/
+    (2) 构造沙箱 uploads 目录真实路径: .caspian/users/{user_id}/threads/{thread_id}/user-data/uploads/
     (3) 若目录不存在则自动创建
     (4) 遍历上传的文件:
         (a) 生成安全文件名（保留扩展名）
@@ -37,7 +37,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request, UploadFile
 from fastapi.responses import JSONResponse
 
-from lead_agent.sandbox.path_utils import REAL_ROOT
+from caspian.sandbox.path_utils import REAL_ROOT
 
 router = APIRouter()
 
@@ -84,7 +84,7 @@ def _resolve_upload_path(user_id: str, thread_id: str, filename: str) -> str:
 
     示例:
         _resolve_upload_path("uuid-xxx", "th-001", "report.md")
-        → .lead_agent/users/uuid-xxx/threads/th-001/user-data/uploads/report.md
+        → .caspian/users/uuid-xxx/threads/th-001/user-data/uploads/report.md
     """
     uploads_dir = os.path.abspath(REAL_ROOT.format(user_id=user_id, thread_id=thread_id) + "/uploads")
     os.makedirs(uploads_dir, exist_ok=True)

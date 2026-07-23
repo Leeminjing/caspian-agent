@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 
 from backend.app.gateway.auth.config import AuthConfig
 from backend.app.gateway.auth.security import decode_access_token
-from lead_agent.persistence.engine import get_session
+from caspian.persistence.engine import get_session
 from backend.app.gateway.models.user import User
 from sqlalchemy import select
 

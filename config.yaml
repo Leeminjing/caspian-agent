@@ -15,30 +15,30 @@ tool_groups:
 tools:
   - name: read_file
     group: file:read
-    use: lead_agent.sandbox.tools:read_file_tool
+    use: caspian.sandbox.tools:read_file_tool
   - name: write_file
     group: file:write
-    use: lead_agent.sandbox.tools:write_file_tool
+    use: caspian.sandbox.tools:write_file_tool
   - name: bash
     group: shell
-    use: lead_agent.sandbox.tools:bash_tool
+    use: caspian.sandbox.tools:bash_tool
   - name: powershell
     group: shell
-    use: lead_agent.sandbox.tools:powershell_tool
+    use: caspian.sandbox.tools:powershell_tool
   - name: cmd
     group: shell
-    use: lead_agent.sandbox.tools:cmd_tool
+    use: caspian.sandbox.tools:cmd_tool
   - name: sh
     group: shell
-    use: lead_agent.sandbox.tools:sh_tool
+    use: caspian.sandbox.tools:sh_tool
 
 skills:
   container_path: /mnt/skills
 
 sandbox:
-  use: lead_agent.sandbox.local:LocalSandbox
+  use: caspian.sandbox.local:LocalSandbox
   # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
-  # use: lead_agent.community.aio_sandbox:AioSandbox
+  # use: caspian.community.aio_sandbox:AioSandbox
   # image: ghcr.io/agent-infra/sandbox:latest
   # port: 8080
   # replicas: 3

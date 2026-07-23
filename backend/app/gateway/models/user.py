@@ -39,7 +39,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from lead_agent.persistence.base import Base
+from caspian.persistence.base import Base
 
 
 class User(Base):

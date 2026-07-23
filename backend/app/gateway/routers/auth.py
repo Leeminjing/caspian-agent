@@ -54,7 +54,7 @@ from backend.app.gateway.auth.security import (
     generate_csrf_token,
     verify_password,
 )
-from lead_agent.persistence.engine import get_session
+from caspian.persistence.engine import get_session
 from backend.app.gateway.models.user import User
 
 logger = logging.getLogger(__name__)
