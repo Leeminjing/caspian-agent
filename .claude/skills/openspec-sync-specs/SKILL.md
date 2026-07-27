@@ -120,8 +120,6 @@ Unlike programmatic merging, you can apply **partial updates**:
 - To add a scenario, just include that scenario under MODIFIED - don't copy existing scenarios
 - The delta represents *intent*, not a wholesale replacement
 - Use your judgment to merge changes sensibly
-- If the change is a horizontal expansion of an existing requirement, do not append it as a separate requirement. Instead, integrate the new content into the existing spec.
-
 
 **Output On Success**
 
