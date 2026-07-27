@@ -1,7 +1,7 @@
 """
 本文件对外提供 get_app_config、reload_app_config 两个公开函数，以及 AppConfig 配置聚合类。
 
-AppConfig: 声明式配置数据模型，聚合 models / tool_groups / tools / skills / sandbox / stream_bridge / database / checkpointer / extensions 配置
+AppConfig: 声明式配置数据模型，聚合 models / tools / skills / sandbox / commitment / runtime 与持久化配置
 get_app_config: 组合根入口，将 config.yaml 加载为全局单例 AppConfig 对象
 reload_app_config: 强制刷新全局单例，修改 config.yaml 后立即生效
 
@@ -18,6 +18,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from caspian.config.checkpointer_config import CheckpointerConfig
+from caspian.config.commitment_config import CommitmentConfig
 from caspian.config.database_config import DatabaseConfig
 from caspian.config.extensions_config import ExtensionsConfig
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
@@ -42,6 +43,7 @@ class AppConfig(BaseModel):
     checkpointer: CheckpointerConfig = CheckpointerConfig()
     langgraph_store: LanggraphStoreConfig = LanggraphStoreConfig()
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
+    commitment: CommitmentConfig = CommitmentConfig()
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

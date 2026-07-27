@@ -1,7 +1,7 @@
 """
 本文件对外提供 LeadAgentState 类及两个辅助 TypedDict 和两个自定义 reducer。
 
-LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展 4 个业务字段
+LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展业务字段
 SandboxState: 沙箱绑定状态
 ViewedImageData: 已查看图片数据
 
@@ -62,3 +62,4 @@ class LeadAgentState(AgentState):
     title: NotRequired[str | None]
     artifacts: Annotated[list[str], merge_artifacts]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]
+    task_contract: NotRequired[str]

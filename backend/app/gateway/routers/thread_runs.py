@@ -48,7 +48,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from caspian.runtime.runs.manager import RunManager, RunRecord
 from caspian.runtime.stream_bridge.base import StreamBridge
@@ -70,11 +70,21 @@ class RunCreateRequest(BaseModel):
         default=None,
         description="Graph input (e.g. {messages: [...]})",
     )
+    resume: Any | None = Field(
+        default=None,
+        description="LangGraph interrupt resume payload",
+    )
     context: dict[str, Any] | None = Field(default=None)
     stream_mode: list[str] | str | None = Field(
         default=None,
         description="Stream mode(s)",
     )
+
+    @model_validator(mode="after")
+    def validate_input_or_resume(self):
+        if (self.input is None) == (self.resume is None):
+            raise ValueError("input 与 resume 必须且只能提供一个")
+        return self
 
 
 def format_sse(event_type: str, data: Any, event_id: str) -> str:

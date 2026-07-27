@@ -53,6 +53,7 @@ from langchain_core.runnables import RunnableConfig
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
+from langgraph.types import Command, Interrupt
 
 from caspian.agents.lead import make_lead_agent
 from caspian.config.app_config import AppConfig
@@ -145,6 +146,12 @@ def _serialize_chunk(data: Any) -> Any:
     if isinstance(data, BaseMessage):
         return data.model_dump()
 
+    if isinstance(data, Interrupt):
+        return {
+            "id": data.id,
+            "value": _serialize_chunk(data.value),
+        }
+
     if isinstance(data, dict):
         return {key: _serialize_chunk(value) for key, value in data.items()}
 
@@ -157,13 +164,29 @@ def _serialize_chunk(data: Any) -> Any:
     return data
 
 
+def _extract_interrupts(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, Interrupt):
+        return [_serialize_chunk(data)]
+    if isinstance(data, dict):
+        result: list[dict[str, Any]] = []
+        for value in data.values():
+            result.extend(_extract_interrupts(value))
+        return result
+    if isinstance(data, (list, tuple)):
+        result = []
+        for item in data:
+            result.extend(_extract_interrupts(item))
+        return result
+    return []
+
+
 async def run_agent(
     *,
     record: RunRecord,
     bridge: StreamBridge,
     run_manager: RunManager,
     app_config: AppConfig,
-    graph_input: dict,
+    graph_input: dict | Command,
     runnable_config: RunnableConfig,
     stream_modes: list[str] | str | None = None,
     agent_name: str | None = None,
@@ -200,6 +223,12 @@ async def run_agent(
         # (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
         model_name = record.model_name or (app_config.models[0].name if app_config.models else None)
         mapped_stream_modes = _map_stream_modes(stream_modes)
+        if app_config.commitment.enabled:
+            if isinstance(mapped_stream_modes, str):
+                if mapped_stream_modes != "values":
+                    mapped_stream_modes = [mapped_stream_modes, "values"]
+            elif mapped_stream_modes is not None and "values" not in mapped_stream_modes:
+                mapped_stream_modes = [*mapped_stream_modes, "values"]
         user_id = langgraph_context.get("user_id") if langgraph_context else None
 
         agent = await make_lead_agent(
@@ -216,6 +245,7 @@ async def run_agent(
             agent.store = store
 
         # (4) agent.astream 主循环
+        graph_interrupted = False
         async for chunk in agent.astream(
             graph_input,
             config=runnable_config,
@@ -226,6 +256,16 @@ async def run_agent(
             if record.abort_event.is_set():
                 logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
                 break
+
+            interrupts = _extract_interrupts(chunk)
+            if interrupts:
+                graph_interrupted = True
+                for interrupt_data in interrupts:
+                    bridge.publish(
+                        record.run_id,
+                        _build_chunk_event("interrupt", interrupt_data),
+                    )
+                continue
 
             # 每个 chunk 序列化后转换为 SSE 事件 publish 到 bridge
             serialized_chunk = _serialize_chunk(chunk)
@@ -253,6 +293,9 @@ async def run_agent(
             else:
                 run_manager.update(record.run_id, status=RunStatus.interrupted)
                 logger.info("run '%s' 状态 → interrupted", record.run_id)
+        elif graph_interrupted:
+            run_manager.update(record.run_id, status=RunStatus.interrupted)
+            logger.info("run '%s' 状态 → interrupted (graph interrupt)", record.run_id)
         else:
             run_manager.update(record.run_id, status=RunStatus.success)
             logger.info("run '%s' 状态 → success", record.run_id)

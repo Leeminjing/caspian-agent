@@ -35,6 +35,7 @@ from typing import Any
 from fastapi import Request
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
+from langgraph.types import Command
 
 from caspian.config.app_config import get_app_config
 from caspian.runtime.runs.manager import RunManager, RunRecord
@@ -45,6 +46,37 @@ from caspian.runtime.stream_bridge.base import StreamBridge
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RECURSION_LIMIT = 25
+
+
+def _build_graph_input(body: Any) -> dict | Command:
+    if hasattr(body, "resume") and body.resume is not None:
+        return Command(resume=body.resume)
+
+    graph_input: dict = {}
+    if not hasattr(body, "input") or not body.input:
+        return graph_input
+
+    raw_input = body.input
+    if not isinstance(raw_input, dict):
+        return raw_input
+
+    messages = []
+    for message in raw_input.get("messages", []):
+        if isinstance(message, HumanMessage):
+            messages.append(message)
+            continue
+        if not isinstance(message, dict) or message.get("role", "user") != "user":
+            continue
+        additional_kwargs = message.get("additional_kwargs")
+        files = (
+            additional_kwargs.get("files")
+            if isinstance(additional_kwargs, dict)
+            else None
+        )
+        kwargs = {"additional_kwargs": {"files": files}} if files is not None else {}
+        messages.append(HumanMessage(content=message.get("content", ""), **kwargs))
+    graph_input["messages"] = messages
+    return graph_input
 
 
 async def start_run(
@@ -75,38 +107,7 @@ async def start_run(
 
     # (4) 组装参数
 
-    # input → HumanMessage
-    graph_input: dict = {}
-    if hasattr(body, "input") and body.input:
-        raw_input = body.input
-        if isinstance(raw_input, dict):
-            msgs = raw_input.get("messages", [])
-            messages = []
-            for m in msgs:
-                if isinstance(m, HumanMessage):
-                    messages.append(m)
-                elif isinstance(m, dict):
-                    role = m.get("role", "user")
-                    content = m.get("content", "")
-                    if role == "user":
-                        additional_kwargs = m.get("additional_kwargs")
-                        if additional_kwargs is not None and isinstance(additional_kwargs, dict):
-                            # 只保留 files 字段，过滤其他未预期的键
-                            files_val = additional_kwargs.get("files")
-                            if files_val is not None:
-                                additional_kwargs = {"files": files_val}
-                            else:
-                                additional_kwargs = None
-                        else:
-                            additional_kwargs = None
-
-                        kw = {}
-                        if additional_kwargs:
-                            kw["additional_kwargs"] = additional_kwargs
-                        messages.append(HumanMessage(content=content, **kw))
-            graph_input["messages"] = messages
-        else:
-            graph_input = raw_input
+    graph_input = _build_graph_input(body)
 
     # RunnableConfig
     runnable_config: RunnableConfig = {

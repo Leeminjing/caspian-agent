@@ -4,6 +4,7 @@
 对外提供:
     AppConfig — 聚合所有子配置的顶层配置模型
     CheckpointerConfig — checkpointer 配置段的数据模型
+    CommitmentConfig — 承诺层配置模型
     DatabaseConfig — 数据库连接配置的数据模型
     ExtensionsConfig — extensions_config.json 的 Pydantic 模型
     McpServerConfig — 单个 MCP Server 的配置模型
@@ -15,6 +16,7 @@
 
 from caspian.config.app_config import AppConfig, get_app_config, reload_app_config
 from caspian.config.checkpointer_config import CheckpointerConfig
+from caspian.config.commitment_config import CommitmentConfig
 from caspian.config.database_config import DatabaseConfig
 from caspian.config.extensions_config import (
     ExtensionsConfig,
@@ -28,6 +30,7 @@ from caspian.config.stream_bridge_config import StreamBridgeConfig
 __all__ = [
     "AppConfig",
     "CheckpointerConfig",
+    "CommitmentConfig",
     "DatabaseConfig",
     "ExtensionsConfig",
     "LanggraphStoreConfig",

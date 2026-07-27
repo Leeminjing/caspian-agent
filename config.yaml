@@ -50,6 +50,10 @@ sandbox:
   # environment:
   #   MY_KEY: value
 
+commitment:
+  enabled: false
+  context7_url: https://mcp.context7.com/mcp
+
 stream_bridge:
   type: memory
   queue_maxsize: 512

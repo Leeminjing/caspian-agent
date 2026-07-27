@@ -1,9 +1,10 @@
 """
-本文件对外提供 get_mcp_tools 异步函数，连接已启用的 MCP Server 并获取远端工具列表，
-转换为 LangChain BaseTool 列表供 lead_agent 绑定调用。
+本文件对外提供 load_mcp_tools、get_mcp_tools、get_context7_tools 三个异步函数。
 
 对外提供:
-    get_mcp_tools(): 异步函数，返回所有已启用 MCP Server 的工具列表
+    load_mcp_tools: 加载已翻译的 MCP server 配置
+    get_mcp_tools: 返回 extensions_config.json 中启用的常规 MCP 工具
+    get_context7_tools: 返回承诺层独占的 Context7 工具
 
 本文件负责: 加载配置 → 翻译 → 连接 → 获取工具 的完整链路。
 
@@ -36,13 +37,26 @@ from caspian.mcp.client import build_servers_config
 logger = logging.getLogger(__name__)
 
 
-async def get_mcp_tools() -> list[BaseTool]:
+async def load_mcp_tools(servers_config: dict[str, dict]) -> list[BaseTool]:
     try:
         from langchain_mcp_adapters.client import MultiServerMCPClient
     except ImportError:
         logger.warning("langchain-mcp-adapters 未安装，MCP 工具不可用")
         return []
 
+    tools: list[BaseTool] = []
+    for server_name, params in servers_config.items():
+        try:
+            client = MultiServerMCPClient({server_name: params})
+            server_tools = await client.get_tools()
+            tools.extend(server_tools)
+            logger.info("MCP Server '%s' 连接成功，获取 %d 个工具", server_name, len(server_tools))
+        except Exception:
+            logger.warning("MCP Server '%s' 连接失败，已跳过", server_name, exc_info=True)
+    return tools
+
+
+async def get_mcp_tools() -> list[BaseTool]:
     try:
         extensions_config = get_extensions_config("extensions_config.json")
         servers_config = build_servers_config(extensions_config)
@@ -56,17 +70,10 @@ async def get_mcp_tools() -> list[BaseTool]:
     if not servers_config:
         return []
 
-    tools: list[BaseTool] = []
-    for server_name, params in servers_config.items():
-        client = None
-        try:
-            client = MultiServerMCPClient({server_name: params})
-            server_tools = client.get_tools()
-            tools.extend(server_tools)
-            logger.info("MCP Server '%s' 连接成功，获取 %d 个工具", server_name, len(server_tools))
-        except Exception:
-            logger.warning("MCP Server '%s' 连接失败，已跳过", server_name, exc_info=True)
-        finally:
-            del client
+    return await load_mcp_tools(servers_config)
 
-    return tools
+
+async def get_context7_tools(url: str) -> list[BaseTool]:
+    return await load_mcp_tools(
+        {"context7": {"transport": "http", "url": url}}
+    )

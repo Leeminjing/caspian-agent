@@ -28,7 +28,7 @@
     (3) await get_available_tools(tool_groups=tool_groups) 汇集全局工具
         (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
         (3b) 合并: [describe_skill_tool] + global_tools
-    (4) 调用 _build_middlewares() 获取中间件列表
+    (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware
         (4a) 调用 build_general_middlewares() 获取通用中间件链
         (4b) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
     (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt
@@ -48,6 +48,8 @@ from pathlib import Path
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware
+from langchain_core.language_models import BaseChatModel
+from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
 from caspian.agents.lead.prompt import apply_prompt_template
@@ -59,7 +61,11 @@ from caspian.tools import get_available_tools
 logger = logging.getLogger(__name__)
 
 
-def _build_middlewares() -> list[AgentMiddleware]:
+def _build_middlewares(
+    app_config,
+    model: BaseChatModel,
+    context7_tools: list[BaseTool],
+) -> list[AgentMiddleware]:
     """组装 lead_agent 的中间件链：通用链 + lead_agent 专属中间件。
 
     输入: 无
@@ -72,7 +78,11 @@ def _build_middlewares() -> list[AgentMiddleware]:
         (2) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
         (3) 返回完整列表
     """
-    middlewares = build_general_middlewares()
+    middlewares = build_general_middlewares(
+        commitment_enabled=app_config.commitment.enabled,
+        model=model,
+        context7_tools=context7_tools,
+    )
     # ponytail: lead_agent 专属中间件预留扩展点
     return middlewares
 
@@ -200,7 +210,14 @@ async def make_lead_agent(
     )
 
     # (5) middleware
-    middleware = _build_middlewares()
+    context7_tools: list[BaseTool] = []
+    if app_config.commitment.enabled:
+        from caspian.mcp import get_context7_tools
+
+        context7_tools = await get_context7_tools(app_config.commitment.context7_url)
+        if not context7_tools:
+            raise RuntimeError("CommitmentMiddleware 已启用，但 Context7 工具不可用")
+    middleware = _build_middlewares(app_config, model, context7_tools)
 
     # (6) create_agent
     return create_agent(

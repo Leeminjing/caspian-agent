@@ -9,11 +9,13 @@ lead_agent MCP 模块。
 
 from caspian.mcp.cache import get_mcp_tools_cached
 from caspian.mcp.client import build_server_params, build_servers_config
-from caspian.mcp.tools import get_mcp_tools
+from caspian.mcp.tools import get_context7_tools, get_mcp_tools, load_mcp_tools
 
 __all__ = [
     "build_server_params",
     "build_servers_config",
     "get_mcp_tools",
+    "get_context7_tools",
+    "load_mcp_tools",
     "get_mcp_tools_cached",
 ]

@@ -3,6 +3,7 @@
 
 对外提供:
     UploadsMiddleware — agent 启动时的上传文件初始化中间件
+    CommitmentMiddleware — 可拆卸任务承诺中间件
     SandboxAuditMiddleware — shell 命令安全审计中间件
     build_general_middlewares — 组装通用中间件链
 
@@ -12,11 +13,13 @@
 """
 
 from caspian.agents.middlewares.builder import build_general_middlewares
+from caspian.agents.middlewares.commitment_middleware import CommitmentMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
 
 __all__ = [
     "SandboxAuditMiddleware",
+    "CommitmentMiddleware",
     "UploadsMiddleware",
     "build_general_middlewares",
 ]
