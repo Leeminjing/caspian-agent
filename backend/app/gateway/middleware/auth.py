@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 `AuthMiddleware` FastAPI 中间件，作为主鉴权入口。
 
 对外提供:
@@ -32,7 +32,7 @@ from starlette.responses import JSONResponse
 
 from backend.app.gateway.auth.config import AuthConfig
 from backend.app.gateway.auth.security import decode_access_token
-from caspian.persistence.engine import get_session
+from focus.persistence.engine import get_session
 from backend.app.gateway.models.user import User
 from sqlalchemy import select
 

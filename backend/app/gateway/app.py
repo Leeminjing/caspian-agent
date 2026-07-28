@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 FastAPI 应用实例 app，作为 backend 网关的统一入口。
 
 对外提供:
@@ -86,7 +86,7 @@ logger.info("AuthConfig 已加载（web 层独立配置）")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
-    from caspian.config import get_app_config
+    from focus.config import get_app_config
 
     app_config = get_app_config("config.yaml")
     logger.info("AppConfig 已加载，开始初始化 agent 核心资源...")

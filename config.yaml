@@ -1,4 +1,4 @@
-models:
+﻿models:
   - name: deepseek-v4-flash
     display_name: Other OpenAI-compatible / deepseek-v4-flash
     use: langchain_openai:ChatOpenAI
@@ -15,34 +15,34 @@ tool_groups:
 tools:
   - name: read_file
     group: file:read
-    use: caspian.sandbox.tools:read_file_tool
+    use: focus.sandbox.tools:read_file_tool
   - name: write_file
     group: file:write
-    use: caspian.sandbox.tools:write_file_tool
+    use: focus.sandbox.tools:write_file_tool
   - name: bash
     group: shell
-    use: caspian.sandbox.tools:bash_tool
+    use: focus.sandbox.tools:bash_tool
   - name: powershell
     group: shell
-    use: caspian.sandbox.tools:powershell_tool
+    use: focus.sandbox.tools:powershell_tool
   - name: cmd
     group: shell
-    use: caspian.sandbox.tools:cmd_tool
+    use: focus.sandbox.tools:cmd_tool
   - name: sh
     group: shell
-    use: caspian.sandbox.tools:sh_tool
+    use: focus.sandbox.tools:sh_tool
 
 skills:
   container_path: /mnt/skills
 
 sandbox:
-  use: caspian.sandbox.local:LocalSandbox
+  use: focus.sandbox.local:LocalSandbox
   # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
-  # use: caspian.community.aio_sandbox:AioSandbox
+  # use: focus.community.aio_sandbox:AioSandbox
   # image: ghcr.io/agent-infra/sandbox:latest
   # port: 8080
   # replicas: 3
-  # container_prefix: caspian-sandbox
+  # container_prefix: focus-sandbox
   # mounts:
   #   - host_path: /path/to/extra
   #     container_path: /mnt/extra
@@ -66,7 +66,7 @@ langgraph_store:
 
 database:
   backend: postgres
-  url: postgresql+asyncpg://caspian:qweasdzxc123@localhost:7221/caspian
+  url: postgresql+asyncpg://focus:qweasdzxc123@localhost:7221/focus
   echo: false
   pool_size: 5
   max_overflow: 10

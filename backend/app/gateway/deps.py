@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 langgraph_runtime 异步上下文管理器，作为 FastAPI 应用运行时依赖模块。
 
 对外提供:
@@ -28,7 +28,7 @@
 
 示例:
     from backend.app.gateway.deps import langgraph_runtime
-    from caspian.config import get_app_config
+    from focus.config import get_app_config
 
     app_config = get_app_config("config.yaml")
 
@@ -45,9 +45,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from caspian.config.app_config import AppConfig
-from caspian.runtime import RunManager
-from caspian.runtime.stream_bridge.async_provider import create_stream_bridge
+from focus.config.app_config import AppConfig
+from focus.runtime import RunManager
+from focus.runtime.stream_bridge.async_provider import create_stream_bridge
 
 logger = logging.getLogger(__name__)
 
@@ -64,14 +64,14 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
 
         # (3) 数据库引擎初始化（全局单例，不挂载 app.state）
         if app_config.database is not None:
-            from caspian.persistence.engine import dispose_engine, init_engine
+            from focus.persistence.engine import dispose_engine, init_engine
 
             init_engine(app_config)
             stack.callback(dispose_engine)
             logger.info("数据库引擎已初始化 (backend=%s)", app_config.database.backend)
 
         # (3.5) Checkpointer 资源初始化
-        from caspian.runtime.checkpointer import create_checkpointer, dispose_checkpointer
+        from focus.runtime.checkpointer import create_checkpointer, dispose_checkpointer
 
         checkpointer = await create_checkpointer(app_config)
         app.state.checkpointer = checkpointer
@@ -79,7 +79,7 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         logger.info("Checkpointer 已挂载到 app.state.checkpointer (type=%s)", app_config.checkpointer.type)
 
         # (3.6) Store 资源初始化
-        from caspian.runtime.store import create_store, dispose_store
+        from focus.runtime.store import create_store, dispose_store
 
         store = await create_store(app_config)
         app.state.store = store

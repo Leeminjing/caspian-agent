@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路的 SSE 流式接口 `POST /api/threads/{thread_id}/runs/stream`。
 
 对外提供:
@@ -50,9 +50,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from caspian.runtime.runs.manager import RunManager, RunRecord
-from caspian.runtime.stream_bridge.base import StreamBridge
-from caspian.runtime.stream_bridge.schemas import (
+from focus.runtime.runs.manager import RunManager, RunRecord
+from focus.runtime.stream_bridge.base import StreamBridge
+from focus.runtime.stream_bridge.schemas import (
     END_SENTINEL,
     HEARTBEAT_SENTINEL,
     StreamEvent,

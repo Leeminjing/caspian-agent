@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 `User` SQLAlchemy ORM 模型，映射到 `users` 表，用于存储用户认证数据。属于网关层业务模型，不归 agent 的 persistence 模型。
 
 对外提供:
@@ -39,7 +39,7 @@ from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.sql import func
 
-from caspian.persistence.base import Base
+from focus.persistence.base import Base
 
 
 class User(Base):

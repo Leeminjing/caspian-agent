@@ -1,7 +1,7 @@
-[project]
-name = "caspian-harness"
+﻿[project]
+name = "focus-harness"
 version = "0.1.0"
-description = "Caspian agent harness — caspian core runtime"
+description = "Focus agent harness — focus core runtime"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.0",
@@ -32,7 +32,7 @@ requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["caspian*"]
+include = ["focus*"]
 
 [tool.setuptools.package-dir]
 "" = "."

@@ -1,4 +1,4 @@
-"""
+﻿"""
 本文件对外提供 `router`（APIRouter 实例），定义认证相关路由：登录、登出、当前用户。
 
 对外提供:
@@ -54,7 +54,7 @@ from backend.app.gateway.auth.security import (
     generate_csrf_token,
     verify_password,
 )
-from caspian.persistence.engine import get_session
+from focus.persistence.engine import get_session
 from backend.app.gateway.models.user import User
 
 logger = logging.getLogger(__name__)
