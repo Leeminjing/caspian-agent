@@ -10,6 +10,7 @@
     BaseTool — Supervisor 唯一可调用的 delegate_with_review 工具。
     CompiledStateGraph — 严格按 stage 1 到 9 推进的 Supervisor 子图。
     Command — 阶段推进、人工等待、知识合同落盘及消息更新。
+    commitment_trace — Supervisor 调度、人工处理和 artifact 写入的 custom stream 事件。
 
 具体工作流:
     (1) Supervisor 根据最后完成阶段构造下一份 TaskEnvelope。
@@ -17,6 +18,7 @@
     (3) 固定人工节点、条件冲突或失败结果通过 interrupt 等待人工处理。
     (4) 人工修订重新经过 Evaluator，未批准前不推进业务阶段。
     (5) 阶段六和七写入知识与合同，阶段九生成最终合同消息。
+    (6) 在动作边界发布自然语言工作日志和必要输入输出，不发布隐藏思维链。
 
 示例:
     supervisor = _build_supervisor(ReviewedDelegator(model, context7_tools))
@@ -55,6 +57,7 @@ from caspian.agents.commitment.stage_rules import (
     _stage_timeout,
     _validate_stage_result,
 )
+from caspian.agents.commitment.tracing import emit_commitment_trace
 
 def _human_payload(stage: int, state: dict[str, Any], error: str = "") -> dict[str, Any]:
     draft = state.get("artifacts", {}).get(str(stage))
@@ -145,6 +148,14 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
         awaiting = state.get("awaiting_human")
 
         if awaiting:
+            emit_commitment_trace(
+                actor="supervisor",
+                event="awaiting_human",
+                title="Supervisor 等待人工确认",
+                status="waiting",
+                stage=int(awaiting),
+                payload=_human_payload(int(awaiting), state),
+            )
             error = ""
             while True:
                 response = interrupt(_human_payload(awaiting, state, error))
@@ -161,6 +172,13 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                     ):
                         error = "技术版本仍有 unresolved，必须先 revise"
                         continue
+                    emit_commitment_trace(
+                        actor="human",
+                        event="approved",
+                        title="人工已批准阶段结果",
+                        status="approved",
+                        stage=int(awaiting),
+                    )
                     content = _json(
                         {
                             "status": "approved",
@@ -180,6 +198,14 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                         }
                     )
                 if decision == "revise":
+                    emit_commitment_trace(
+                        actor="human",
+                        event="revision_submitted",
+                        title="人工已提交修订",
+                        status="running",
+                        stage=int(awaiting),
+                        payload=response,
+                    )
                     revised, error = await _review_human_revision(
                         response, awaiting, state, delegator
                     )
@@ -189,6 +215,14 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                     knowledge_files = state.get("knowledge_files", [])
                     if awaiting == 6:
                         knowledge_files = _write_knowledge(revised)
+                    emit_commitment_trace(
+                        actor="supervisor",
+                        event="revision_accepted",
+                        title="修订结果已通过审核",
+                        status="completed",
+                        stage=int(awaiting),
+                        payload={"result": revised},
+                    )
                     return Command(
                         update={
                             "artifacts": artifacts,
@@ -212,6 +246,14 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
 
         expected = int(state.get("stage", 0)) + 1
         if stage != expected:
+            emit_commitment_trace(
+                actor="supervisor",
+                event="invalid_stage",
+                title="Supervisor 拒绝非法阶段",
+                status="rejected",
+                stage=stage,
+                payload={"expected": expected, "received": stage},
+            )
             return Command(
                 update={
                     "messages": [
@@ -256,6 +298,15 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                     "feedback": error,
                 }
                 artifacts[str(stage)] = result
+                emit_commitment_trace(
+                    actor="supervisor",
+                    event="needs_human",
+                    title="阶段未通过，转交人工处理",
+                    status="waiting",
+                    stage=stage,
+                    detail=error,
+                    payload=result,
+                )
                 return Command(
                     update={
                         "artifacts": artifacts,
@@ -291,13 +342,43 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
         updates["artifacts"] = artifacts
 
         if stage == 6:
+            emit_commitment_trace(
+                actor="system",
+                event="artifact_started",
+                title="正在写入理论知识文件",
+                status="running",
+                stage=stage,
+            )
             updates["knowledge_files"] = _write_knowledge(result)
             artifact_ref = ",".join(updates["knowledge_files"])
+            emit_commitment_trace(
+                actor="system",
+                event="artifact_completed",
+                title="理论知识文件已写入",
+                status="completed",
+                stage=stage,
+                payload={"artifact_ref": updates["knowledge_files"]},
+            )
         elif stage == 7:
+            emit_commitment_trace(
+                actor="system",
+                event="artifact_started",
+                title="正在写入任务合同",
+                status="running",
+                stage=stage,
+            )
             contract, artifact_ref = _write_contract(
                 str(state.get("thread_id", "")), result
             )
             updates["task_contract"] = contract
+            emit_commitment_trace(
+                actor="system",
+                event="artifact_completed",
+                title="任务合同已写入",
+                status="completed",
+                stage=stage,
+                payload={"artifact_ref": artifact_ref},
+            )
         elif stage == 8:
             updates["task_contract"] = state.get("task_contract", "")
         elif stage == 9:
@@ -309,6 +390,19 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
             or (stage == 4 and _stage_four_needs_review(result))
         ):
             updates["awaiting_human"] = stage
+
+        emit_commitment_trace(
+            actor="supervisor",
+            event="stage_completed",
+            title="Supervisor 已接收阶段结果",
+            status="waiting" if updates.get("awaiting_human") else "completed",
+            stage=stage,
+            payload={
+                "result": result,
+                "artifact_ref": artifact_ref,
+                "next_stage": stage + 1 if stage < 9 else None,
+            },
+        )
 
         updates["messages"] = [
             ToolMessage(
@@ -331,6 +425,15 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
 def _prepare_supervisor_call(state: CommitmentState) -> dict[str, Any]:
     stage = int(state.get("awaiting_human") or state.get("stage", 0) + 1)
     envelope = _stage_envelope(stage, dict(state))
+    emit_commitment_trace(
+        actor="supervisor",
+        event="stage_dispatched",
+        title="Supervisor 已委派阶段任务",
+        status="running",
+        stage=stage,
+        detail=envelope.instruction,
+        payload={"task_envelope": envelope.model_dump()},
+    )
     return {
         "messages": [
             AIMessage(

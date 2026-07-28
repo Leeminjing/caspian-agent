@@ -603,6 +603,125 @@ textarea:focus-visible {
   50% { transform: translateY(-3px); opacity: 0.45; }
 }
 
+.trace-panel {
+  margin: 8px 0 24px 38px;
+  border: 1px solid #cbd6d5;
+  border-radius: 8px;
+  background: #fbfcfc;
+}
+
+.trace-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 15px;
+  cursor: pointer;
+  color: #27312f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.trace-count {
+  color: #6d7775;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.trace-list {
+  margin: 0;
+  padding: 0 15px 14px 35px;
+  border-top: 1px solid #e0e6e5;
+  list-style: decimal;
+}
+
+.trace-item {
+  padding: 12px 0 4px 5px;
+  border-bottom: 1px solid #e7ebea;
+  color: #303735;
+}
+
+.trace-item:last-child {
+  border-bottom: 0;
+}
+
+.trace-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 4px;
+  color: #78817f;
+  font-size: 10px;
+}
+
+.trace-actor {
+  border: 1px solid #b7c7c4;
+  border-radius: 10px;
+  padding: 1px 6px;
+  color: #176d65;
+  background: white;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+
+.trace-item > strong {
+  display: block;
+  font-size: 12px;
+}
+
+.trace-item > p {
+  margin: 5px 0 0;
+  color: #5e6765;
+  font-size: 11px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.trace-item > .trace-reasoning {
+  margin-top: 8px;
+  border-left: 2px solid #6fa59e;
+  padding: 7px 9px;
+  color: #34413e;
+  background: #f1f6f5;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.trace-rejected .trace-actor,
+.trace-failed .trace-actor {
+  border-color: #e0b2b2;
+  color: var(--danger);
+}
+
+.trace-waiting .trace-actor {
+  border-color: #dfbb7d;
+  color: #8a570e;
+}
+
+.trace-payload {
+  margin-top: 6px;
+}
+
+.trace-payload > summary {
+  cursor: pointer;
+  color: #52605d;
+  font-size: 11px;
+}
+
+.trace-payload pre {
+  max-height: 280px;
+  margin: 7px 0 0;
+  overflow: auto;
+  padding: 10px;
+  border-left: 2px solid #9db8b4;
+  color: #303735;
+  background: #f3f6f5;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 11px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .review-panel {
   margin: 8px 0 24px 38px;
   border: 1px solid #e3c894;
@@ -863,6 +982,10 @@ textarea:focus-visible {
   }
 
   .review-panel {
+    margin-left: 0;
+  }
+
+  .trace-panel {
     margin-left: 0;
   }
 

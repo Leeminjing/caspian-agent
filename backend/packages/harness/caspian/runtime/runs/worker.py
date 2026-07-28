@@ -269,6 +269,21 @@ async def run_agent(
 
             # 每个 chunk 序列化后转换为 SSE 事件 publish 到 bridge
             serialized_chunk = _serialize_chunk(chunk)
+            if (
+                isinstance(serialized_chunk, (list, tuple))
+                and len(serialized_chunk) == 2
+                and serialized_chunk[0] == "custom"
+                and isinstance(serialized_chunk[1], dict)
+                and serialized_chunk[1].get("type") == "commitment_trace"
+            ):
+                bridge.publish(
+                    record.run_id,
+                    _build_chunk_event(
+                        "commitment_trace",
+                        serialized_chunk[1],
+                    ),
+                )
+                continue
             chunk_event = _build_chunk_event("events", serialized_chunk)
             bridge.publish(record.run_id, chunk_event)
 

@@ -2,7 +2,7 @@
 本文件对外提供承诺层的 Pydantic 数据模型和 CommitmentState 图状态。
 
 输入:
-    各阶段产生的目标、要求、兼容性、文件、网址、技术版本及审核结果数据。
+    各阶段产生的目标、要求、兼容性、文件、网址、技术版本、理由摘要及审核结果数据。
 
 输出:
     TaskEnvelope — Supervisor 传给 delegate_with_review 的固定输入。
@@ -33,10 +33,12 @@ class TaskEnvelope(BaseModel):
 class WorkerOutput(BaseModel):
     result: dict[str, Any]
     artifact_ref: str | None = None
+    reasoning_summary: str = ""
 
 class ReviewOutput(BaseModel):
     approved: bool
     feedback: str = ""
+    reasoning_summary: str = ""
 
 class CompatibilityCheck(BaseModel):
     technology: str

@@ -35,6 +35,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from caspian.agents.commitment.delegation import ReviewedDelegator
 from caspian.agents.commitment.schemas import CommitmentState
+from caspian.agents.commitment.tracing import _write_commitment_trace
 from caspian.agents.commitment.workflow import _build_supervisor
 
 class CommitmentMiddleware(AgentMiddleware):
@@ -59,7 +60,8 @@ class CommitmentMiddleware(AgentMiddleware):
         if thread_id is None:
             raise ValueError("CommitmentMiddleware 无法获取 thread_id")
         source_text = "\n\n".join(str(message.content) for message in messages)
-        result = await self._supervisor.ainvoke(
+        result: dict[str, Any] = {}
+        async for mode, chunk in self._supervisor.astream(
             {
                 "messages": [
                     HumanMessage(
@@ -72,8 +74,13 @@ class CommitmentMiddleware(AgentMiddleware):
                 "source_text": source_text,
                 "thread_id": str(thread_id),
                 "knowledge_files": [],
-            }
-        )
+            },
+            stream_mode=["values", "custom"],
+        ):
+            if mode == "custom":
+                _write_commitment_trace(chunk)
+            elif mode == "values":
+                result = chunk
         if interrupts := result.get("__interrupt__"):
             raise GraphInterrupt(interrupts)
         if result.get("stage") != 9:

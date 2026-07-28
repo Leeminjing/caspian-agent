@@ -15,7 +15,7 @@
     (2) 对特殊阶段执行确定性 Context7 查询、版本处理或结果规范化。
     (3) 使用独立 Evaluator 按 TaskEnvelope 验收条件审核结果。
     (4) 不合格时只携带反馈创建新的 Worker，最多执行三次。
-    (5) 仅向调用方返回通过结果或最后反馈，不暴露中间失败过程。
+    (5) 工具返回只包含通过结果或最后反馈，同时向 custom stream 发布可审计工作日志。
 
 示例:
     delegator = ReviewedDelegator(model, context7_tools)
@@ -28,7 +28,7 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage
 from langchain_core.language_models import BaseChatModel
-from langchain_core.tools import BaseTool
+from langchain_core.tools import BaseTool, StructuredTool
 from pydantic import BaseModel
 
 from caspian.agents.commitment.references import find_reference_urls
@@ -54,6 +54,7 @@ from caspian.agents.commitment.stage_rules import (
     _stage_three_requirements,
     _validate_stage_result,
 )
+from caspian.agents.commitment.tracing import emit_commitment_trace
 
 class ReviewedDelegator:
     def __init__(
@@ -72,6 +73,14 @@ class ReviewedDelegator:
         prompt: dict[str, Any],
         schema: type[BaseModel],
     ) -> BaseModel:
+        emit_commitment_trace(
+            actor="worker",
+            event="model_started",
+            title=f"正在运行 {name}",
+            status="running",
+            stage=int(prompt.get("stage", 0) or 0),
+            payload={"input": prompt},
+        )
         agent = create_agent(
             model=self._model,
             tools=[],
@@ -81,7 +90,16 @@ class ReviewedDelegator:
         result = await agent.ainvoke(
             {"messages": [HumanMessage(content=_json(prompt))]}
         )
-        return _extract_structured(result, schema)
+        output = _extract_structured(result, schema)
+        emit_commitment_trace(
+            actor="worker",
+            event="model_completed",
+            title=f"{name} 已返回",
+            status="completed",
+            stage=int(prompt.get("stage", 0) or 0),
+            payload={"output": output.model_dump()},
+        )
+        return output
 
     def _context7_tool(self, name: str) -> BaseTool:
         for tool_item in self._context7_tools:
@@ -103,6 +121,7 @@ class ReviewedDelegator:
                 f"JSON Schema: {_json(TechnologySelection.model_json_schema())}"
             ),
             prompt={
+                "stage": envelope.stage,
                 "requirements": envelope.context.get("approved_stages", {})
                 .get("3", {})
                 .get("requirements", []),
@@ -120,6 +139,15 @@ class ReviewedDelegator:
         resolver = self._context7_tool("resolve-library-id")
 
         async def resolve(name: str) -> dict[str, Any]:
+            emit_commitment_trace(
+                actor="tool",
+                event="tool_started",
+                title="调用 Context7 resolve-library-id",
+                status="running",
+                stage=envelope.stage,
+                detail=f"正在解析 {name} 的 Context7 库标识。",
+                payload={"libraryName": name},
+            )
             try:
                 result = await resolver.ainvoke(
                     {
@@ -129,8 +157,28 @@ class ReviewedDelegator:
                         ),
                     }
                 )
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_completed",
+                    title="Context7 resolve-library-id 已返回",
+                    status="completed",
+                    stage=envelope.stage,
+                    detail=f"{name} 的库标识解析完成。",
+                    payload={
+                        "name": name,
+                        "library_id": _context7_library_id(result),
+                    },
+                )
                 return {"name": name, "result": result}
             except Exception as exc:
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_failed",
+                    title="Context7 resolve-library-id 调用失败",
+                    status="failed",
+                    stage=envelope.stage,
+                    detail=f"{name}: {exc}",
+                )
                 return {"name": name, "error": str(exc)}
 
         resolution_evidence = await asyncio.gather(
@@ -143,6 +191,15 @@ class ReviewedDelegator:
             library_id = _context7_library_id(item.get("result"))
             if not library_id:
                 return {"name": name, "error": "library_id unresolved"}
+            emit_commitment_trace(
+                actor="tool",
+                event="tool_started",
+                title="调用 Context7 query-docs",
+                status="running",
+                stage=envelope.stage,
+                detail=f"正在核实 {name} 的最新稳定版本。",
+                payload={"libraryId": library_id},
+            )
             try:
                 result = await query_docs.ainvoke(
                     {
@@ -162,6 +219,19 @@ class ReviewedDelegator:
                 version_hint = official_version or candidate_version
                 evidence_source = (
                     result if official_version else item.get("result")
+                )
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_completed",
+                    title="Context7 query-docs 已返回",
+                    status="completed",
+                    stage=envelope.stage,
+                    detail=f"{name} 的版本证据已完成处理。",
+                    payload={
+                        "name": name,
+                        "library_id": library_id,
+                        "version": version_hint or _LATEST_STABLE_VERSION,
+                    },
                 )
                 return {
                     "name": name,
@@ -190,6 +260,18 @@ class ReviewedDelegator:
                 candidate_version = _context7_candidate_version(
                     item.get("result"),
                     library_id,
+                )
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_failed",
+                    title="Context7 query-docs 调用失败",
+                    status="failed",
+                    stage=envelope.stage,
+                    detail=f"{name}: {exc}",
+                    payload={
+                        "fallback_version": candidate_version
+                        or _LATEST_STABLE_VERSION
+                    },
                 )
                 return {
                     "name": name,
@@ -246,7 +328,13 @@ class ReviewedDelegator:
                     }
                     for name in names
                 ]
-            }
+            },
+            reasoning_summary=(
+                "我先从第三步已确认要求中提取需要独立版本的技术，再解析各自的 "
+                "Context7 library_id，并优先采用官方文档明确版本，其次采用过滤预发布"
+                "版本后的 Context7 版本列表。没有可核实精确版本的技术按已确认策略使用 "
+                "latest-stable；本阶段没有数值计算。"
+            ),
         )
 
     async def _stage_six_worker(
@@ -266,6 +354,15 @@ class ReviewedDelegator:
             library_id = str(item.get("library_id", ""))
             if not library_id or library_id == "unresolved":
                 return {"name": name, "error": "library_id unresolved"}
+            emit_commitment_trace(
+                actor="tool",
+                event="tool_started",
+                title="调用 Context7 query-docs",
+                status="running",
+                stage=envelope.stage,
+                detail=f"正在读取 {name} {item.get('version', '')} 的官方实现知识。",
+                payload={"libraryId": library_id},
+            )
             try:
                 result = await query_docs.ainvoke(
                     {
@@ -276,8 +373,24 @@ class ReviewedDelegator:
                         ),
                     }
                 )
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_completed",
+                    title="Context7 官方知识已返回",
+                    status="completed",
+                    stage=envelope.stage,
+                    detail=f"{name} 的官方知识已交给 Worker 组装。",
+                )
                 return {"name": name, "version": item.get("version"), "result": result}
             except Exception as exc:
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_failed",
+                    title="Context7 官方知识查询失败",
+                    status="failed",
+                    stage=envelope.stage,
+                    detail=f"{name}: {exc}",
+                )
                 return {"name": name, "error": str(exc)}
 
         evidence = await asyncio.gather(
@@ -288,10 +401,12 @@ class ReviewedDelegator:
             system_prompt=(
                 "仅根据给定 Context7 官方文档证据组装第六步 knowledge。"
                 "每项包含technology、version、source_url、content；没有官方来源或正文时"
-                "不得猜测。最终返回 WorkerOutput JSON。"
+                "不得猜测。最终返回 WorkerOutput JSON，并用reasoning_summary自然说明"
+                "结论依据、关键步骤、必要计算、方案比较以及不确定点与假设。"
                 f"WorkerOutput Schema: {_json(WorkerOutput.model_json_schema())}"
             ),
             prompt={
+                "stage": envelope.stage,
                 "confirmed_technologies": technologies,
                 "context7_evidence": evidence,
                 "reviewer_feedback": feedback,
@@ -304,7 +419,38 @@ class ReviewedDelegator:
             return await self._stage_five_worker(envelope, feedback)
         if envelope.stage == 6:
             return await self._stage_six_worker(envelope, feedback)
-        tools = [find_reference_urls] if envelope.stage == 4 else []
+        async def traced_find_reference_urls(query: str) -> list[dict[str, str]]:
+            emit_commitment_trace(
+                actor="tool",
+                event="tool_started",
+                title="搜索用户提到的网址",
+                status="running",
+                stage=envelope.stage,
+                detail=f"正在搜索：{query}",
+            )
+            result = await find_reference_urls.ainvoke({"query": query})
+            emit_commitment_trace(
+                actor="tool",
+                event="tool_completed",
+                title="网址候选搜索已返回",
+                status="completed",
+                stage=envelope.stage,
+                detail=f"找到 {len(result)} 个候选结果。",
+                payload={"query": query, "results": result},
+            )
+            return result
+
+        tools = (
+            [
+                StructuredTool.from_function(
+                    coroutine=traced_find_reference_urls,
+                    name="find_reference_urls",
+                    description="Search for candidate URLs explicitly mentioned by the user.",
+                )
+            ]
+            if envelope.stage == 4
+            else []
+        )
         if envelope.stage == 2:
             stage_guidance = (
                 "第二步必须严格按以下 JSON Schema 生成 result："
@@ -346,6 +492,8 @@ class ReviewedDelegator:
             system_prompt=(
                 "你是承诺层 Worker。只处理当前阶段，使用工具核实版本和官方资料；"
                 "不得依赖未核实的世界知识。最终只返回一个 JSON 对象，不要 Markdown。"
+                "reasoning_summary用一段自然语言简洁说明结论依据、关键步骤、必要计算、"
+                "方案比较以及不确定点与假设；不要输出隐藏思维链。"
                 "兼容性判断必须区分应用类型、UI载体、运行平台与宿主模型；"
                 "同属一种编程语言或运行时不代表可以组合。官方资料不足时标记unresolved。"
                 f"{stage_guidance}"
@@ -386,6 +534,8 @@ class ReviewedDelegator:
             tools=[],
             system_prompt=(
                 "你是独立 Evaluator。严格按验收条件判断 Worker 结果。"
+                "reasoning_summary用一段自然语言说明审核依据、关键检查、必要计算、"
+                "替代判断以及不确定点与假设；不要输出隐藏思维链。"
                 "存在遗漏、臆测版本、非官方来源或结构错误时必须拒绝并给出可执行反馈。"
                 "特别检查框架与组件的应用类型、UI载体、运行平台和宿主模型；"
                 "Web、桌面、移动、CMS模块与独立应用不可仅因同属一种语言或运行时而判为兼容。"
@@ -428,16 +578,77 @@ class ReviewedDelegator:
 
     async def run(self, envelope: TaskEnvelope) -> tuple[WorkerOutput | None, str]:
         feedback = ""
-        for _ in range(_MAX_REVIEW_ATTEMPTS):
+        for attempt in range(1, _MAX_REVIEW_ATTEMPTS + 1):
+            emit_commitment_trace(
+                actor="worker",
+                event="started",
+                title="Worker 开始执行",
+                status="running",
+                stage=envelope.stage,
+                attempt=attempt,
+                detail=envelope.instruction,
+                payload={
+                    "task_envelope": envelope.model_dump(),
+                    "reviewer_feedback": feedback,
+                },
+            )
             worker_output = await self._worker(envelope, feedback)
+            emit_commitment_trace(
+                actor="worker",
+                event="completed",
+                title="Worker 已生成候选结果",
+                status="completed",
+                stage=envelope.stage,
+                attempt=attempt,
+                payload=worker_output.model_dump(),
+            )
             structure_error = _validate_stage_result(
                 envelope.stage, worker_output.result, envelope.context
             )
             if structure_error:
                 feedback = structure_error
+                emit_commitment_trace(
+                    actor="system",
+                    event="structure_rejected",
+                    title="结构校验退回候选结果",
+                    status="rejected",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    detail=structure_error,
+                )
                 continue
+            emit_commitment_trace(
+                actor="evaluator",
+                event="started",
+                title="Evaluator 开始审核",
+                status="running",
+                stage=envelope.stage,
+                attempt=attempt,
+                payload={
+                    "acceptance_criteria": envelope.acceptance_criteria,
+                    "worker_output": worker_output.model_dump(),
+                },
+            )
             review = await self._evaluator(envelope, worker_output)
+            emit_commitment_trace(
+                actor="evaluator",
+                event="completed",
+                title="Evaluator 已完成审核",
+                status="approved" if review.approved else "rejected",
+                stage=envelope.stage,
+                attempt=attempt,
+                detail=review.feedback,
+                payload=review.model_dump(),
+            )
             if review.approved:
                 return worker_output, ""
             feedback = review.feedback or "Evaluator 未提供具体反馈"
+        emit_commitment_trace(
+            actor="supervisor",
+            event="review_failed",
+            title="审核轮次已用尽",
+            status="failed",
+            stage=envelope.stage,
+            detail=feedback,
+        )
         return None, feedback

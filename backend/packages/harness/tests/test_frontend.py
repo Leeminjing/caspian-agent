@@ -33,6 +33,7 @@ class FrontendTests(unittest.TestCase):
                 "composer",
                 "commitment-progress",
                 "review-template",
+                "trace-template",
             }.issubset(parser.ids)
         )
 
@@ -43,6 +44,10 @@ class FrontendTests(unittest.TestCase):
         self.assertIn("resume: payload", script)
         self.assertIn('allowed.includes("approve")', script)
         self.assertIn("/uploads", script)
+        self.assertIn('stream_mode: ["values", "custom"]', script)
+        self.assertIn('event === "commitment_trace"', script)
+        self.assertIn("collectCommitmentTraces", script)
+        self.assertIn("reasoning_summary", script)
 
     def test_frontend_assets_are_public(self):
         self.assertIn("/", _AUTH_WHITELIST_PATHS)

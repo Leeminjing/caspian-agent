@@ -269,8 +269,8 @@ def _normalize_stage_three_result(
             return 2
         return 3
 
-    return WorkerOutput(
-        result={
+    return output.model_copy(
+        update={"result": {
             "requirements": [
                 {
                     "requirement": requirement,
@@ -278,7 +278,7 @@ def _normalize_stage_three_result(
                 }
                 for index, requirement in enumerate(requirements)
             ]
-        }
+        }}
     )
 
 def _stage_three_requirements(context: dict[str, Any] | None) -> list[str]:

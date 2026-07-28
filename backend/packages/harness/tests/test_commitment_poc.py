@@ -55,6 +55,7 @@ from caspian.agents.commitment import (
     _write_knowledge,
     build_delegate_with_review_tool,
 )
+from caspian.agents.commitment.tracing import emit_commitment_trace
 from caspian.config.commitment_config import CommitmentConfig
 from caspian.mcp.tools import get_context7_tools
 from caspian.runtime.runs.schemas import RunStatus
@@ -83,8 +84,16 @@ class FakeSupervisor:
     def __init__(self, result):
         self.result = result
 
-    async def ainvoke(self, _input):
-        return self.result
+    async def astream(self, _input, stream_mode):
+        yield "custom", {
+            "type": "commitment_trace",
+            "actor": "worker",
+            "event": "completed",
+            "title": "Worker 已完成",
+            "status": "completed",
+            "stage": 1,
+        }
+        yield "values", self.result
 
 
 class ScriptedToolModel(BaseChatModel):
@@ -179,6 +188,17 @@ class FakeAgent:
 
     async def astream(self, *_args, **_kwargs):
         yield (
+            "custom",
+            {
+                "type": "commitment_trace",
+                "actor": "worker",
+                "event": "started",
+                "title": "Worker 开始执行",
+                "status": "running",
+                "stage": 1,
+            },
+        )
+        yield (
             "values",
             {
                 "__interrupt__": (
@@ -212,6 +232,37 @@ class FakeRunManager:
 
 
 class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
+    def test_commitment_trace_uses_custom_stream_writer(self):
+        events = []
+        with patch(
+            "caspian.agents.commitment.tracing.get_stream_writer",
+            return_value=events.append,
+        ):
+            emit_commitment_trace(
+                actor="worker",
+                event="completed",
+                title="Worker 已完成",
+                status="completed",
+                stage=2,
+                attempt=1,
+                payload={"result": "ok"},
+            )
+        self.assertEqual(
+            events,
+            [
+                {
+                    "type": "commitment_trace",
+                    "actor": "worker",
+                    "event": "completed",
+                    "title": "Worker 已完成",
+                    "status": "completed",
+                    "stage": 2,
+                    "attempt": 1,
+                    "payload": {"result": "ok"},
+                }
+            ],
+        )
+
     async def test_context7_api_key_is_sent_as_mcp_header(self):
         with (
             patch.dict("os.environ", {"CONTEXT7_API_KEY": "ctx7sk-test"}),
@@ -274,7 +325,8 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         {"text": "rewritten B", "priority": "medium"},
                     ],
                     "notes": "extra",
-                }
+                },
+                reasoning_summary="按第二步保留要求逐项定级。",
             ),
             ["必须完成 A", "可以协商 B"],
         )
@@ -286,6 +338,10 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     {"requirement": "可以协商 B", "priority": 2},
                 ]
             },
+        )
+        self.assertEqual(
+            normalized.reasoning_summary,
+            "按第二步保留要求逐项定级。",
         )
 
     async def test_stage_five_calls_context7_once_per_selected_technology(self):
@@ -999,15 +1055,21 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         runtime = SimpleNamespace(
             execution_info=SimpleNamespace(thread_id="thread-1")
         )
-        update = await middleware._run(
-            {"messages": [HumanMessage(content="raw goal")]},
-            runtime,
-        )
+        traces = []
+        with patch(
+            "caspian.agents.commitment.middleware._write_commitment_trace",
+            side_effect=traces.append,
+        ):
+            update = await middleware._run(
+                {"messages": [HumanMessage(content="raw goal")]},
+                runtime,
+            )
         self.assertEqual(update["task_contract"], "# Contract")
         self.assertEqual(len(update["messages"]), 2)
         self.assertIsInstance(update["messages"][0], RemoveMessage)
         self.assertIsInstance(update["messages"][1], HumanMessage)
         self.assertNotIn("Worker", update["messages"][1].content)
+        self.assertEqual(traces[0]["event"], "completed")
 
     async def test_nested_interrupt_reaches_parent_and_resumes(self):
         async def pause_for_review(_state):
@@ -1096,6 +1158,8 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.updates[-1][1]["status"], RunStatus.interrupted)
         self.assertEqual(bridge.events[-1][1].event, "interrupt")
         self.assertEqual(bridge.events[-1][1].data["id"], "interrupt-1")
+        self.assertEqual(bridge.events[-2][1].event, "commitment_trace")
+        self.assertEqual(bridge.events[-2][1].data["actor"], "worker")
         self.assertTrue(bridge.ended)
 
 

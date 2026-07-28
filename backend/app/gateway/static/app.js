@@ -13,6 +13,15 @@ const STAGES = {
   9: "移交 Lead Agent",
 };
 
+const TRACE_ACTORS = {
+  supervisor: "Supervisor",
+  worker: "Worker",
+  evaluator: "Evaluator",
+  tool: "工具",
+  human: "人工",
+  system: "系统",
+};
+
 const state = {
   user: null,
   threads: JSON.parse(localStorage.getItem("caspian.threads") || "[]"),
@@ -21,6 +30,7 @@ const state = {
   pendingInterrupt: null,
   uploads: [],
   renderedMessageIds: new Set(),
+  tracePanel: null,
 };
 
 function csrfToken() {
@@ -77,6 +87,7 @@ function selectThread(id) {
   state.pendingInterrupt = null;
   state.uploads = [];
   state.renderedMessageIds.clear();
+  state.tracePanel = null;
   $("#messages").replaceChildren(emptyState());
   renderAttachments();
   renderThreads();
@@ -205,12 +216,73 @@ function collectMessages(value, found = []) {
 }
 
 function consumeGraphEvent(data) {
+  const traces = collectCommitmentTraces(data);
+  if (traces.length) {
+    traces.forEach(appendCommitmentTrace);
+    return;
+  }
   collectMessages(data).forEach((message) => {
     const type = message.type || message.role;
     if (type !== "ai" && type !== "assistant") return;
     const text = contentText(message.content);
     if (text) addMessage("agent", text, message.id);
   });
+}
+
+function collectCommitmentTraces(value, found = []) {
+  if (!value || typeof value !== "object") return found;
+  if (value.type === "commitment_trace") {
+    found.push(value);
+    return found;
+  }
+  Object.values(value).forEach((item) => collectCommitmentTraces(item, found));
+  return found;
+}
+
+function appendCommitmentTrace(trace) {
+  removeEmptyState();
+  if (!state.tracePanel?.isConnected) {
+    const fragment = $("#trace-template").content.cloneNode(true);
+    state.tracePanel = $(".trace-panel", fragment);
+    const thinking = $("#thinking");
+    thinking ? thinking.before(state.tracePanel) : $("#messages").append(state.tracePanel);
+  }
+  const item = document.createElement("li");
+  item.className = `trace-item trace-${trace.actor} trace-${trace.status}`;
+  const meta = document.createElement("div");
+  meta.className = "trace-meta";
+  const actor = document.createElement("span");
+  actor.className = "trace-actor";
+  actor.textContent = TRACE_ACTORS[trace.actor] || trace.actor;
+  const position = document.createElement("span");
+  position.textContent = `第 ${trace.stage} 步${trace.attempt ? ` · 第 ${trace.attempt} 轮` : ""}`;
+  meta.append(actor, position);
+  const title = document.createElement("strong");
+  title.textContent = trace.title;
+  item.append(meta, title);
+  if (trace.detail) {
+    const detail = document.createElement("p");
+    detail.textContent = trace.detail;
+    item.append(detail);
+  }
+  if (trace.payload?.reasoning_summary) {
+    const reasoning = document.createElement("p");
+    reasoning.className = "trace-reasoning";
+    reasoning.textContent = trace.payload.reasoning_summary;
+    item.append(reasoning);
+  }
+  if (trace.payload !== undefined) {
+    const payload = document.createElement("details");
+    payload.className = "trace-payload";
+    payload.innerHTML = "<summary>查看输入与输出</summary><pre></pre>";
+    $("pre", payload).textContent = prettyDraft(trace.payload);
+    item.append(payload);
+  }
+  $(".trace-list", state.tracePanel).append(item);
+  $(".trace-count", state.tracePanel).textContent =
+    `${$$(".trace-item", state.tracePanel).length} 项`;
+  setProgress(Number(trace.stage || 0), true);
+  scrollMessages();
 }
 
 function prettyDraft(value) {
@@ -306,6 +378,7 @@ function disableReview(panel) {
 
 async function streamRun(body) {
   ensureThread();
+  state.tracePanel = null;
   setBusy(true);
   showThinking();
   const response = await fetch(`/api/threads/${encodeURIComponent(state.threadId)}/runs/stream`, {
@@ -315,7 +388,7 @@ async function streamRun(body) {
       "Content-Type": "application/json",
       "X-CSRF-Token": csrfToken(),
     },
-    body: JSON.stringify({ ...body, stream_mode: ["values"] }),
+    body: JSON.stringify({ ...body, stream_mode: ["values", "custom"] }),
   });
 
   if (response.status === 401) {
@@ -355,6 +428,7 @@ function handleSseFrame(frame) {
     // Keep plain-text SSE payloads readable.
   }
   if (event === "events") consumeGraphEvent(data);
+  if (event === "commitment_trace") appendCommitmentTrace(data);
   if (event === "interrupt") showReview(data);
   if (event === "error") {
     throw new Error(data?.error || "运行失败");
