@@ -15,7 +15,8 @@
     (2) 对特殊阶段执行确定性 Context7 查询、版本处理或结果规范化。
     (3) 使用独立 Evaluator 按 TaskEnvelope 验收条件审核结果。
     (4) 不合格时只携带反馈创建新的 Worker，最多执行三次。
-    (5) 工具返回只包含通过结果或最后反馈，同时向 custom stream 发布可审计工作日志。
+    (5) 流式发布公开模型输出、工具活动和理由摘要，不读取私密 reasoning 字段。
+    (6) 工具返回只包含通过结果或最后反馈，同时向 custom stream 发布可审计工作日志。
 
 示例:
     delegator = ReviewedDelegator(model, context7_tools)
@@ -56,6 +57,11 @@ from caspian.agents.commitment.stage_rules import (
 )
 from caspian.agents.commitment.tracing import emit_commitment_trace
 
+TRACE_ACTOR_TITLES = {
+    "worker": "Worker",
+    "evaluator": "Evaluator",
+}
+
 class ReviewedDelegator:
     def __init__(
         self,
@@ -64,6 +70,48 @@ class ReviewedDelegator:
     ) -> None:
         self._model = model
         self._context7_tools = context7_tools
+
+    async def _stream_agent(
+        self,
+        agent: Any,
+        messages: list[HumanMessage],
+        *,
+        actor: str,
+        stage: int,
+        stream_id: str,
+    ) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        async for mode, chunk in agent.astream(
+            {"messages": messages},
+            stream_mode=["messages", "values"],
+        ):
+            if mode == "values":
+                result = chunk
+                continue
+            if mode != "messages":
+                continue
+            message_chunk, _metadata = chunk
+            content = getattr(message_chunk, "content", "")
+            if isinstance(content, list):
+                content = "".join(
+                    item
+                    if isinstance(item, str)
+                    else str(item.get("text", ""))
+                    if isinstance(item, dict)
+                    else ""
+                    for item in content
+                )
+            if not isinstance(content, str) or not content:
+                continue
+            emit_commitment_trace(
+                actor=actor,
+                event="output_delta",
+                title=f"{TRACE_ACTOR_TITLES[actor]} 正在生成公开输出",
+                status="running",
+                stage=stage,
+                payload={"stream_id": stream_id, "delta": content},
+            )
+        return result
 
     async def _invoke_schema(
         self,
@@ -87,8 +135,12 @@ class ReviewedDelegator:
             system_prompt=system_prompt,
             name=name,
         )
-        result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=_json(prompt))]}
+        result = await self._stream_agent(
+            agent,
+            [HumanMessage(content=_json(prompt))],
+            actor="worker",
+            stage=int(prompt.get("stage", 0) or 0),
+            stream_id=name,
         )
         output = _extract_structured(result, schema)
         emit_commitment_trace(
@@ -508,8 +560,12 @@ class ReviewedDelegator:
             "acceptance_criteria": envelope.acceptance_criteria,
             "reviewer_feedback": feedback,
         }
-        result = await agent.ainvoke(
-            {"messages": [HumanMessage(content=_json(prompt))]}
+        result = await self._stream_agent(
+            agent,
+            [HumanMessage(content=_json(prompt))],
+            actor="worker",
+            stage=envelope.stage,
+            stream_id=f"worker-{envelope.stage}",
         )
         output = _extract_structured(result, WorkerOutput)
         if envelope.stage == 4:
@@ -560,25 +616,44 @@ class ReviewedDelegator:
             ),
             name=f"commitment_evaluator_{envelope.stage}",
         )
-        result = await agent.ainvoke(
-            {
-                "messages": [
-                    HumanMessage(
-                        content=_json(
-                            {
-                                "task": envelope.model_dump(),
-                                "worker_output": worker_output.model_dump(),
-                            }
-                        )
+        result = await self._stream_agent(
+            agent,
+            [
+                HumanMessage(
+                    content=_json(
+                        {
+                            "task": envelope.model_dump(),
+                            "worker_output": worker_output.model_dump(),
+                        }
                     )
-                ]
-            }
+                )
+            ],
+            actor="evaluator",
+            stage=envelope.stage,
+            stream_id=f"evaluator-{envelope.stage}",
         )
         return _extract_structured(result, ReviewOutput)
 
     async def run(self, envelope: TaskEnvelope) -> tuple[WorkerOutput | None, str]:
         feedback = ""
         for attempt in range(1, _MAX_REVIEW_ATTEMPTS + 1):
+            if attempt == 1:
+                approved_stages = envelope.context.get("approved_stages", {})
+                emit_commitment_trace(
+                    actor="supervisor",
+                    event="context_ready",
+                    title="已整理本阶段上下文",
+                    status="completed",
+                    stage=envelope.stage,
+                    detail=(
+                        f"已读取 {len(approved_stages)} 个前置阶段结果，"
+                        f"本阶段包含 {len(envelope.acceptance_criteria)} 条验收条件。"
+                    ),
+                    payload={
+                        "approved_stage_numbers": list(approved_stages),
+                        "acceptance_criteria": envelope.acceptance_criteria,
+                    },
+                )
             emit_commitment_trace(
                 actor="worker",
                 event="started",
@@ -616,6 +691,16 @@ class ReviewedDelegator:
                     attempt=attempt,
                     detail=structure_error,
                 )
+                if attempt < _MAX_REVIEW_ATTEMPTS:
+                    emit_commitment_trace(
+                        actor="supervisor",
+                        event="retry_scheduled",
+                        title="Supervisor 已安排重试",
+                        status="running",
+                        stage=envelope.stage,
+                        attempt=attempt + 1,
+                        detail=f"下一轮 Worker 将根据结构校验反馈修订：{structure_error}",
+                    )
                 continue
             emit_commitment_trace(
                 actor="evaluator",
@@ -624,12 +709,49 @@ class ReviewedDelegator:
                 status="running",
                 stage=envelope.stage,
                 attempt=attempt,
+                detail=(
+                    "；".join(envelope.acceptance_criteria)
+                    or "按当前阶段结构与前置约束执行审核。"
+                ),
                 payload={
                     "acceptance_criteria": envelope.acceptance_criteria,
                     "worker_output": worker_output.model_dump(),
                 },
             )
+            audit_criteria = (
+                envelope.acceptance_criteria
+                or ["检查当前阶段结构、前置约束与候选结果是否一致。"]
+            )
+            for index, criterion in enumerate(audit_criteria, start=1):
+                emit_commitment_trace(
+                    actor="evaluator",
+                    event="criterion_started",
+                    title=f"Evaluator 检查项 {index}/{len(audit_criteria)}",
+                    status="running",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    detail=criterion,
+                )
+            emit_commitment_trace(
+                actor="evaluator",
+                event="synthesizing",
+                title="Evaluator 正在综合审核",
+                status="running",
+                stage=envelope.stage,
+                attempt=attempt,
+                detail="正在对照验收清单、Worker 候选结果和前置阶段约束形成结论。",
+            )
             review = await self._evaluator(envelope, worker_output)
+            if review.reasoning_summary:
+                emit_commitment_trace(
+                    actor="evaluator",
+                    event="rationale_ready",
+                    title="Evaluator 已形成审核依据",
+                    status="running",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    detail=review.reasoning_summary,
+                )
             emit_commitment_trace(
                 actor="evaluator",
                 event="completed",
@@ -643,6 +765,16 @@ class ReviewedDelegator:
             if review.approved:
                 return worker_output, ""
             feedback = review.feedback or "Evaluator 未提供具体反馈"
+            if attempt < _MAX_REVIEW_ATTEMPTS:
+                emit_commitment_trace(
+                    actor="supervisor",
+                    event="retry_scheduled",
+                    title="Supervisor 已安排重试",
+                    status="running",
+                    stage=envelope.stage,
+                    attempt=attempt + 1,
+                    detail=f"下一轮 Worker 将根据 Evaluator 反馈修订：{feedback}",
+                )
         emit_commitment_trace(
             actor="supervisor",
             event="review_failed",

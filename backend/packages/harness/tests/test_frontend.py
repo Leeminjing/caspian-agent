@@ -48,6 +48,11 @@ class FrontendTests(unittest.TestCase):
         self.assertIn('event === "commitment_trace"', script)
         self.assertIn("collectCommitmentTraces", script)
         self.assertIn("reasoning_summary", script)
+        self.assertIn('trace.event === "output_delta"', script)
+        self.assertIn("trace-elapsed", script)
+        self.assertIn("isNearBottom", script)
+        self.assertIn('event === "end" && !state.pendingInterrupt', script)
+        self.assertIn('setStatus("ready", "就绪")', script)
 
     def test_frontend_assets_are_public(self):
         self.assertIn("/", _AUTH_WHITELIST_PATHS)

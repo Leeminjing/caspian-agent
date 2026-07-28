@@ -31,6 +31,10 @@ const state = {
   uploads: [],
   renderedMessageIds: new Set(),
   tracePanel: null,
+  traceStartedAt: 0,
+  traceTimer: null,
+  traceStreams: new Map(),
+  traceScrollScheduled: false,
 };
 
 function csrfToken() {
@@ -83,11 +87,14 @@ function renderThreads() {
 
 function selectThread(id) {
   if (state.running) return;
+  finishTracePanel("已停止");
   state.threadId = id;
   state.pendingInterrupt = null;
   state.uploads = [];
   state.renderedMessageIds.clear();
   state.tracePanel = null;
+  setBusy(false);
+  setStatus("ready", "就绪");
   $("#messages").replaceChildren(emptyState());
   renderAttachments();
   renderThreads();
@@ -193,6 +200,10 @@ function scrollMessages() {
   });
 }
 
+function isNearBottom(element, threshold = 80) {
+  return element.scrollHeight - element.scrollTop - element.clientHeight <= threshold;
+}
+
 function contentText(content) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
@@ -240,15 +251,18 @@ function collectCommitmentTraces(value, found = []) {
 }
 
 function appendCommitmentTrace(trace) {
+  const followMessages = isNearBottom($("#messages"));
   removeEmptyState();
-  if (!state.tracePanel?.isConnected) {
-    const fragment = $("#trace-template").content.cloneNode(true);
-    state.tracePanel = $(".trace-panel", fragment);
-    const thinking = $("#thinking");
-    thinking ? thinking.before(state.tracePanel) : $("#messages").append(state.tracePanel);
+  ensureTracePanel();
+  if (trace.event === "output_delta") {
+    appendTraceOutputDelta(trace, followMessages);
+    return;
   }
   const item = document.createElement("li");
   item.className = `trace-item trace-${trace.actor} trace-${trace.status}`;
+  item.dataset.actor = trace.actor;
+  item.dataset.stage = String(trace.stage);
+  if (trace.status === "running") item.classList.add("is-active");
   const meta = document.createElement("div");
   meta.className = "trace-meta";
   const actor = document.createElement("span");
@@ -262,13 +276,13 @@ function appendCommitmentTrace(trace) {
   item.append(meta, title);
   if (trace.detail) {
     const detail = document.createElement("p");
-    detail.textContent = trace.detail;
+    revealTraceText(detail, trace.detail);
     item.append(detail);
   }
   if (trace.payload?.reasoning_summary) {
     const reasoning = document.createElement("p");
     reasoning.className = "trace-reasoning";
-    reasoning.textContent = trace.payload.reasoning_summary;
+    revealTraceText(reasoning, trace.payload.reasoning_summary);
     item.append(reasoning);
   }
   if (trace.payload !== undefined) {
@@ -279,10 +293,119 @@ function appendCommitmentTrace(trace) {
     item.append(payload);
   }
   $(".trace-list", state.tracePanel).append(item);
+  if (trace.status !== "running") completeTraceActivity(trace);
+  updateTraceCount();
+  setProgress(Number(trace.stage || 0), true);
+  if (followMessages) scrollMessages();
+}
+
+function ensureTracePanel() {
+  if (state.tracePanel?.isConnected) return;
+  const fragment = $("#trace-template").content.cloneNode(true);
+  state.tracePanel = $(".trace-panel", fragment);
+  state.traceStartedAt = Date.now();
+  state.traceStreams = new Map();
+  clearInterval(state.traceTimer);
+  state.traceTimer = setInterval(updateTraceElapsed, 1000);
+  const thinking = $("#thinking");
+  thinking ? thinking.before(state.tracePanel) : $("#messages").append(state.tracePanel);
+  updateTraceElapsed();
+}
+
+function updateTraceElapsed() {
+  if (!state.tracePanel?.isConnected || !state.traceStartedAt) return;
+  const seconds = Math.max(0, Math.floor((Date.now() - state.traceStartedAt) / 1000));
+  $(".trace-elapsed", state.tracePanel).textContent = `已思考 ${seconds} 秒`;
+}
+
+function updateTraceCount() {
+  if (!state.tracePanel?.isConnected) return;
   $(".trace-count", state.tracePanel).textContent =
     `${$$(".trace-item", state.tracePanel).length} 项`;
-  setProgress(Number(trace.stage || 0), true);
-  scrollMessages();
+}
+
+function appendTraceOutputDelta(trace, followMessages) {
+  const streamId = trace.payload?.stream_id || `${trace.actor}-${trace.stage}`;
+  const key = `${trace.actor}:${trace.stage}:${streamId}`;
+  let item = state.traceStreams.get(key);
+  if (!item?.isConnected) {
+    item = document.createElement("li");
+    item.className = `trace-item trace-${trace.actor} trace-stream-item is-active`;
+    item.dataset.actor = trace.actor;
+    item.dataset.stage = String(trace.stage);
+    item.innerHTML = `
+      <div class="trace-meta">
+        <span class="trace-actor"></span>
+        <span>第 ${trace.stage} 步 · 公开输出流</span>
+      </div>
+      <strong></strong>
+      <pre class="trace-stream"><span></span><i aria-hidden="true"></i></pre>`;
+    $(".trace-actor", item).textContent = TRACE_ACTORS[trace.actor] || trace.actor;
+    $("strong", item).textContent = trace.title;
+    $(".trace-list", state.tracePanel).append(item);
+    state.traceStreams.set(key, item);
+    updateTraceCount();
+  }
+  const stream = $(".trace-stream", item);
+  const followStream = isNearBottom(stream, 24);
+  $("span", stream).textContent += String(trace.payload?.delta || "");
+  if (followStream) {
+    requestAnimationFrame(() => {
+      stream.scrollTop = stream.scrollHeight;
+    });
+  }
+  scheduleTraceScroll(followMessages);
+}
+
+function completeTraceActivity(trace) {
+  $$(`.trace-item.is-active[data-actor="${trace.actor}"][data-stage="${trace.stage}"]`,
+    state.tracePanel).forEach((item) => item.classList.remove("is-active"));
+  for (const [key, item] of state.traceStreams) {
+    if (item.dataset.actor === trace.actor && item.dataset.stage === String(trace.stage)) {
+      $("i", item)?.remove();
+      state.traceStreams.delete(key);
+    }
+  }
+}
+
+function revealTraceText(element, text) {
+  const value = String(text || "");
+  if (!value || window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    element.textContent = value;
+    return;
+  }
+  let index = 0;
+  const size = Math.max(1, Math.ceil(value.length / 100));
+  const step = () => {
+    if (!element.isConnected || index >= value.length) return;
+    index = Math.min(value.length, index + size);
+    element.textContent = value.slice(0, index);
+    requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
+function scheduleTraceScroll(shouldScroll) {
+  if (!shouldScroll || state.traceScrollScheduled) return;
+  state.traceScrollScheduled = true;
+  requestAnimationFrame(() => {
+    state.traceScrollScheduled = false;
+    scrollMessages();
+  });
+}
+
+function finishTracePanel(label = "已完成") {
+  clearInterval(state.traceTimer);
+  state.traceTimer = null;
+  if (!state.tracePanel?.isConnected) return;
+  updateTraceElapsed();
+  state.tracePanel.classList.remove("is-live");
+  state.tracePanel.classList.add("is-finished");
+  $(".trace-state", state.tracePanel).textContent = label;
+  $$(".trace-item.is-active", state.tracePanel).forEach(
+    (item) => item.classList.remove("is-active")
+  );
+  $$(".trace-stream i", state.tracePanel).forEach((cursor) => cursor.remove());
 }
 
 function prettyDraft(value) {
@@ -292,7 +415,9 @@ function prettyDraft(value) {
 
 function showReview(interrupt) {
   removeThinking();
+  finishTracePanel("等待确认");
   state.pendingInterrupt = interrupt;
+  if (state.tracePanel?.isConnected) state.tracePanel.open = true;
   const payload = interrupt.value || {};
   const stage = Number(payload.stage || 0);
   setBusy(false);
@@ -378,7 +503,10 @@ function disableReview(panel) {
 
 async function streamRun(body) {
   ensureThread();
+  finishTracePanel();
+  if (state.tracePanel?.isConnected) state.tracePanel.open = false;
   state.tracePanel = null;
+  state.traceStreams = new Map();
   setBusy(true);
   showThinking();
   const response = await fetch(`/api/threads/${encodeURIComponent(state.threadId)}/runs/stream`, {
@@ -430,7 +558,9 @@ function handleSseFrame(frame) {
   if (event === "events") consumeGraphEvent(data);
   if (event === "commitment_trace") appendCommitmentTrace(data);
   if (event === "interrupt") showReview(data);
+  if (event === "end" && !state.pendingInterrupt) finishTracePanel("已完成");
   if (event === "error") {
+    finishTracePanel("执行失败");
     throw new Error(data?.error || "运行失败");
   }
 }
@@ -513,6 +643,7 @@ function renderAttachments() {
 
 function handleError(error) {
   removeThinking();
+  finishTracePanel("执行失败");
   setBusy(false);
   setStatus("error", "失败");
   addMessage("error", error.message || String(error));

@@ -19,7 +19,7 @@ from langchain.agents import create_agent
 from langchain.messages import HumanMessage, RemoveMessage
 from langchain.tools import tool
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
@@ -232,6 +232,39 @@ class FakeRunManager:
 
 
 class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
+    async def test_public_output_tokens_stream_without_private_reasoning(self):
+        class TokenAgent:
+            async def astream(self, *_args, **_kwargs):
+                yield (
+                    "messages",
+                    (
+                        AIMessageChunk(
+                            content="公开输出",
+                            additional_kwargs={"reasoning_content": "私密推理"},
+                        ),
+                        {},
+                    ),
+                )
+                yield "values", {"messages": [AIMessage(content="公开输出")]}
+
+        events = []
+        delegator = ReviewedDelegator(None, [])
+        with patch(
+            "caspian.agents.commitment.tracing.get_stream_writer",
+            return_value=events.append,
+        ):
+            result = await delegator._stream_agent(
+                TokenAgent(),
+                [HumanMessage(content="task")],
+                actor="worker",
+                stage=1,
+                stream_id="worker-1",
+            )
+        self.assertEqual(result["messages"][0].content, "公开输出")
+        self.assertEqual(events[0]["event"], "output_delta")
+        self.assertEqual(events[0]["payload"]["delta"], "公开输出")
+        self.assertNotIn("私密推理", str(events))
+
     def test_commitment_trace_uses_custom_stream_writer(self):
         events = []
         with patch(
@@ -569,6 +602,36 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(output)
         self.assertEqual(error, "retry")
         self.assertEqual(delegator.worker_calls, 3)
+
+    async def test_evaluator_publishes_auditable_review_progress(self):
+        events = []
+        delegator = StubDelegator([True])
+        with patch(
+            "caspian.agents.commitment.tracing.get_stream_writer",
+            return_value=events.append,
+        ):
+            await delegator.run(
+                TaskEnvelope(
+                    stage=1,
+                    instruction="goal",
+                    acceptance_criteria=["目标明确", "边界完整"],
+                )
+            )
+        evaluator_events = [
+            event["event"]
+            for event in events
+            if event["actor"] == "evaluator"
+        ]
+        self.assertEqual(
+            evaluator_events,
+            [
+                "started",
+                "criterion_started",
+                "criterion_started",
+                "synthesizing",
+                "completed",
+            ],
+        )
 
     async def test_delegate_tool_advances_exactly_one_stage(self):
         model = ScriptedToolModel(next_stage=1)

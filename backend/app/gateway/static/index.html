@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=commitment-trace-2">
+  <link rel="stylesheet" href="/assets/app.css?v=commitment-trace-6">
 </head>
 <body>
   <section id="login-view" class="login-view">
@@ -121,15 +121,21 @@
   </template>
 
   <template id="trace-template">
-    <details class="trace-panel" open>
+    <details class="trace-panel is-live" open>
       <summary>
-        <span>承诺层执行轨迹</span>
-        <span class="trace-count">0 项</span>
+        <span class="trace-summary-title">
+          <span class="trace-live-dot" aria-hidden="true"></span>
+          <span class="trace-state">思考中</span>
+        </span>
+        <span class="trace-summary-meta">
+          <span class="trace-elapsed">已思考 0 秒</span>
+          <span class="trace-count">0 项</span>
+        </span>
       </summary>
       <ol class="trace-list"></ol>
     </details>
   </template>
 
-  <script src="/assets/app.js?v=commitment-trace-2" defer></script>
+  <script src="/assets/app.js?v=commitment-trace-6" defer></script>
 </body>
 </html>
