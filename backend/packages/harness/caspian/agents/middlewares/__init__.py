@@ -13,7 +13,7 @@
 """
 
 from caspian.agents.middlewares.builder import build_general_middlewares
-from caspian.agents.middlewares.commitment_middleware import CommitmentMiddleware
+from caspian.agents.commitment import CommitmentMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
 

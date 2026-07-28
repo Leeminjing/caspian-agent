@@ -28,7 +28,7 @@ from langgraph.types import Command, Interrupt, interrupt
 from backend.app.gateway.routers.thread_runs import RunCreateRequest
 from backend.app.gateway.services import _build_graph_input
 from caspian.agents.middlewares.builder import build_general_middlewares
-from caspian.agents.middlewares.commitment_middleware import (
+from caspian.agents.commitment import (
     CommitmentMiddleware,
     CommitmentState,
     ReviewOutput,
@@ -538,7 +538,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
     async def test_stage_timeout_becomes_human_revision_instead_of_hanging(self):
         supervisor = _build_supervisor(NeverReturningDelegator())
         with patch(
-            "caspian.agents.middlewares.commitment_middleware._STAGE_TIMEOUT_SECONDS",
+            "caspian.agents.commitment.stage_rules._STAGE_TIMEOUT_SECONDS",
             0.01,
         ):
             result = await asyncio.wait_for(
@@ -927,7 +927,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
     def test_knowledge_contract_and_final_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
-                "caspian.agents.middlewares.commitment_middleware._PROJECT_ROOT",
+                "caspian.agents.commitment.artifacts._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 files = _write_knowledge(
@@ -954,7 +954,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
     def test_knowledge_filenames_slugify_technology_display_names(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
-                "caspian.agents.middlewares.commitment_middleware._PROJECT_ROOT",
+                "caspian.agents.commitment.artifacts._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 files = _write_knowledge(

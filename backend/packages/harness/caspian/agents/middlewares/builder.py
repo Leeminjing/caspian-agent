@@ -28,7 +28,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from caspian.agents.middlewares.commitment_middleware import CommitmentMiddleware
+from caspian.agents.commitment import CommitmentMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
 
