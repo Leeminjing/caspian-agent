@@ -29,6 +29,8 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from backend.app.gateway.auth.config import AuthConfig
 from backend.app.gateway.deps import langgraph_runtime
@@ -99,6 +101,13 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
 
 app = FastAPI(lifespan=lifespan)
+static_dir = Path(__file__).with_name("static")
+app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
+
+
+@app.get("/", include_in_schema=False)
+async def frontend() -> FileResponse:
+    return FileResponse(static_dir / "index.html")
 
 # 注册中间件（AuthMiddleware 先于 CSRFMiddleware）
 from backend.app.gateway.middleware.auth import AuthMiddleware

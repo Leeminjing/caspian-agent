@@ -28,6 +28,7 @@
 """
 
 import logging
+import os
 
 from langchain_core.tools import BaseTool
 
@@ -74,6 +75,9 @@ async def get_mcp_tools() -> list[BaseTool]:
 
 
 async def get_context7_tools(url: str) -> list[BaseTool]:
+    params: dict[str, object] = {"transport": "http", "url": url}
+    if api_key := os.environ.get("CONTEXT7_API_KEY"):
+        params["headers"] = {"Authorization": f"Bearer {api_key}"}
     return await load_mcp_tools(
-        {"context7": {"transport": "http", "url": url}}
+        {"context7": params}
     )

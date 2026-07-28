@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Caspian</title>
+  <link rel="stylesheet" href="/assets/app.css">
+</head>
+<body>
+  <section id="login-view" class="login-view">
+    <main class="login-panel">
+      <div class="brand brand-login">
+        <span class="brand-mark" aria-hidden="true">C</span>
+        <span>Caspian</span>
+      </div>
+      <h1>继续工作</h1>
+      <form id="login-form">
+        <label for="email">邮箱</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <p id="login-error" class="form-error" role="alert"></p>
+        <button class="button button-primary button-wide" type="submit">登录</button>
+      </form>
+    </main>
+  </section>
+
+  <div id="app-view" class="app-shell" hidden>
+    <aside class="sidebar">
+      <header class="sidebar-header">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true">C</span>
+          <span>Caspian</span>
+        </div>
+        <button id="new-thread" class="icon-button" type="button" title="新建会话" aria-label="新建会话">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+      </header>
+      <nav id="thread-list" class="thread-list" aria-label="会话列表"></nav>
+      <footer class="user-row">
+        <span id="user-avatar" class="avatar"></span>
+        <span id="user-name" class="user-name"></span>
+        <button id="logout" class="icon-button icon-button-muted" type="button" title="退出登录" aria-label="退出登录">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/></svg>
+        </button>
+      </footer>
+    </aside>
+
+    <main class="workspace">
+      <header class="workspace-header">
+        <div>
+          <h1 id="thread-title">新会话</h1>
+          <p id="thread-id" class="thread-id"></p>
+        </div>
+        <span id="run-status" class="status status-ready"><span></span>就绪</span>
+      </header>
+
+      <section id="commitment-progress" class="commitment-progress" hidden aria-label="承诺流程进度">
+        <div class="progress-heading">
+          <strong>任务合同</strong>
+          <span id="progress-label">正在澄清目标</span>
+        </div>
+        <ol id="progress-steps"></ol>
+      </section>
+
+      <section id="messages" class="messages" aria-live="polite">
+        <div id="empty-state" class="empty-state">
+          <span class="empty-mark" aria-hidden="true">C</span>
+          <h2>把目标交给 Caspian</h2>
+          <div class="prompt-row">
+            <button type="button" data-prompt="分析这个项目并完成当前需求">分析项目需求</button>
+            <button type="button" data-prompt="根据我提供的资料制定并执行任务">基于资料执行</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="composer-wrap">
+        <div id="attachments" class="attachments" hidden></div>
+        <form id="composer" class="composer">
+          <input id="file-input" type="file" multiple hidden>
+          <button id="attach-button" class="icon-button composer-icon" type="button" title="添加文件" aria-label="添加文件">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.6l-8.9 8.9a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.6-8.6"/></svg>
+          </button>
+          <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"></textarea>
+          <button id="send-button" class="send-button" type="submit" aria-label="发送" title="发送">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
+        </form>
+      </section>
+    </main>
+  </div>
+
+  <template id="review-template">
+    <article class="review-panel">
+      <header>
+        <div>
+          <span class="review-kicker"></span>
+          <h3></h3>
+        </div>
+        <span class="review-badge">等待确认</span>
+      </header>
+      <pre class="review-draft"></pre>
+      <p class="review-error" role="alert"></p>
+      <div class="review-actions">
+        <button class="button button-primary approve-button" type="button">批准并继续</button>
+        <button class="button button-secondary revise-toggle" type="button">提出修订</button>
+      </div>
+      <form class="revision-form" hidden>
+        <div class="segmented" role="group" aria-label="修订方式">
+          <button class="active" type="button" data-mode="feedback">反馈</button>
+          <button type="button" data-mode="replacement">替换草稿</button>
+        </div>
+        <textarea class="revision-input" rows="4" placeholder="输入需要调整的内容"></textarea>
+        <div class="revision-footer">
+          <button class="button button-quiet cancel-revision" type="button">取消</button>
+          <button class="button button-primary" type="submit">提交修订</button>
+        </div>
+      </form>
+    </article>
+  </template>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>

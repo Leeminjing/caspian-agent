@@ -17,11 +17,13 @@ from unittest.mock import AsyncMock, patch
 
 from langchain.agents import create_agent
 from langchain.messages import HumanMessage, RemoveMessage
+from langchain.tools import tool
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
-from langgraph.types import Command, Interrupt
+from langgraph.graph import END, START, StateGraph
+from langgraph.types import Command, Interrupt, interrupt
 
 from backend.app.gateway.routers.thread_runs import RunCreateRequest
 from backend.app.gateway.services import _build_graph_input
@@ -31,17 +33,30 @@ from caspian.agents.middlewares.commitment_middleware import (
     CommitmentState,
     ReviewOutput,
     ReviewedDelegator,
+    _SearchResultParser,
     TaskEnvelope,
     WorkerOutput,
     _build_final_message,
+    _build_supervisor,
     _contains_unresolved_versions,
+    _context7_candidate_version,
+    _context7_stable_version,
+    _extract_structured,
+    _filter_stage_four_result,
+    _has_open_conflicts,
+    _human_payload,
+    _normalize_stage_three_result,
     _review_human_revision,
     _safe_segment,
+    _stage_four_needs_review,
+    _stage_timeout,
+    _validate_stage_result,
     _write_contract,
     _write_knowledge,
     build_delegate_with_review_tool,
 )
 from caspian.config.commitment_config import CommitmentConfig
+from caspian.mcp.tools import get_context7_tools
 from caspian.runtime.runs.schemas import RunStatus
 from caspian.runtime.runs.worker import _extract_interrupts, run_agent
 
@@ -105,12 +120,57 @@ class ScriptedToolModel(BaseChatModel):
         return self
 
 
+class PlainModel(BaseChatModel):
+    @property
+    def _llm_type(self):
+        return "plain-model"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        return ChatResult(
+            generations=[ChatGeneration(message=AIMessage(content="lead done"))]
+        )
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        return self
+
+
+class RecordingReviewModel(BaseChatModel):
+    recorded_messages: list = []
+
+    @property
+    def _llm_type(self):
+        return "recording-review-model"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+        self.recorded_messages = list(messages)
+        return ChatResult(
+            generations=[
+                ChatGeneration(
+                    message=AIMessage(
+                        content='{"approved": true, "feedback": ""}'
+                    )
+                )
+            ]
+        )
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        return self
+
+
 class AlwaysApprovedDelegator(ReviewedDelegator):
     def __init__(self):
         super().__init__(None, [])
 
     async def run(self, envelope):
         return WorkerOutput(result={"goal": "approved"}), ""
+
+
+class NeverReturningDelegator(ReviewedDelegator):
+    def __init__(self):
+        super().__init__(None, [])
+
+    async def run(self, envelope):
+        await asyncio.Event().wait()
 
 
 class FakeAgent:
@@ -152,6 +212,268 @@ class FakeRunManager:
 
 
 class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
+    async def test_context7_api_key_is_sent_as_mcp_header(self):
+        with (
+            patch.dict("os.environ", {"CONTEXT7_API_KEY": "ctx7sk-test"}),
+            patch(
+                "caspian.mcp.tools.load_mcp_tools",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as load_tools,
+        ):
+            await get_context7_tools("https://mcp.context7.com/mcp")
+
+        load_tools.assert_awaited_once_with(
+            {
+                "context7": {
+                    "transport": "http",
+                    "url": "https://mcp.context7.com/mcp",
+                    "headers": {"Authorization": "Bearer ctx7sk-test"},
+                }
+            }
+        )
+
+    async def test_stage_three_evaluator_does_not_invent_prior_stage_priorities(self):
+        model = RecordingReviewModel()
+        delegator = ReviewedDelegator(model, [])
+        await delegator._evaluator(
+            TaskEnvelope(
+                stage=3,
+                instruction="分配优先级",
+                context={
+                    "approved_stages": {
+                        "2": {"requirements": ["包含测试和详细文档"]}
+                    }
+                },
+                acceptance_criteria=["priority仅允许1到3"],
+            ),
+            WorkerOutput(
+                result={
+                    "requirements": [
+                        {
+                            "requirement": "包含测试和详细文档",
+                            "priority": 2,
+                        }
+                    ]
+                }
+            ),
+        )
+        system_prompt = "\n".join(
+            str(message.content)
+            for message in model.recorded_messages
+            if message.type == "system"
+        )
+        self.assertIn("第二步不包含优先级", system_prompt)
+
+    def test_stage_three_normalizes_freeform_priorities_and_exact_text(self):
+        normalized = _normalize_stage_three_result(
+            WorkerOutput(
+                result={
+                    "requirements": [
+                        {"text": "rewritten A", "priority": "high"},
+                        {"text": "rewritten B", "priority": "medium"},
+                    ],
+                    "notes": "extra",
+                }
+            ),
+            ["必须完成 A", "可以协商 B"],
+        )
+        self.assertEqual(
+            normalized.result,
+            {
+                "requirements": [
+                    {"requirement": "必须完成 A", "priority": 3},
+                    {"requirement": "可以协商 B", "priority": 2},
+                ]
+            },
+        )
+
+    async def test_stage_five_calls_context7_once_per_selected_technology(self):
+        resolve_calls = []
+        query_calls = []
+
+        @tool("resolve-library-id")
+        async def resolver(libraryName: str, query: str) -> str:
+            """Resolve one technology."""
+            resolve_calls.append(libraryName)
+            return f"Context7-compatible library ID: /official/{libraryName}"
+
+        @tool("query-docs")
+        async def query_docs(libraryId: str, query: str) -> str:
+            """Query official version documentation."""
+            query_calls.append(libraryId)
+            return "Latest stable version: 1.2.3"
+
+        class StageFiveDelegator(ReviewedDelegator):
+            async def _invoke_schema(self, *, schema, **_kwargs):
+                if schema.__name__ == "TechnologySelection":
+                    return schema.model_validate(
+                        {"technologies": ["React", "Next.js"]}
+                    )
+                raise AssertionError("stage 5 must not call a model assembler")
+
+        output = await StageFiveDelegator(
+            None, [resolver, query_docs]
+        )._stage_five_worker(
+            TaskEnvelope(
+                stage=5,
+                instruction="核验版本",
+                context={"approved_stages": {"3": {"requirements": []}}},
+                acceptance_criteria=[],
+            ),
+            "",
+        )
+        self.assertCountEqual(resolve_calls, ["React", "Next.js"])
+        self.assertCountEqual(
+            query_calls,
+            ["/official/React", "/official/Next.js"],
+        )
+        self.assertEqual(
+            [item["version"] for item in output.result["technologies"]],
+            ["1.2.3", "1.2.3"],
+        )
+        self.assertEqual(
+            {
+                item["version_basis"]
+                for item in output.result["technologies"]
+            },
+            {"official_docs_explicit"},
+        )
+
+    async def test_stage_five_evaluator_trusts_bounded_context7_provenance(self):
+        model = RecordingReviewModel()
+        await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(
+                stage=5,
+                instruction="核验版本",
+                context={},
+                acceptance_criteria=["不得猜测版本"],
+            ),
+            WorkerOutput(
+                result={
+                    "technologies": [
+                        {
+                            "name": "React",
+                            "project_version": "unresolved",
+                            "version": "19.2",
+                            "library_id": "/reactjs/react.dev",
+                            "source_url": None,
+                        }
+                    ]
+                }
+            ),
+        )
+        system_prompt = "\n".join(
+            str(message.content)
+            for message in model.recorded_messages
+            if message.type == "system"
+        )
+        self.assertIn("受控代码直接取自Context7", system_prompt)
+
+    async def test_stage_five_defaults_unknown_version_to_latest_stable(self):
+        @tool("resolve-library-id")
+        async def resolver(libraryName: str, query: str) -> str:
+            """Resolve one technology."""
+            return (
+                "Context7-compatible library ID: /tailwindlabs/tailwindcss.com\n"
+                "Versions: __branch__v4-beta-docs"
+            )
+
+        @tool("query-docs")
+        async def query_docs(libraryId: str, query: str) -> str:
+            """Return documentation without an exact stable version."""
+            return "Official installation documentation without a version."
+
+        class StageFiveDelegator(ReviewedDelegator):
+            async def _invoke_schema(self, *, schema, **_kwargs):
+                return schema.model_validate(
+                    {"technologies": ["Tailwind CSS"]}
+                )
+
+        output = await StageFiveDelegator(
+            None,
+            [resolver, query_docs],
+        )._stage_five_worker(
+            TaskEnvelope(
+                stage=5,
+                instruction="核验版本",
+                context={"approved_stages": {"3": {"requirements": []}}},
+                acceptance_criteria=[],
+            ),
+            "",
+        )
+        technology = output.result["technologies"][0]
+        self.assertEqual(technology["version"], "latest-stable")
+        self.assertEqual(
+            technology["version_basis"],
+            "latest_stable_policy",
+        )
+
+    def test_stage_three_must_copy_stage_two_requirements_exactly(self):
+        context = {
+            "approved_stages": {
+                "2": {"requirements": ["包含测试和详细文档"]}
+            }
+        }
+        self.assertIsNone(
+            _validate_stage_result(
+                3,
+                {
+                    "requirements": [
+                        {
+                            "requirement": "包含测试和详细文档",
+                            "priority": 2,
+                        }
+                    ]
+                },
+                context,
+            )
+        )
+        self.assertIsNotNone(
+            _validate_stage_result(
+                3,
+                {
+                    "requirements": [
+                        {"requirement": "包含测试", "priority": 3}
+                    ]
+                },
+                context,
+            )
+        )
+
+    def test_stage_three_excludes_discarded_stage_two_requirements(self):
+        context = {
+            "approved_stages": {
+                "2": {
+                    "requirements": ["保留实时同步", "放弃纯静态限制"],
+                    "discarded_requirements": ["放弃纯静态限制"],
+                }
+            }
+        }
+        self.assertIsNone(
+            _validate_stage_result(
+                3,
+                {
+                    "requirements": [
+                        {"requirement": "保留实时同步", "priority": 3}
+                    ]
+                },
+                context,
+            )
+        )
+        self.assertIsNotNone(
+            _validate_stage_result(
+                3,
+                {
+                    "requirements": [
+                        {"requirement": "保留实时同步", "priority": 3},
+                        {"requirement": "放弃纯静态限制", "priority": 1},
+                    ]
+                },
+                context,
+            )
+        )
+
     def test_default_switch_and_builder_are_unchanged(self):
         self.assertFalse(CommitmentConfig().enabled)
         self.assertEqual(
@@ -213,6 +535,31 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["stage"], 1)
         self.assertEqual(result["artifacts"]["1"]["goal"], "approved")
 
+    async def test_stage_timeout_becomes_human_revision_instead_of_hanging(self):
+        supervisor = _build_supervisor(NeverReturningDelegator())
+        with patch(
+            "caspian.agents.middlewares.commitment_middleware._STAGE_TIMEOUT_SECONDS",
+            0.01,
+        ):
+            result = await asyncio.wait_for(
+                supervisor.ainvoke(
+                    {
+                        "messages": [HumanMessage(content="start")],
+                        "stage": 0,
+                        "awaiting_human": None,
+                        "artifacts": {},
+                        "source_text": "goal",
+                        "thread_id": "timeout-thread",
+                        "knowledge_files": [],
+                    }
+                ),
+                timeout=0.2,
+            )
+        payload = result["__interrupt__"][0].value
+        self.assertEqual(payload["stage"], 1)
+        self.assertEqual(payload["allowed_decisions"], ["revise"])
+        self.assertIn("超时", payload["error"])
+
     async def test_human_approval_resumes_same_tool_call(self):
         model = ScriptedToolModel(next_stage=4)
         agent = create_agent(
@@ -250,6 +597,14 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(resumed["awaiting_human"])
 
     async def test_human_replacement_is_validated(self):
+        state = {
+            "artifacts": {
+                "2": {
+                    "requirements": ["must"],
+                    "discarded_requirements": [],
+                }
+            }
+        }
         revised, error = await _review_human_revision(
             {
                 "decision": "revise",
@@ -258,7 +613,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             3,
-            {},
+            state,
             StubDelegator([True]),
         )
         self.assertEqual(error, "")
@@ -272,7 +627,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 },
             },
             3,
-            {},
+            state,
             StubDelegator([False]),
         )
         self.assertIsNone(rejected)
@@ -294,6 +649,280 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 {"technologies": [{"name": "LangGraph", "version": "1.2.6"}]}
             )
         )
+        self.assertFalse(
+            _contains_unresolved_versions(
+                {
+                    "technologies": [
+                        {"name": "LangGraph", "version": "latest-stable"}
+                    ]
+                }
+            )
+        )
+
+    def test_knowledge_stages_have_a_longer_timeout(self):
+        self.assertEqual(_stage_timeout(4), 600)
+        self.assertEqual(_stage_timeout(5), 900)
+        self.assertEqual(_stage_timeout(6), 900)
+
+    def test_stage_five_rejects_an_empty_technology_list(self):
+        self.assertIsNotNone(
+            _validate_stage_result(5, {"technologies": []})
+        )
+
+    def test_context7_stable_version_requires_explicit_stable_wording(self):
+        self.assertEqual(
+            _context7_stable_version(
+                "Declares the latest stable version of React as 19.2."
+            ),
+            "19.2",
+        )
+        self.assertIsNone(
+            _context7_stable_version(
+                "Current version is 16.3.0-canary.80."
+            )
+        )
+
+    def test_context7_candidate_version_ignores_prereleases(self):
+        evidence = """
+        Context7-compatible library ID: /vercel/next.js
+        Versions: v16.1.6, v16.2.9, v16.3.0-canary.80, v15.1.11
+        """
+        self.assertEqual(
+            _context7_candidate_version(evidence, "/vercel/next.js"),
+            "16.2.9",
+        )
+        self.assertIsNone(
+            _context7_candidate_version(
+                """
+                Context7-compatible library ID: /tailwindlabs/tailwindcss.com
+                Versions: __branch__v4-beta-docs
+                """,
+                "/tailwindlabs/tailwindcss.com",
+            )
+        )
+
+    def test_stage_two_requires_compatibility_evidence(self):
+        self.assertIsNotNone(
+            _validate_stage_result(
+                2,
+                {
+                    "requirements": ["web", "desktop UI"],
+                    "compatibility_checks": [],
+                    "conflicts": [],
+                },
+            )
+        )
+        self.assertIsNotNone(
+            _validate_stage_result(
+                2,
+                {
+                    "requirements": ["web", "desktop UI"],
+                    "compatibility_checks": [
+                        {
+                            "technology": "desktop UI",
+                            "application_type": "web",
+                            "ui_surface": "browser",
+                            "runtime_platform": "server",
+                            "host_model": "web server",
+                            "status": "conflict",
+                        }
+                    ],
+                    "conflicts": [],
+                },
+            )
+        )
+        self.assertIsNone(
+            _validate_stage_result(
+                2,
+                {
+                    "requirements": ["web", "desktop UI"],
+                    "compatibility_checks": [
+                        {
+                            "technology": "desktop UI",
+                            "application_type": "desktop",
+                            "ui_surface": "native window",
+                            "runtime_platform": "Windows",
+                            "host_model": "desktop process",
+                            "status": "conflict",
+                        }
+                    ],
+                    "conflicts": [
+                        {
+                            "requirements": ["web", "desktop UI"],
+                            "conflict_type": "ui_surface",
+                            "explanation": "browser and native window differ",
+                            "status": "open",
+                        }
+                    ],
+                },
+            )
+        )
+        self.assertTrue(
+            _has_open_conflicts(
+                {
+                    "compatibility_checks": [{"status": "conflict"}],
+                    "conflicts": [{"status": "open"}],
+                }
+            )
+        )
+        self.assertFalse(
+            _has_open_conflicts(
+                {
+                    "compatibility_checks": [{"status": "verified"}],
+                    "conflicts": [
+                        {"status": "resolved", "resolution": "use web UI"}
+                    ],
+                }
+            )
+        )
+
+    def test_stage_two_open_conflict_cannot_advance_to_priorities(self):
+        draft = {
+            "requirements": ["UI 技术兼容性评估"],
+            "compatibility_checks": [
+                {
+                    "technology": "SunnyUI",
+                    "application_type": "desktop",
+                    "ui_surface": "WinForms",
+                    "runtime_platform": "Windows",
+                    "host_model": "desktop process",
+                    "status": "conflict",
+                }
+            ],
+            "conflicts": [
+                {
+                    "requirements": ["UI 技术兼容性评估"],
+                    "conflict_type": "ui_surface",
+                    "explanation": "SunnyUI 的 WinForms 界面不能作为 MVC 浏览器界面。",
+                    "status": "open",
+                }
+            ],
+        }
+        self.assertIsNone(_validate_stage_result(2, draft))
+        payload = _human_payload(2, {"artifacts": {"2": draft}})
+        self.assertEqual(payload["allowed_decisions"], ["revise"])
+        self.assertEqual(payload["revise_label"], "解决矛盾")
+
+    def test_stage_four_reference_candidates_require_human_confirmation(self):
+        proposed = {
+            "files": [
+                {
+                    "mention": "需求文档",
+                    "candidates": ["requirements-v2.md"],
+                    "status": "proposed",
+                }
+            ],
+            "urls": [
+                {
+                    "mention": "Next.js 文档",
+                    "url": None,
+                    "candidates": ["https://nextjs.org/docs"],
+                    "source": "search",
+                    "status": "proposed",
+                }
+            ],
+        }
+        self.assertIsNone(_validate_stage_result(4, proposed))
+        self.assertTrue(_stage_four_needs_review(proposed))
+        self.assertEqual(
+            _human_payload(4, {"artifacts": {"4": proposed}})[
+                "allowed_decisions"
+            ],
+            ["approve", "revise"],
+        )
+
+        unresolved = {
+            "files": [
+                {
+                    "mention": "需求文档",
+                    "candidates": [],
+                    "status": "unresolved",
+                }
+            ],
+            "urls": [],
+        }
+        payload = _human_payload(4, {"artifacts": {"4": unresolved}})
+        self.assertEqual(payload["allowed_decisions"], ["revise"])
+        self.assertEqual(payload["revise_label"], "补充引用")
+
+        complete = {
+            "files": [
+                {
+                    "mention": "requirements-v2.md",
+                    "uploaded_filename": "requirements-v2.md",
+                    "candidates": [],
+                    "status": "matched",
+                }
+            ],
+            "urls": [
+                {
+                    "mention": "https://nextjs.org/docs",
+                    "url": "https://nextjs.org/docs",
+                    "candidates": [],
+                    "source": "user",
+                    "status": "provided",
+                }
+            ],
+        }
+        self.assertIsNone(_validate_stage_result(4, complete))
+        self.assertFalse(_stage_four_needs_review(complete))
+
+    def test_stage_four_filters_technology_usage_but_keeps_reference_intent(self):
+        output = WorkerOutput(
+            result={
+                "files": [],
+                "urls": [
+                    {
+                        "mention": "React",
+                        "url": None,
+                        "candidates": ["https://react.dev/"],
+                        "source": "search",
+                        "status": "proposed",
+                    }
+                ],
+            }
+        )
+        self.assertEqual(
+            _filter_stage_four_result(
+                output,
+                "项目必须使用 React 开发。",
+            ).result["urls"],
+            [],
+        )
+        self.assertEqual(
+            len(
+                _filter_stage_four_result(
+                    output,
+                    "请参考 React 官方文档完成实现。",
+                ).result["urls"]
+            ),
+            1,
+        )
+
+
+    def test_reference_search_parser_returns_destination_url(self):
+        parser = _SearchResultParser()
+        parser.feed(
+            '<a class="result__a" href="//duckduckgo.com/l/?uddg='
+            'https%3A%2F%2Fnextjs.org%2Fdocs">Next.js Docs</a>'
+        )
+        self.assertEqual(
+            parser.results,
+            [{"title": "Next.js Docs", "url": "https://nextjs.org/docs"}],
+        )
+
+    def test_structured_output_parses_plain_or_fenced_json(self):
+        for content in (
+            '{"approved": true, "feedback": ""}',
+            '```json\n{"approved": true, "feedback": ""}\n```',
+            '说明如下：\n```json\n{"approved": true, "feedback": ""}\n```',
+            '{"approved": false, "feedback": "请把"version"改正"}',
+        ):
+            parsed = _extract_structured(
+                {"messages": [AIMessage(content=content)]},
+                ReviewOutput,
+            )
+            self.assertEqual(parsed.approved, '"approved": true' in content)
 
     def test_knowledge_contract_and_final_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -322,6 +951,42 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 self.assertIn("<task_contract>", message)
                 self.assertIn("<theoretical foundation", message)
 
+    def test_knowledge_filenames_slugify_technology_display_names(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "caspian.agents.middlewares.commitment_middleware._PROJECT_ROOT",
+                Path(temp_dir),
+            ):
+                files = _write_knowledge(
+                    {
+                        "knowledge": [
+                            {
+                                "technology": "Tailwind CSS",
+                                "version": "latest-stable",
+                                "source_url": "https://tailwindcss.com/docs",
+                                "content": "Official docs.",
+                            },
+                            {
+                                "technology": "shadcn/ui",
+                                "version": "3.5.0",
+                                "source_url": "https://ui.shadcn.com/docs",
+                                "content": "Official docs.",
+                            },
+                        ]
+                    }
+                )
+                self.assertEqual(
+                    files,
+                    [
+                        "knowledge/Tailwind-CSS-latest-stable.md",
+                        "knowledge/shadcn-ui-3.5.0.md",
+                    ],
+                )
+                self.assertIn(
+                    "# shadcn/ui 3.5.0",
+                    (Path(temp_dir) / files[1]).read_text(encoding="utf-8"),
+                )
+
     async def test_middleware_returns_only_contract_message(self):
         middleware = object.__new__(CommitmentMiddleware)
         middleware._supervisor = FakeSupervisor(
@@ -343,6 +1008,44 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(update["messages"][0], RemoveMessage)
         self.assertIsInstance(update["messages"][1], HumanMessage)
         self.assertNotIn("Worker", update["messages"][1].content)
+
+    async def test_nested_interrupt_reaches_parent_and_resumes(self):
+        async def pause_for_review(_state):
+            interrupt({"type": "commitment_review", "stage": 3})
+            return {
+                "stage": 9,
+                "task_contract": "# Contract",
+                "final_message": "<task_contract># Contract</task_contract>",
+            }
+
+        builder = StateGraph(CommitmentState)
+        builder.add_node("pause_for_review", pause_for_review)
+        builder.add_edge(START, "pause_for_review")
+        builder.add_edge("pause_for_review", END)
+
+        middleware = object.__new__(CommitmentMiddleware)
+        middleware._supervisor = builder.compile()
+        agent = create_agent(
+            model=PlainModel(),
+            tools=[],
+            middleware=[middleware],
+            state_schema=CommitmentState,
+            checkpointer=InMemorySaver(),
+        )
+        config = {"configurable": {"thread_id": "nested-interrupt"}}
+
+        paused = await agent.ainvoke(
+            {"messages": [HumanMessage(content="goal")]},
+            config=config,
+        )
+        self.assertEqual(paused["__interrupt__"][0].value["stage"], 3)
+
+        resumed = await agent.ainvoke(
+            Command(resume={"decision": "approve"}),
+            config=config,
+        )
+        self.assertEqual(resumed["task_contract"], "# Contract")
+        self.assertEqual(resumed["messages"][-1].content, "lead done")
 
     def test_resume_request_and_graph_input(self):
         resume = {"decision": "approve"}

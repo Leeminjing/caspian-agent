@@ -51,7 +51,7 @@ sandbox:
   #   MY_KEY: value
 
 commitment:
-  enabled: false
+  enabled: true
   context7_url: https://mcp.context7.com/mcp
 
 stream_bridge:

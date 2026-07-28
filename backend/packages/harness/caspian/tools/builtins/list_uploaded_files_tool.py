@@ -86,10 +86,9 @@ def list_uploaded_files(
     - Use include_outline to expand .md file outlines for better navigation.
 
     Args:
-        include_outline: Controls outline/preview generation for .md files:
-            - Omit or pass false (default): No outlines — returns filename and size only.
-            - Pass true: Generate outlines for all .md files.
-            - Pass a list of filenames, e.g. ["report.md", "notes.md"]: Generate outlines only for those files.
+        include_outline: Controls outline generation for Markdown files. False
+            returns metadata only, true expands every file, and a filename list
+            expands only the selected files.
     """
     thread_id = None
     if runtime is not None and runtime.execution_info is not None:

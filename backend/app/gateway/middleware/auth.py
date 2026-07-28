@@ -39,10 +39,12 @@ from sqlalchemy import select
 logger = logging.getLogger(__name__)
 
 _AUTH_WHITELIST_PATHS = {
+    "/",
     "/api/auth/login",
     "/api/auth/logout",
 }
 _AUTH_WHITELIST_PREFIXES = [
+    "/assets/",
     "/docs",
     "/openapi.json",
     "/redoc",
