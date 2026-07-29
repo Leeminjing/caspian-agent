@@ -5,6 +5,7 @@
     model — 创建 Worker 和 Evaluator 所使用的 BaseChatModel。
     context7_tools — 仅承诺层内部可见的 Context7 BaseTool 列表。
     TaskEnvelope — 当前阶段指令、上下文和验收条件。
+    Supervisor messages — 原始用户输入和此前阶段最终 ToolMessage。
 
 输出:
     WorkerOutput | None — 最多三次审核后通过的阶段结果；全部失败时为 None。
@@ -14,9 +15,9 @@
     (1) 为当前阶段创建干净的 Worker 上下文并生成候选结果。
     (2) 对特殊阶段执行确定性 Context7 查询、版本处理或结果规范化。
     (3) 使用独立 Evaluator 按 TaskEnvelope 验收条件审核结果。
-    (4) 不合格时只携带反馈创建新的 Worker，最多执行三次。
-    (5) 流式发布公开模型输出、工具活动和理由摘要，不读取私密 reasoning 字段。
-    (6) 工具返回只包含通过结果或最后反馈，同时向 custom stream 发布可审计工作日志。
+    (4) Evaluator 不合格时携带反馈创建新的 Worker，最多执行三次。
+    (5) 流式发布 Worker 和 Evaluator 各自的真实 messages，不读取私密 reasoning 字段。
+    (6) 工具只向 Supervisor 返回最终通过结果或最后反馈。
 
 示例:
     delegator = ReviewedDelegator(model, context7_tools)
@@ -27,10 +28,11 @@ import asyncio
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.messages import HumanMessage
+from langchain.messages import AIMessage, HumanMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, StructuredTool
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from caspian.agents.commitment.references import find_reference_urls
 from caspian.agents.commitment.schemas import (
@@ -52,15 +54,15 @@ from caspian.agents.commitment.stage_rules import (
     _filter_stage_four_result,
     _json,
     _normalize_stage_three_result,
+    _source_text,
+    _stage_result,
     _stage_three_requirements,
     _validate_stage_result,
 )
-from caspian.agents.commitment.tracing import emit_commitment_trace
-
-TRACE_ACTOR_TITLES = {
-    "worker": "Worker",
-    "evaluator": "Evaluator",
-}
+from caspian.agents.commitment.tracing import (
+    emit_commitment_messages,
+    emit_commitment_trace,
+)
 
 class ReviewedDelegator:
     def __init__(
@@ -79,8 +81,15 @@ class ReviewedDelegator:
         actor: str,
         stage: int,
         stream_id: str,
+        attempt: int = 1,
     ) -> dict[str, Any]:
         result: dict[str, Any] = {}
+        emit_commitment_messages(
+            actor=actor,
+            stage=stage,
+            attempt=attempt,
+            messages=messages,
+        )
         async for mode, chunk in agent.astream(
             {"messages": messages},
             stream_mode=["messages", "values"],
@@ -103,13 +112,11 @@ class ReviewedDelegator:
                 )
             if not isinstance(content, str) or not content:
                 continue
-            emit_commitment_trace(
+            emit_commitment_messages(
                 actor=actor,
-                event="output_delta",
-                title=f"{TRACE_ACTOR_TITLES[actor]} 正在生成公开输出",
-                status="running",
                 stage=stage,
-                payload={"stream_id": stream_id, "delta": content},
+                attempt=attempt,
+                messages=[message_chunk],
             )
         return result
 
@@ -120,6 +127,7 @@ class ReviewedDelegator:
         system_prompt: str,
         prompt: dict[str, Any],
         schema: type[BaseModel],
+        attempt: int,
     ) -> BaseModel:
         emit_commitment_trace(
             actor="worker",
@@ -141,6 +149,7 @@ class ReviewedDelegator:
             actor="worker",
             stage=int(prompt.get("stage", 0) or 0),
             stream_id=name,
+            attempt=attempt,
         )
         output = _extract_structured(result, schema)
         emit_commitment_trace(
@@ -163,7 +172,11 @@ class ReviewedDelegator:
         self,
         envelope: TaskEnvelope,
         feedback: str,
+        supervisor_messages: list[BaseMessage] | None = None,
+        attempt: int = 1,
     ) -> WorkerOutput:
+        supervisor_messages = supervisor_messages or []
+        stage_three = _stage_result(supervisor_messages, 3)
         selection = await self._invoke_schema(
             name="commitment_technology_selector",
             system_prompt=(
@@ -174,12 +187,14 @@ class ReviewedDelegator:
             ),
             prompt={
                 "stage": envelope.stage,
-                "requirements": envelope.context.get("approved_stages", {})
-                .get("3", {})
-                .get("requirements", []),
+                "supervisor_messages": [
+                    message.model_dump() for message in supervisor_messages
+                ],
+                "requirements": stage_three.get("requirements", []),
                 "reviewer_feedback": feedback,
             },
             schema=TechnologySelection,
+            attempt=attempt,
         )
         names = list(
             dict.fromkeys(
@@ -393,11 +408,13 @@ class ReviewedDelegator:
         self,
         envelope: TaskEnvelope,
         feedback: str,
+        supervisor_messages: list[BaseMessage] | None = None,
+        attempt: int = 1,
     ) -> WorkerOutput:
-        technologies = (
-            envelope.context.get("approved_stages", {})
-            .get("5", {})
-            .get("technologies", [])
+        supervisor_messages = supervisor_messages or []
+        technologies = _stage_result(supervisor_messages, 5).get(
+            "technologies",
+            [],
         )
         query_docs = self._context7_tool("query-docs")
 
@@ -459,18 +476,39 @@ class ReviewedDelegator:
             ),
             prompt={
                 "stage": envelope.stage,
+                "supervisor_messages": [
+                    message.model_dump() for message in supervisor_messages
+                ],
                 "confirmed_technologies": technologies,
                 "context7_evidence": evidence,
                 "reviewer_feedback": feedback,
             },
             schema=WorkerOutput,
+            attempt=attempt,
         )
 
-    async def _worker(self, envelope: TaskEnvelope, feedback: str) -> WorkerOutput:
+    async def _worker(
+        self,
+        envelope: TaskEnvelope,
+        feedback: str,
+        supervisor_messages: list[BaseMessage] | None = None,
+        attempt: int = 1,
+    ) -> WorkerOutput:
+        supervisor_messages = supervisor_messages or []
         if envelope.stage == 5:
-            return await self._stage_five_worker(envelope, feedback)
+            return await self._stage_five_worker(
+                envelope,
+                feedback,
+                supervisor_messages,
+                attempt,
+            )
         if envelope.stage == 6:
-            return await self._stage_six_worker(envelope, feedback)
+            return await self._stage_six_worker(
+                envelope,
+                feedback,
+                supervisor_messages,
+                attempt,
+            )
         async def traced_find_reference_urls(query: str) -> list[dict[str, str]]:
             emit_commitment_trace(
                 actor="tool",
@@ -513,7 +551,7 @@ class ReviewedDelegator:
             )
         elif envelope.stage == 3:
             stage_guidance = (
-                "第三步只能逐字、逐项复制approved_stages.2中仍需完成的requirements，"
+                "第三步只能逐字、逐项复制Supervisor messages中阶段2 ToolMessage里仍需完成的requirements，"
                 "必须排除discarded_requirements，已放弃的要求不得分配priority。"
                 "只在本步骤首次分配priority；第二步不包含优先级，"
                 "不得声称或推断第二步已为任何要求分配等级。"
@@ -530,11 +568,16 @@ class ReviewedDelegator:
             )
         elif envelope.stage == 5:
             stage_guidance = (
-                "第五步必须从approved_stages.3.requirements识别全部涉及技术，"
+                "第五步必须从Supervisor messages中阶段3 ToolMessage的requirements识别全部涉及技术，"
                 "逐项调用Context7核验。result.technologies不得为空；"
                 "每项必须包含name、project_version、version、source_url，"
                 "无法确认精确版本时version写latest-stable并使用latest_stable_policy，"
                 "不得省略技术或猜测版本号。"
+            )
+        elif envelope.stage == 7:
+            stage_guidance = (
+                "第七步必须返回result.contract_markdown，值为完整Markdown任务合同；"
+                "不得使用contract、markdown或content等替代字段名。"
             )
         else:
             stage_guidance = ""
@@ -556,7 +599,10 @@ class ReviewedDelegator:
         prompt = {
             "stage": envelope.stage,
             "instruction": envelope.instruction,
-            "context": envelope.context,
+            "supervisor_messages": [
+                message.model_dump() for message in supervisor_messages
+            ],
+            "human_feedback": envelope.context.get("human_feedback", ""),
             "acceptance_criteria": envelope.acceptance_criteria,
             "reviewer_feedback": feedback,
         }
@@ -566,17 +612,18 @@ class ReviewedDelegator:
             actor="worker",
             stage=envelope.stage,
             stream_id=f"worker-{envelope.stage}",
+            attempt=attempt,
         )
         output = _extract_structured(result, WorkerOutput)
         if envelope.stage == 4:
             return _filter_stage_four_result(
                 output,
-                str(envelope.context.get("source_text", "")),
+                _source_text(supervisor_messages),
             )
         if envelope.stage == 3:
             return _normalize_stage_three_result(
                 output,
-                _stage_three_requirements(envelope.context),
+                _stage_three_requirements(supervisor_messages),
             )
         return output
 
@@ -584,7 +631,37 @@ class ReviewedDelegator:
         self,
         envelope: TaskEnvelope,
         worker_output: WorkerOutput,
+        supervisor_messages: list[BaseMessage] | None = None,
+        attempt: int = 1,
+        structure_error: str = "",
+        reviewer_feedback: str = "",
     ) -> ReviewOutput:
+        supervisor_messages = supervisor_messages or []
+        evaluator_input = {
+            "supervisor_messages": [
+                message.model_dump() for message in supervisor_messages
+            ],
+            "task": envelope.model_dump(),
+            "reviewer_feedback": reviewer_feedback,
+            "worker_output": worker_output.model_dump(),
+            "deterministic_validation_error": structure_error,
+        }
+        if structure_error:
+            review = ReviewOutput(
+                approved=False,
+                feedback=structure_error,
+                reasoning_summary="候选结果未通过当前阶段的确定性结构校验，需要重试。",
+            )
+            emit_commitment_messages(
+                actor="evaluator",
+                stage=envelope.stage,
+                attempt=attempt,
+                messages=[
+                    HumanMessage(content=_json(evaluator_input)),
+                    AIMessage(content=_json(review.model_dump())),
+                ],
+            )
+            return review
         agent = create_agent(
             model=self._model,
             tools=[],
@@ -620,167 +697,92 @@ class ReviewedDelegator:
             agent,
             [
                 HumanMessage(
-                    content=_json(
-                        {
-                            "task": envelope.model_dump(),
-                            "worker_output": worker_output.model_dump(),
-                        }
-                    )
+                    content=_json(evaluator_input)
                 )
             ],
             actor="evaluator",
             stage=envelope.stage,
             stream_id=f"evaluator-{envelope.stage}",
+            attempt=attempt,
         )
-        return _extract_structured(result, ReviewOutput)
+        try:
+            return _extract_structured(result, ReviewOutput)
+        except ValidationError as exc:
+            review = ReviewOutput(
+                approved=False,
+                feedback=f"Evaluator输出不符合ReviewOutput结构：{exc}",
+                reasoning_summary="Evaluator输出结构无效，需要重新执行Worker-Evaluator审核。",
+            )
+            emit_commitment_messages(
+                actor="evaluator",
+                stage=envelope.stage,
+                attempt=attempt,
+                messages=[AIMessage(content=_json(review.model_dump()))],
+            )
+            return review
 
-    async def run(self, envelope: TaskEnvelope) -> tuple[WorkerOutput | None, str]:
+    async def run(
+        self,
+        envelope: TaskEnvelope,
+        supervisor_messages: list[BaseMessage] | None = None,
+    ) -> tuple[WorkerOutput | None, str]:
+        supervisor_messages = supervisor_messages or []
         feedback = ""
         for attempt in range(1, _MAX_REVIEW_ATTEMPTS + 1):
-            if attempt == 1:
-                approved_stages = envelope.context.get("approved_stages", {})
-                emit_commitment_trace(
-                    actor="supervisor",
-                    event="context_ready",
-                    title="已整理本阶段上下文",
-                    status="completed",
-                    stage=envelope.stage,
-                    detail=(
-                        f"已读取 {len(approved_stages)} 个前置阶段结果，"
-                        f"本阶段包含 {len(envelope.acceptance_criteria)} 条验收条件。"
-                    ),
-                    payload={
-                        "approved_stage_numbers": list(approved_stages),
-                        "acceptance_criteria": envelope.acceptance_criteria,
-                    },
+            worker_feedback = feedback
+            try:
+                worker_output = await self._worker(
+                    envelope,
+                    worker_feedback,
+                    supervisor_messages,
+                    attempt,
                 )
-            emit_commitment_trace(
-                actor="worker",
-                event="started",
-                title="Worker 开始执行",
-                status="running",
-                stage=envelope.stage,
-                attempt=attempt,
-                detail=envelope.instruction,
-                payload={
-                    "task_envelope": envelope.model_dump(),
-                    "reviewer_feedback": feedback,
-                },
-            )
-            worker_output = await self._worker(envelope, feedback)
-            emit_commitment_trace(
-                actor="worker",
-                event="completed",
-                title="Worker 已生成候选结果",
-                status="completed",
-                stage=envelope.stage,
-                attempt=attempt,
-                payload=worker_output.model_dump(),
-            )
-            structure_error = _validate_stage_result(
-                envelope.stage, worker_output.result, envelope.context
-            )
-            if structure_error:
-                feedback = structure_error
-                emit_commitment_trace(
-                    actor="system",
-                    event="structure_rejected",
-                    title="结构校验退回候选结果",
-                    status="rejected",
+            except ValidationError as exc:
+                feedback = f"Worker输出不符合WorkerOutput结构：{exc}"
+                if envelope.stage == 7:
+                    feedback += "；阶段7必须返回result.contract_markdown"
+                review = ReviewOutput(
+                    approved=False,
+                    feedback=feedback,
+                    reasoning_summary="Worker输出结构无效，需要根据Schema修订后重试。",
+                )
+                emit_commitment_messages(
+                    actor="evaluator",
                     stage=envelope.stage,
                     attempt=attempt,
-                    detail=structure_error,
+                    messages=[
+                        HumanMessage(
+                            content=_json(
+                                {
+                                    "supervisor_messages": [
+                                        message.model_dump()
+                                        for message in supervisor_messages
+                                    ],
+                                    "task": envelope.model_dump(),
+                                    "reviewer_feedback": worker_feedback,
+                                    "worker_output": None,
+                                    "deterministic_validation_error": feedback,
+                                }
+                            )
+                        ),
+                        AIMessage(content=_json(review.model_dump())),
+                    ],
                 )
-                if attempt < _MAX_REVIEW_ATTEMPTS:
-                    emit_commitment_trace(
-                        actor="supervisor",
-                        event="retry_scheduled",
-                        title="Supervisor 已安排重试",
-                        status="running",
-                        stage=envelope.stage,
-                        attempt=attempt + 1,
-                        detail=f"下一轮 Worker 将根据结构校验反馈修订：{structure_error}",
-                    )
                 continue
-            emit_commitment_trace(
-                actor="evaluator",
-                event="started",
-                title="Evaluator 开始审核",
-                status="running",
-                stage=envelope.stage,
-                attempt=attempt,
-                detail=(
-                    "；".join(envelope.acceptance_criteria)
-                    or "按当前阶段结构与前置约束执行审核。"
-                ),
-                payload={
-                    "acceptance_criteria": envelope.acceptance_criteria,
-                    "worker_output": worker_output.model_dump(),
-                },
+            structure_error = _validate_stage_result(
+                envelope.stage,
+                worker_output.result,
+                supervisor_messages,
             )
-            audit_criteria = (
-                envelope.acceptance_criteria
-                or ["检查当前阶段结构、前置约束与候选结果是否一致。"]
-            )
-            for index, criterion in enumerate(audit_criteria, start=1):
-                emit_commitment_trace(
-                    actor="evaluator",
-                    event="criterion_started",
-                    title=f"Evaluator 检查项 {index}/{len(audit_criteria)}",
-                    status="running",
-                    stage=envelope.stage,
-                    attempt=attempt,
-                    detail=criterion,
-                )
-            emit_commitment_trace(
-                actor="evaluator",
-                event="synthesizing",
-                title="Evaluator 正在综合审核",
-                status="running",
-                stage=envelope.stage,
-                attempt=attempt,
-                detail="正在对照验收清单、Worker 候选结果和前置阶段约束形成结论。",
-            )
-            review = await self._evaluator(envelope, worker_output)
-            if review.reasoning_summary:
-                emit_commitment_trace(
-                    actor="evaluator",
-                    event="rationale_ready",
-                    title="Evaluator 已形成审核依据",
-                    status="running",
-                    stage=envelope.stage,
-                    attempt=attempt,
-                    detail=review.reasoning_summary,
-                )
-            emit_commitment_trace(
-                actor="evaluator",
-                event="completed",
-                title="Evaluator 已完成审核",
-                status="approved" if review.approved else "rejected",
-                stage=envelope.stage,
-                attempt=attempt,
-                detail=review.feedback,
-                payload=review.model_dump(),
+            review = await self._evaluator(
+                envelope,
+                worker_output,
+                supervisor_messages,
+                attempt,
+                structure_error or "",
+                worker_feedback,
             )
             if review.approved:
                 return worker_output, ""
             feedback = review.feedback or "Evaluator 未提供具体反馈"
-            if attempt < _MAX_REVIEW_ATTEMPTS:
-                emit_commitment_trace(
-                    actor="supervisor",
-                    event="retry_scheduled",
-                    title="Supervisor 已安排重试",
-                    status="running",
-                    stage=envelope.stage,
-                    attempt=attempt + 1,
-                    detail=f"下一轮 Worker 将根据 Evaluator 反馈修订：{feedback}",
-                )
-        emit_commitment_trace(
-            actor="supervisor",
-            event="review_failed",
-            title="审核轮次已用尽",
-            status="failed",
-            stage=envelope.stage,
-            detail=feedback,
-        )
         return None, feedback

@@ -13,7 +13,7 @@
 
 具体工作流:
     (1) before_agent 检查当前 thread 是否已经存在任务合同。
-    (2) 从原始消息提取 source_text，并启动隔离的九阶段 Supervisor 子图。
+    (2) 将原始消息作为 Supervisor messages 起点并启动隔离的九阶段子图。
     (3) 将子图 interrupt 原样传播给现有 run/resume 链路。
     (4) 子图完成后校验 stage、合同和最终消息。
     (5) 返回状态更新，由 LangGraph reducer 清空原消息并注入合同 HumanMessage。
@@ -35,7 +35,7 @@ from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from caspian.agents.commitment.delegation import ReviewedDelegator
 from caspian.agents.commitment.schemas import CommitmentState
-from caspian.agents.commitment.tracing import _write_commitment_trace
+from caspian.agents.commitment.tracing import _write_commitment_messages
 from caspian.agents.commitment.workflow import _build_supervisor
 
 class CommitmentMiddleware(AgentMiddleware):
@@ -59,28 +59,30 @@ class CommitmentMiddleware(AgentMiddleware):
         thread_id = getattr(getattr(runtime, "execution_info", None), "thread_id", None)
         if thread_id is None:
             raise ValueError("CommitmentMiddleware 无法获取 thread_id")
-        source_text = "\n\n".join(str(message.content) for message in messages)
         result: dict[str, Any] = {}
         async for mode, chunk in self._supervisor.astream(
             {
-                "messages": [
-                    HumanMessage(
-                        content="开始承诺流程。调用 delegate_with_review 执行 stage 1。"
-                    )
-                ],
+                "messages": list(messages),
                 "stage": 0,
                 "awaiting_human": None,
                 "artifacts": {},
-                "source_text": source_text,
                 "thread_id": str(thread_id),
                 "knowledge_files": [],
             },
             stream_mode=["values", "custom"],
         ):
             if mode == "custom":
-                _write_commitment_trace(chunk)
+                _write_commitment_messages(chunk)
             elif mode == "values":
                 result = chunk
+                _write_commitment_messages(
+                    {
+                        "type": "commitment_messages",
+                        "actor": "supervisor",
+                        "stage": int(chunk.get("stage", 0)),
+                        "messages": list(chunk.get("messages", [])),
+                    }
+                )
         if interrupts := result.get("__interrupt__"):
             raise GraphInterrupt(interrupts)
         if result.get("stage") != 9:

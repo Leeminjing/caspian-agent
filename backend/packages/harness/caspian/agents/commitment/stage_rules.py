@@ -2,7 +2,7 @@
 本文件对外提供九阶段指令、结果校验、路径片段校验和 Context7 结果解析函数。
 
 输入:
-    当前阶段编号、已批准阶段上下文、WorkerOutput 及 Context7 工具返回内容。
+    当前阶段编号、Supervisor messages、WorkerOutput 及 Context7 工具返回内容。
 
 输出:
     TaskEnvelope — 根据阶段规则生成的下一阶段任务信封。
@@ -12,7 +12,7 @@
 具体工作流:
     (1) 根据阶段编号选择指令、验收条件和执行时限。
     (2) 解析模型或 Context7 返回的结构化内容。
-    (3) 校验阶段结果与前序已批准结果的一致性。
+    (3) 从 Supervisor ToolMessage 读取前序结果并校验阶段一致性。
     (4) 输出 Supervisor 决定推进、重试或人工介入所需的确定性判断。
 
 示例:
@@ -23,7 +23,8 @@ import json
 import re
 from typing import Any
 
-from langchain.messages import AIMessage
+from langchain.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import BaseMessage
 from pydantic import BaseModel
 
 from caspian.agents.commitment.schemas import (
@@ -35,7 +36,7 @@ from caspian.agents.commitment.schemas import (
     WorkerOutput,
 )
 
-_HUMAN_REVIEW_STAGES = frozenset({3, 5, 6})
+_HUMAN_REVIEW_STAGES = frozenset({3, 5, 6, 7})
 
 _SAFE_SEGMENT = re.compile(r"^[A-Za-z0-9._-]+$")
 
@@ -80,7 +81,14 @@ _STAGE_INSTRUCTIONS: dict[int, tuple[str, list[str]]] = {
     ),
     5: ("识别涉及技术，对比项目当前版本与 Context7 候选最新稳定版。", ["每项技术有精确版本或latest-stable策略", "不得猜测版本"]),
     6: ("按已批准版本调用 Context7 获取官方技术知识。", ["每项知识含技术、版本、官方来源和正文", "不得使用非官方来源"]),
-    7: ("把已批准的阶段结果组装为完整 Markdown 任务合同。", ["合同包含九步已有结论", "合同可直接指导执行"]),
+    7: (
+        "把已批准的阶段结果组装为完整 Markdown 任务合同。",
+        [
+            "返回result.contract_markdown",
+            "合同包含九步已有结论",
+            "合同可直接指导执行",
+        ],
+    ),
     8: ("产出最终 task_contract。", ["内容与磁盘合同一致"]),
     9: ("准备 lead agent 的最终合同消息。", ["只包含合同和理论基础"]),
 }
@@ -106,10 +114,7 @@ def _slug_segment(value: str, label: str) -> str:
 
 def _stage_envelope(stage: int, state: dict[str, Any], feedback: str = "") -> TaskEnvelope:
     instruction, criteria = _STAGE_INSTRUCTIONS[stage]
-    context = {
-        "source_text": state.get("source_text", ""),
-        "approved_stages": state.get("artifacts", {}),
-    }
+    context = {}
     if feedback:
         context["human_feedback"] = feedback
     return TaskEnvelope(
@@ -281,12 +286,35 @@ def _normalize_stage_three_result(
         }}
     )
 
-def _stage_three_requirements(context: dict[str, Any] | None) -> list[str]:
-    stage_two = (
-        (context or {})
-        .get("approved_stages", {})
-        .get("2", {})
+def _message_payload(message: BaseMessage) -> dict[str, Any] | None:
+    if not isinstance(message, ToolMessage):
+        return None
+    try:
+        value = json.loads(str(message.content))
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+def _stage_result(messages: list[BaseMessage], stage: int) -> dict[str, Any]:
+    for message in reversed(messages):
+        payload = _message_payload(message)
+        if payload and payload.get("stage") == stage:
+            result = payload.get("result")
+            if isinstance(result, dict):
+                return result
+    return {}
+
+def _source_text(messages: list[BaseMessage]) -> str:
+    return "\n\n".join(
+        str(message.content)
+        for message in messages
+        if isinstance(message, HumanMessage)
     )
+
+def _stage_three_requirements(
+    messages: list[BaseMessage],
+) -> list[str]:
+    stage_two = _stage_result(messages, 2)
     requirements = stage_two.get("requirements", [])
     discarded = set(stage_two.get("discarded_requirements", []))
     if not isinstance(requirements, list):
@@ -300,7 +328,7 @@ def _stage_three_requirements(context: dict[str, Any] | None) -> list[str]:
 def _validate_stage_result(
     stage: int,
     result: dict[str, Any],
-    context: dict[str, Any] | None = None,
+    messages: list[BaseMessage] | None = None,
 ) -> str | None:
     if not result:
         return "结果为空"
@@ -352,7 +380,7 @@ def _validate_stage_result(
             for item in requirements
         ):
             return "阶段3必须返回 requirements 列表，priority 仅允许1、2、3"
-        expected = _stage_three_requirements(context)
+        expected = _stage_three_requirements(messages or [])
         actual = [
             str(item.get("requirement") or item.get("text")).strip()
             for item in requirements
@@ -368,7 +396,10 @@ def _validate_stage_result(
         knowledge = result.get("knowledge")
         if not isinstance(knowledge, list) or not knowledge:
             return "阶段6必须返回非空 knowledge 列表"
-    if stage == 7 and not isinstance(result.get("contract_markdown"), str):
+    if stage == 7 and (
+        not isinstance(result.get("contract_markdown"), str)
+        or not result["contract_markdown"].strip()
+    ):
         return "阶段7必须返回 contract_markdown"
     return None
 

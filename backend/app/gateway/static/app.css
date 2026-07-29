@@ -922,6 +922,32 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.review-contract-editor {
+  display: block;
+  width: 100%;
+  min-height: 420px;
+  max-height: 62vh;
+  resize: vertical;
+  overflow: auto;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 17px;
+  color: #303438;
+  background: #fcfcfb;
+  font-family: Consolas, "SFMono-Regular", monospace;
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.review-contract-editor[hidden] {
+  display: none;
+}
+
+.review-contract-editor:focus {
+  outline: 2px solid rgb(8 127 115 / 18%);
+  outline-offset: -2px;
+}
+
 .review-actions,
 .revision-footer {
   display: flex;

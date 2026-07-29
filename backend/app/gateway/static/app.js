@@ -8,7 +8,7 @@ const STAGES = {
   4: "汇总必要输入",
   5: "确认技术版本",
   6: "确认理论知识",
-  7: "写入任务合同",
+  7: "确认并写入任务合同",
   8: "生成最终合同",
   9: "移交 Lead Agent",
 };
@@ -30,6 +30,8 @@ const state = {
   pendingInterrupt: null,
   uploads: [],
   renderedMessageIds: new Set(),
+  commitmentMessageIds: new Set(),
+  commitmentTraceItems: new Map(),
   tracePanel: null,
   traceStartedAt: 0,
   traceTimer: null,
@@ -92,6 +94,8 @@ function selectThread(id) {
   state.pendingInterrupt = null;
   state.uploads = [];
   state.renderedMessageIds.clear();
+  state.commitmentMessageIds.clear();
+  state.commitmentTraceItems.clear();
   state.tracePanel = null;
   setBusy(false);
   setStatus("ready", "就绪");
@@ -227,9 +231,9 @@ function collectMessages(value, found = []) {
 }
 
 function consumeGraphEvent(data) {
-  const traces = collectCommitmentTraces(data);
-  if (traces.length) {
-    traces.forEach(appendCommitmentTrace);
+  const batches = collectCommitmentMessages(data);
+  if (batches.length) {
+    batches.forEach(appendCommitmentMessages);
     return;
   }
   collectMessages(data).forEach((message) => {
@@ -240,24 +244,101 @@ function consumeGraphEvent(data) {
   });
 }
 
-function collectCommitmentTraces(value, found = []) {
+function collectCommitmentMessages(value, found = []) {
   if (!value || typeof value !== "object") return found;
-  if (value.type === "commitment_trace") {
+  if (value.type === "commitment_messages" && Array.isArray(value.messages)) {
     found.push(value);
     return found;
   }
-  Object.values(value).forEach((item) => collectCommitmentTraces(item, found));
+  Object.values(value).forEach((item) => collectCommitmentMessages(item, found));
   return found;
+}
+
+function appendCommitmentMessages(batch) {
+  removeEmptyState();
+  ensureTracePanel();
+  const actor = batch.actor || "supervisor";
+  const stage = Number(batch.stage || 0);
+  const attempt = Number(batch.attempt || 0) || undefined;
+  batch.messages.forEach((message) => {
+    const type = String(message.type || message.role || "").toLowerCase();
+    const text = contentText(message.content);
+    const key = message.id || `${actor}:${stage}:${attempt || 0}:${type}:${text}`;
+    const signature = JSON.stringify(message);
+    if (type.includes("human")) {
+      if (actor === "supervisor" || state.commitmentMessageIds.has(key)) return;
+      state.commitmentMessageIds.add(key);
+      appendCommitmentTrace({
+        actor,
+        stage,
+        attempt,
+        title: `${TRACE_ACTORS[actor] || actor} 收到输入`,
+        status: "running",
+        detail: "已接收当前任务、Supervisor 消息历史与验收条件。",
+        payload: message,
+      });
+      return;
+    }
+    if (actor !== "supervisor" && (type.includes("chunk") || !message.id)) {
+      appendTraceOutputDelta({
+        actor,
+        stage,
+        attempt,
+        title: `${TRACE_ACTORS[actor] || actor} 正在生成`,
+        payload: {
+          stream_id: `${actor}-${stage}-${attempt || 0}`,
+          delta: text,
+        },
+      }, isNearBottom($("#messages")));
+      return;
+    }
+    if (state.commitmentMessageIds.has(key)) {
+      const existing = state.commitmentTraceItems.get(key);
+      if (actor !== "supervisor" || !type.includes("tool")
+          || !existing || existing.signature === signature) return;
+      existing.item.remove();
+      state.commitmentMessageIds.delete(key);
+      state.commitmentTraceItems.delete(key);
+    }
+    state.commitmentMessageIds.add(key);
+    let payload = message;
+    let status = "running";
+    let title = `${TRACE_ACTORS[actor] || actor} 消息`;
+    if (type.includes("tool")) {
+      try {
+        payload = JSON.parse(text);
+      } catch {
+        payload = message;
+      }
+      status = ["approved", "revised"].includes(payload?.status)
+        ? "completed"
+        : "failed";
+      title = "delegate_with_review 最终返回";
+    } else if (actor === "supervisor") {
+      title = "Supervisor 委派阶段任务";
+    }
+    const messageStage = Number(
+      payload?.stage || message.tool_calls?.[0]?.args?.stage || stage
+    );
+    const item = appendCommitmentTrace({
+      actor,
+      stage: messageStage,
+      attempt,
+      title,
+      status,
+      detail: type.includes("tool") ? "" : text,
+      payload,
+    });
+    if (actor === "supervisor" && type.includes("tool")) {
+      state.commitmentTraceItems.set(key, { item, signature });
+    }
+  });
 }
 
 function appendCommitmentTrace(trace) {
   const followMessages = isNearBottom($("#messages"));
   removeEmptyState();
   ensureTracePanel();
-  if (trace.event === "output_delta") {
-    appendTraceOutputDelta(trace, followMessages);
-    return;
-  }
   const item = document.createElement("li");
   item.className = `trace-item trace-${trace.actor} trace-${trace.status}`;
   item.dataset.actor = trace.actor;
@@ -297,6 +378,7 @@ function appendCommitmentTrace(trace) {
   updateTraceCount();
   setProgress(Number(trace.stage || 0), true);
   if (followMessages) scrollMessages();
+  return item;
 }
 
 function ensureTracePanel() {
@@ -427,6 +509,7 @@ function showReview(interrupt) {
 
   const fragment = $("#review-template").content.cloneNode(true);
   const panel = $(".review-panel", fragment);
+  panel.dataset.stage = String(stage);
   $(".review-kicker", panel).textContent = `第 ${stage} 步`;
   $("h3", panel).textContent = STAGES[stage] || "人工确认";
   $(".review-draft", panel).textContent = prettyDraft(payload.draft);
@@ -437,6 +520,16 @@ function showReview(interrupt) {
     $(".revise-toggle", panel).textContent =
       payload.revise_label || (stage === 2 ? "解决矛盾" : "提出修订");
   }
+  const contract = payload.draft?.contract_markdown;
+  if (stage === 7 && typeof contract === "string") {
+    $(".review-draft", panel).hidden = true;
+    const editor = $(".review-contract-editor", panel);
+    editor.hidden = false;
+    editor.value = contract;
+    editor.dataset.original = contract.trim();
+    $(".approve-button", panel).textContent = "确认并写入";
+    $(".revise-toggle", panel).textContent = "反馈重写";
+  }
   bindReview(panel);
   $("#messages").append(panel);
   scrollMessages();
@@ -445,9 +538,36 @@ function showReview(interrupt) {
 function bindReview(panel) {
   const form = $(".revision-form", panel);
   const input = $(".revision-input", panel);
+  const contractEditor = $(".review-contract-editor", panel);
+  const approveButton = $(".approve-button", panel);
+  const stage = Number(panel.dataset.stage || 0);
   let mode = "feedback";
 
-  $(".approve-button", panel).addEventListener("click", () => {
+  const updateContractAction = () => {
+    if (stage !== 7) return;
+    approveButton.textContent =
+      contractEditor.value.trim() === contractEditor.dataset.original
+        ? "确认并写入"
+        : "提交编辑并审核";
+  };
+
+  contractEditor.addEventListener("input", updateContractAction);
+  approveButton.addEventListener("click", () => {
+    if (stage === 7) {
+      const contract = contractEditor.value.trim();
+      if (!contract) {
+        $(".review-error", panel).textContent = "任务合同不能为空";
+        return;
+      }
+      if (contract !== contractEditor.dataset.original) {
+        disableReview(panel);
+        resumeRun({
+          decision: "revise",
+          replacement: { contract_markdown: contract },
+        });
+        return;
+      }
+    }
     disableReview(panel);
     resumeRun({ decision: "approve" });
   });
@@ -516,7 +636,7 @@ async function streamRun(body) {
       "Content-Type": "application/json",
       "X-CSRF-Token": csrfToken(),
     },
-    body: JSON.stringify({ ...body, stream_mode: ["values", "custom"] }),
+    body: JSON.stringify({ ...body, stream_mode: ["values"] }),
   });
 
   if (response.status === 401) {
@@ -556,7 +676,6 @@ function handleSseFrame(frame) {
     // Keep plain-text SSE payloads readable.
   }
   if (event === "events") consumeGraphEvent(data);
-  if (event === "commitment_trace") appendCommitmentTrace(data);
   if (event === "interrupt") showReview(data);
   if (event === "end" && !state.pendingInterrupt) finishTracePanel("已完成");
   if (event === "error") {

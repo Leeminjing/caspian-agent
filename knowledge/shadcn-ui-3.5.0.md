@@ -1,13 +1,11 @@
 # shadcn/ui 3.5.0
 
-Source: https://github.com/shadcn-ui/ui/blob/main/apps/v4/content/docs/installation/manual.mdx
+Source: https://github.com/shadcn-ui/ui/blob/main/packages/shadcn/package.json
 
-### Install Core shadcn/ui Dependencies
+### Inspect script confirms local `node` invocation
 
-Source: https://github.com/shadcn-ui/ui/blob/main/apps/v4/content/docs/installation/manual.mdx
+The official inspect script uses `node dist/index.js mcp` directly — proving the server can be invoked without npx by pointing to the built CLI entry point.
 
-Install the essential shadcn/ui dependencies required for component functionality using npm.
-
-```bash
-npm install shadcn class-variance-authority clsx tailwind-merge lucide-react tw-animate-css
+```json
+"mcp:inspect": "pnpm dlx @modelcontextprotocol/inspector node dist/index.js mcp"
 ```

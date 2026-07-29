@@ -44,15 +44,23 @@ class FrontendTests(unittest.TestCase):
         self.assertIn("resume: payload", script)
         self.assertIn('allowed.includes("approve")', script)
         self.assertIn("/uploads", script)
-        self.assertIn('stream_mode: ["values", "custom"]', script)
-        self.assertIn('event === "commitment_trace"', script)
-        self.assertIn("collectCommitmentTraces", script)
+        self.assertIn('stream_mode: ["values"]', script)
+        self.assertIn('"commitment_messages"', script)
+        self.assertIn("collectCommitmentMessages", script)
+        self.assertIn("commitmentTraceItems", script)
+        self.assertIn("existing.signature === signature", script)
         self.assertIn("reasoning_summary", script)
-        self.assertIn('trace.event === "output_delta"', script)
+        self.assertIn("appendTraceOutputDelta", script)
         self.assertIn("trace-elapsed", script)
         self.assertIn("isNearBottom", script)
         self.assertIn('event === "end" && !state.pendingInterrupt', script)
         self.assertIn('setStatus("ready", "就绪")', script)
+        self.assertIn("review-contract-editor", script)
+        self.assertIn("提交编辑并审核", script)
+        self.assertIn(
+            "payload?.stage || message.tool_calls?.[0]?.args?.stage || stage",
+            script,
+        )
 
     def test_frontend_assets_are_public(self):
         self.assertIn("/", _AUTH_WHITELIST_PATHS)

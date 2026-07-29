@@ -1,19 +1,15 @@
 # Next.js 16.2.9
 
-Source: https://github.com/vercel/next.js/blob/canary/docs/01-app/03-api-reference/08-turbopack.mdx
+Source: https://github.com/vercel/next.js/blob/canary/docs/01-app/03-api-reference/02-components/image.mdx
 
-### Configure default Next.js scripts in package.json
+### Configure Default Image Qualities in Next.js
 
-Source: https://github.com/vercel/next.js/blob/canary/docs/01-app/03-api-reference/08-turbopack.mdx
+Specify the default allowed image quality values in `next.config.js`. This field is required starting with Next.js 16.
 
-Turbopack is the default bundler in Next.js, requiring no additional configuration in your standard scripts.
-
-```json
-{
-  "scripts": {
-    "dev": "next dev",
-    "build": "next build",
-    "start": "next start"
-  }
+```js
+module.exports = {
+  images: {
+    qualities: [75],
+  },
 }
 ```

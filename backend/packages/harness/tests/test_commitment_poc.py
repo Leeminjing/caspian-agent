@@ -9,6 +9,7 @@
 """
 
 import asyncio
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -55,11 +56,35 @@ from caspian.agents.commitment import (
     _write_knowledge,
     build_delegate_with_review_tool,
 )
-from caspian.agents.commitment.tracing import emit_commitment_trace
+from caspian.agents.commitment.tracing import emit_commitment_messages
 from caspian.config.commitment_config import CommitmentConfig
 from caspian.mcp.tools import get_context7_tools
 from caspian.runtime.runs.schemas import RunStatus
 from caspian.runtime.runs.worker import _extract_interrupts, run_agent
+
+
+def supervisor_stage_messages(stage: int, result: dict) -> list:
+    call_id = f"stage-{stage}"
+    return [
+        HumanMessage(content="task"),
+        AIMessage(
+            content=f"stage {stage}",
+            tool_calls=[
+                {
+                    "name": "delegate_with_review",
+                    "args": {"stage": stage},
+                    "id": call_id,
+                    "type": "tool_call",
+                }
+            ],
+        ),
+        ToolMessage(
+            content=json.dumps(
+                {"status": "approved", "stage": stage, "result": result}
+            ),
+            tool_call_id=call_id,
+        ),
+    ]
 
 
 class StubDelegator(ReviewedDelegator):
@@ -68,14 +93,28 @@ class StubDelegator(ReviewedDelegator):
         self.approvals = approvals
         self.worker_calls = 0
 
-    async def _worker(self, envelope, feedback):
+    async def _worker(
+        self,
+        envelope,
+        feedback,
+        supervisor_messages=None,
+        attempt=1,
+    ):
         self.worker_calls += 1
         return WorkerOutput(
             result={"goal": f"attempt-{self.worker_calls}"},
             artifact_ref=None,
         )
 
-    async def _evaluator(self, envelope, worker_output):
+    async def _evaluator(
+        self,
+        envelope,
+        worker_output,
+        supervisor_messages=None,
+        attempt=1,
+        structure_error="",
+        reviewer_feedback="",
+    ):
         approved = self.approvals[self.worker_calls - 1]
         return ReviewOutput(approved=approved, feedback="retry")
 
@@ -86,12 +125,10 @@ class FakeSupervisor:
 
     async def astream(self, _input, stream_mode):
         yield "custom", {
-            "type": "commitment_trace",
+            "type": "commitment_messages",
             "actor": "worker",
-            "event": "completed",
-            "title": "Worker 已完成",
-            "status": "completed",
             "stage": 1,
+            "messages": [AIMessage(content="done")],
         }
         yield "values", self.result
 
@@ -170,7 +207,7 @@ class AlwaysApprovedDelegator(ReviewedDelegator):
     def __init__(self):
         super().__init__(None, [])
 
-    async def run(self, envelope):
+    async def run(self, envelope, supervisor_messages=None):
         return WorkerOutput(result={"goal": "approved"}), ""
 
 
@@ -178,7 +215,7 @@ class NeverReturningDelegator(ReviewedDelegator):
     def __init__(self):
         super().__init__(None, [])
 
-    async def run(self, envelope):
+    async def run(self, envelope, supervisor_messages=None):
         await asyncio.Event().wait()
 
 
@@ -190,12 +227,10 @@ class FakeAgent:
         yield (
             "custom",
             {
-                "type": "commitment_trace",
+                "type": "commitment_messages",
                 "actor": "worker",
-                "event": "started",
-                "title": "Worker 开始执行",
-                "status": "running",
                 "stage": 1,
+                "messages": [HumanMessage(content="task")],
             },
         )
         yield (
@@ -261,40 +296,25 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 stream_id="worker-1",
             )
         self.assertEqual(result["messages"][0].content, "公开输出")
-        self.assertEqual(events[0]["event"], "output_delta")
-        self.assertEqual(events[0]["payload"]["delta"], "公开输出")
+        self.assertEqual(events[0]["type"], "commitment_messages")
+        self.assertEqual(events[0]["messages"][0].content, "task")
+        self.assertEqual(events[1]["messages"][0].content, "公开输出")
         self.assertNotIn("私密推理", str(events))
 
-    def test_commitment_trace_uses_custom_stream_writer(self):
+    def test_commitment_messages_use_real_message_array(self):
         events = []
         with patch(
             "caspian.agents.commitment.tracing.get_stream_writer",
             return_value=events.append,
         ):
-            emit_commitment_trace(
+            emit_commitment_messages(
                 actor="worker",
-                event="completed",
-                title="Worker 已完成",
-                status="completed",
                 stage=2,
                 attempt=1,
-                payload={"result": "ok"},
+                messages=[AIMessage(content="ok")],
             )
-        self.assertEqual(
-            events,
-            [
-                {
-                    "type": "commitment_trace",
-                    "actor": "worker",
-                    "event": "completed",
-                    "title": "Worker 已完成",
-                    "status": "completed",
-                    "stage": 2,
-                    "attempt": 1,
-                    "payload": {"result": "ok"},
-                }
-            ],
-        )
+        self.assertEqual(events[0]["type"], "commitment_messages")
+        self.assertEqual(events[0]["messages"][0].content, "ok")
 
     async def test_context7_api_key_is_sent_as_mcp_header(self):
         with (
@@ -324,11 +344,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             TaskEnvelope(
                 stage=3,
                 instruction="分配优先级",
-                context={
-                    "approved_stages": {
-                        "2": {"requirements": ["包含测试和详细文档"]}
-                    }
-                },
+                context={},
                 acceptance_criteria=["priority仅允许1到3"],
             ),
             WorkerOutput(
@@ -341,6 +357,10 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     ]
                 }
             ),
+            supervisor_stage_messages(
+                2,
+                {"requirements": ["包含测试和详细文档"]},
+            ),
         )
         system_prompt = "\n".join(
             str(message.content)
@@ -348,6 +368,44 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             if message.type == "system"
         )
         self.assertIn("第二步不包含优先级", system_prompt)
+
+    async def test_evaluator_receives_complete_worker_review_context(self):
+        model = RecordingReviewModel()
+        await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(
+                stage=3,
+                instruction="分配优先级",
+                context={"human_feedback": "人工要求"},
+                acceptance_criteria=["逐项定级"],
+            ),
+            WorkerOutput(result={"requirements": []}),
+            supervisor_stage_messages(2, {"requirements": []}),
+            attempt=2,
+            reviewer_feedback="上一轮审核反馈",
+        )
+        evaluator_message = next(
+            message
+            for message in model.recorded_messages
+            if message.type == "human"
+        )
+        evaluator_input = json.loads(str(evaluator_message.content))
+        self.assertEqual(
+            evaluator_input["task"]["context"]["human_feedback"],
+            "人工要求",
+        )
+        self.assertEqual(
+            evaluator_input["reviewer_feedback"],
+            "上一轮审核反馈",
+        )
+        self.assertEqual(
+            evaluator_input["worker_output"]["result"],
+            {"requirements": []},
+        )
+        self.assertIn("deterministic_validation_error", evaluator_input)
+        self.assertEqual(
+            len(evaluator_input["supervisor_messages"]),
+            3,
+        )
 
     def test_stage_three_normalizes_freeform_priorities_and_exact_text(self):
         normalized = _normalize_stage_three_result(
@@ -407,10 +465,11 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             TaskEnvelope(
                 stage=5,
                 instruction="核验版本",
-                context={"approved_stages": {"3": {"requirements": []}}},
+                context={},
                 acceptance_criteria=[],
             ),
             "",
+            supervisor_stage_messages(3, {"requirements": []}),
         )
         self.assertCountEqual(resolve_calls, ["React", "Next.js"])
         self.assertCountEqual(
@@ -486,10 +545,11 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             TaskEnvelope(
                 stage=5,
                 instruction="核验版本",
-                context={"approved_stages": {"3": {"requirements": []}}},
+                context={},
                 acceptance_criteria=[],
             ),
             "",
+            supervisor_stage_messages(3, {"requirements": []}),
         )
         technology = output.result["technologies"][0]
         self.assertEqual(technology["version"], "latest-stable")
@@ -499,11 +559,10 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def test_stage_three_must_copy_stage_two_requirements_exactly(self):
-        context = {
-            "approved_stages": {
-                "2": {"requirements": ["包含测试和详细文档"]}
-            }
-        }
+        messages = supervisor_stage_messages(
+            2,
+            {"requirements": ["包含测试和详细文档"]},
+        )
         self.assertIsNone(
             _validate_stage_result(
                 3,
@@ -515,7 +574,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         }
                     ]
                 },
-                context,
+                messages,
             )
         )
         self.assertIsNotNone(
@@ -526,19 +585,18 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         {"requirement": "包含测试", "priority": 3}
                     ]
                 },
-                context,
+                messages,
             )
         )
 
     def test_stage_three_excludes_discarded_stage_two_requirements(self):
-        context = {
-            "approved_stages": {
-                "2": {
-                    "requirements": ["保留实时同步", "放弃纯静态限制"],
-                    "discarded_requirements": ["放弃纯静态限制"],
-                }
-            }
-        }
+        messages = supervisor_stage_messages(
+            2,
+            {
+                "requirements": ["保留实时同步", "放弃纯静态限制"],
+                "discarded_requirements": ["放弃纯静态限制"],
+            },
+        )
         self.assertIsNone(
             _validate_stage_result(
                 3,
@@ -547,7 +605,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         {"requirement": "保留实时同步", "priority": 3}
                     ]
                 },
-                context,
+                messages,
             )
         )
         self.assertIsNotNone(
@@ -559,7 +617,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         {"requirement": "放弃纯静态限制", "priority": 1},
                     ]
                 },
-                context,
+                messages,
             )
         )
 
@@ -603,9 +661,83 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(error, "retry")
         self.assertEqual(delegator.worker_calls, 3)
 
-    async def test_evaluator_publishes_auditable_review_progress(self):
+    async def test_worker_schema_error_retries_inside_delegator(self):
+        class SchemaRetryDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+                self.worker_calls = 0
+
+            async def _worker(
+                self,
+                envelope,
+                feedback,
+                supervisor_messages=None,
+                attempt=1,
+            ):
+                self.worker_calls += 1
+                if self.worker_calls == 1:
+                    return WorkerOutput.model_validate(
+                        {"result": "# invalid contract"}
+                    )
+                self.assert_feedback = feedback
+                return WorkerOutput(
+                    result={"contract_markdown": "# Contract"}
+                )
+
+            async def _evaluator(
+                self,
+                envelope,
+                worker_output,
+                supervisor_messages=None,
+                attempt=1,
+                structure_error="",
+                reviewer_feedback="",
+            ):
+                return ReviewOutput(approved=True)
+
         events = []
-        delegator = StubDelegator([True])
+        delegator = SchemaRetryDelegator()
+        with patch(
+            "caspian.agents.commitment.tracing.get_stream_writer",
+            return_value=events.append,
+        ):
+            output, error = await delegator.run(
+                TaskEnvelope(stage=7, instruction="contract")
+            )
+
+        self.assertEqual(error, "")
+        self.assertEqual(output.result["contract_markdown"], "# Contract")
+        self.assertEqual(delegator.worker_calls, 2)
+        self.assertIn("result.contract_markdown", delegator.assert_feedback)
+        self.assertEqual(events[0]["actor"], "evaluator")
+        review = json.loads(events[0]["messages"][1].content)
+        self.assertFalse(review["approved"])
+
+    async def test_unexpected_tool_error_is_not_wrapped_as_tool_message(self):
+        class ExplodingDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+
+            async def run(self, envelope, supervisor_messages=None):
+                raise RuntimeError("unexpected failure")
+
+        supervisor = _build_supervisor(ExplodingDelegator())
+        with self.assertRaisesRegex(RuntimeError, "unexpected failure"):
+            await supervisor.ainvoke(
+                {
+                    "messages": [HumanMessage(content="start")],
+                    "stage": 0,
+                    "awaiting_human": None,
+                    "artifacts": {},
+                    "source_text": "goal",
+                    "thread_id": "error-thread",
+                    "knowledge_files": [],
+                }
+            )
+
+    async def test_evaluator_controls_retry_without_supervisor_trace(self):
+        events = []
+        delegator = StubDelegator([False, True])
         with patch(
             "caspian.agents.commitment.tracing.get_stream_writer",
             return_value=events.append,
@@ -617,21 +749,8 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     acceptance_criteria=["目标明确", "边界完整"],
                 )
             )
-        evaluator_events = [
-            event["event"]
-            for event in events
-            if event["actor"] == "evaluator"
-        ]
-        self.assertEqual(
-            evaluator_events,
-            [
-                "started",
-                "criterion_started",
-                "criterion_started",
-                "synthesizing",
-                "completed",
-            ],
-        )
+        self.assertEqual(delegator.worker_calls, 2)
+        self.assertEqual(events, [])
 
     async def test_delegate_tool_advances_exactly_one_stage(self):
         model = ScriptedToolModel(next_stage=1)
@@ -653,6 +772,22 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result["stage"], 1)
         self.assertEqual(result["artifacts"]["1"]["goal"], "approved")
+        tool_index = next(
+            index
+            for index, message in enumerate(result["messages"])
+            if isinstance(message, ToolMessage)
+        )
+        tool_message = result["messages"][tool_index]
+        supervisor_message = result["messages"][tool_index - 1]
+        payload = json.loads(tool_message.content)
+        self.assertEqual(
+            set(payload),
+            {"status", "stage", "result", "artifact_ref"},
+        )
+        self.assertEqual(
+            supervisor_message.tool_calls[0]["id"],
+            tool_message.tool_call_id,
+        )
 
     async def test_stage_timeout_becomes_human_revision_instead_of_hanging(self):
         supervisor = _build_supervisor(NeverReturningDelegator())
@@ -679,41 +814,177 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["allowed_decisions"], ["revise"])
         self.assertIn("超时", payload["error"])
 
-    async def test_human_approval_resumes_same_tool_call(self):
-        model = ScriptedToolModel(next_stage=4)
-        agent = create_agent(
-            model=model,
-            tools=[
-                build_delegate_with_review_tool(AlwaysApprovedDelegator())
-            ],
-            state_schema=CommitmentState,
-            checkpointer=InMemorySaver(),
-        )
-        config = {"configurable": {"thread_id": "approval-thread"}}
-        first = await agent.ainvoke(
+    async def test_human_feedback_does_not_append_supervisor_messages(self):
+        class FeedbackDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+                self.feedbacks = []
+
+            async def run(self, envelope, supervisor_messages=None):
+                self.feedbacks.append(
+                    envelope.context.get("human_feedback", "")
+                )
+                return WorkerOutput(result={"goal": "approved"}), ""
+
+        delegator = FeedbackDelegator()
+        supervisor = _build_supervisor(delegator)
+        supervisor.checkpointer = InMemorySaver()
+        config = {"configurable": {"thread_id": "feedback-thread"}}
+        first = await supervisor.ainvoke(
             {
                 "messages": [HumanMessage(content="continue")],
-                "stage": 3,
-                "awaiting_human": 3,
-                "artifacts": {
-                    "3": {
-                        "requirements": [
-                            {"text": "must", "priority": 3}
-                        ]
-                    }
-                },
+                "stage": 2,
+                "awaiting_human": None,
+                "artifacts": {},
                 "source_text": "goal",
-                "thread_id": "approval-thread",
+                "thread_id": "feedback-thread",
             },
             config=config,
         )
         self.assertEqual(first["__interrupt__"][0].value["stage"], 3)
-        resumed = await agent.ainvoke(
-            Command(resume={"decision": "approve"}),
+        self.assertEqual(len(first["messages"]), 3)
+        first_ids = [message.id for message in first["messages"]]
+
+        resumed = await supervisor.ainvoke(
+            Command(
+                resume={
+                    "decision": "revise",
+                    "feedback": "human-only-feedback",
+                }
+            ),
             config=config,
         )
+        self.assertEqual(resumed["__interrupt__"][0].value["stage"], 3)
         self.assertEqual(resumed["stage"], 3)
-        self.assertIsNone(resumed["awaiting_human"])
+        self.assertEqual(len(resumed["messages"]), 3)
+        self.assertEqual(
+            [message.id for message in resumed["messages"]],
+            first_ids,
+        )
+        self.assertEqual(delegator.feedbacks[-1], "human-only-feedback")
+        self.assertNotIn(
+            "human-only-feedback",
+            json.dumps(
+                [
+                    message.model_dump()
+                    for message in resumed["messages"]
+                ],
+                ensure_ascii=False,
+                default=str,
+            ),
+        )
+
+    async def test_stage_seven_writes_only_the_approved_edited_contract(self):
+        class ContractDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+
+            async def run(self, envelope, supervisor_messages=None):
+                self.assert_stage = envelope.stage
+                return (
+                    WorkerOutput(
+                        result={"contract_markdown": "# Draft contract"}
+                    ),
+                    "",
+                )
+
+            async def _evaluator(
+                self,
+                envelope,
+                worker_output,
+                supervisor_messages=None,
+                attempt=1,
+                structure_error="",
+                reviewer_feedback="",
+            ):
+                return ReviewOutput(
+                    approved=True,
+                    reasoning_summary="编辑后的合同满足验收条件。",
+                )
+
+        supervisor = _build_supervisor(ContractDelegator())
+        supervisor.checkpointer = InMemorySaver()
+        config = {"configurable": {"thread_id": "contract-review-thread"}}
+        initial_state = {
+            "messages": [HumanMessage(content="continue")],
+            "stage": 6,
+            "awaiting_human": None,
+            "artifacts": {"6": {"knowledge": []}},
+            "source_text": "goal",
+            "thread_id": "contract-review-thread",
+            "knowledge_files": [],
+        }
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "caspian.agents.commitment.artifacts._PROJECT_ROOT",
+            Path(temp_dir),
+        ):
+            first = await supervisor.ainvoke(initial_state, config=config)
+            contract_path = (
+                Path(temp_dir)
+                / "requirements"
+                / "contract-review-thread"
+                / "task-contract.md"
+            )
+            self.assertEqual(first["__interrupt__"][0].value["stage"], 7)
+            self.assertFalse(contract_path.exists())
+            self.assertEqual(len(first["messages"]), 3)
+            stage_seven_ids = [
+                message.id for message in first["messages"]
+            ]
+
+            revised = await supervisor.ainvoke(
+                Command(
+                    resume={
+                        "decision": "revise",
+                        "replacement": {
+                            "contract_markdown": "# Edited contract"
+                        },
+                    }
+                ),
+                config=config,
+            )
+            self.assertEqual(
+                revised["__interrupt__"][0]
+                .value["draft"]["contract_markdown"],
+                "# Edited contract",
+            )
+            self.assertFalse(contract_path.exists())
+            self.assertEqual(len(revised["messages"]), 3)
+            self.assertEqual(
+                [message.id for message in revised["messages"]],
+                stage_seven_ids,
+            )
+
+            completed = await supervisor.ainvoke(
+                Command(resume={"decision": "approve"}),
+                config=config,
+            )
+            self.assertEqual(completed["stage"], 9)
+            self.assertEqual(completed["task_contract"], "# Edited contract")
+            self.assertEqual(
+                contract_path.read_text(encoding="utf-8"),
+                "# Edited contract\n",
+            )
+            stage_seven_calls = [
+                call
+                for message in completed["messages"]
+                if isinstance(message, AIMessage)
+                for call in message.tool_calls
+                if call["args"]["stage"] == 7
+            ]
+            stage_seven_tools = [
+                message
+                for message in completed["messages"]
+                if isinstance(message, ToolMessage)
+                and json.loads(message.content).get("stage") == 7
+            ]
+            self.assertEqual(len(stage_seven_calls), 1)
+            self.assertEqual(len(stage_seven_tools), 1)
+            self.assertEqual(
+                stage_seven_calls[0]["id"],
+                stage_seven_tools[0].tool_call_id,
+            )
 
     async def test_human_replacement_is_validated(self):
         state = {
@@ -722,7 +993,14 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     "requirements": ["must"],
                     "discarded_requirements": [],
                 }
-            }
+            },
+            "messages": supervisor_stage_messages(
+                2,
+                {
+                    "requirements": ["must"],
+                    "discarded_requirements": [],
+                },
+            ),
         }
         revised, error = await _review_human_revision(
             {
@@ -1118,10 +1396,10 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         runtime = SimpleNamespace(
             execution_info=SimpleNamespace(thread_id="thread-1")
         )
-        traces = []
+        batches = []
         with patch(
-            "caspian.agents.commitment.middleware._write_commitment_trace",
-            side_effect=traces.append,
+            "caspian.agents.commitment.middleware._write_commitment_messages",
+            side_effect=batches.append,
         ):
             update = await middleware._run(
                 {"messages": [HumanMessage(content="raw goal")]},
@@ -1132,7 +1410,9 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsInstance(update["messages"][0], RemoveMessage)
         self.assertIsInstance(update["messages"][1], HumanMessage)
         self.assertNotIn("Worker", update["messages"][1].content)
-        self.assertEqual(traces[0]["event"], "completed")
+        self.assertTrue(
+            all(batch["type"] == "commitment_messages" for batch in batches)
+        )
 
     async def test_nested_interrupt_reaches_parent_and_resumes(self):
         async def pause_for_review(_state):
@@ -1221,7 +1501,11 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(manager.updates[-1][1]["status"], RunStatus.interrupted)
         self.assertEqual(bridge.events[-1][1].event, "interrupt")
         self.assertEqual(bridge.events[-1][1].data["id"], "interrupt-1")
-        self.assertEqual(bridge.events[-2][1].event, "commitment_trace")
+        self.assertEqual(bridge.events[-2][1].event, "events")
+        self.assertEqual(
+            bridge.events[-2][1].data["type"],
+            "commitment_messages",
+        )
         self.assertEqual(bridge.events[-2][1].data["actor"], "worker")
         self.assertTrue(bridge.ended)
 

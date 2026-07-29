@@ -1,20 +1,27 @@
 # Tailwind CSS latest-stable
 
-Source: https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/docs/detecting-classes-in-source-files.mdx
+Source: https://github.com/tailwindlabs/tailwindcss.com/blob/main/tailwindcss.com/src/docs/upgrade-guide.mdx
 
-### Source file scanning - verification of class detection
+### PostCSS Plugin Configuration for v4
 
-Source: https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/docs/detecting-classes-in-source-files.mdx
+Official upgrade guide for PostCSS plugin setup in Tailwind CSS v4, showing the transition from v3's integrated plugin to the dedicated @tailwindcss/postcss package.
 
-Tailwind scans files as plain text. To verify classes are properly detected, always use complete class names. Use @source inline() to safelist classes that might otherwise be missed.
+```markdown
+In v3, the `tailwindcss` package was a PostCSS plugin, but in v4 the PostCSS plugin lives in a dedicated `@tailwindcss/postcss` package.
 
-```css
-/* CSS */
-@import "tailwindcss";
-@source inline("underline");
+Additionally, in v4 imports and vendor prefixing is now handled for you automatically, so you can remove `postcss-import` and `autoprefixer` if they are in your project:
 
-/* Generated CSS */
-.underline {
-  text-decoration-line: underline;
-}
+```js
+// [!code filename:postcss.config.mjs]
+export default {
+  plugins: {
+    // [!code --:4]
+    "postcss-import": {},
+    tailwindcss: {},
+    autoprefixer: {},
+    // [!code ++:2]
+    "@tailwindcss/postcss": {},
+  },
+};
+```
 ```

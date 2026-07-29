@@ -17,9 +17,10 @@
     langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取；其中 user_id 传给 make_lead_agent 用于定位 per-user custom skills
     checkpointer: BaseCheckpointSaver | None — checkpoint 持久化器，None 时不启用
     store: BaseStore | None — 跨 thread 长期记忆存储，None 时不启用
+    COMMITMENT_MESSAGES_MONITOR — 设为 1 时把角色 messages 镜像到标准输出
 
 输出:
-    SSE 事件流 → bridge → 前端；最终状态 → run_manager
+    SSE 事件流 → bridge → 前端；可选 messages 镜像 → 标准输出；最终状态 → run_manager
 
 具体工作流:
     (1) 设置 run 状态为 running，发布 metadata 事件（含 run_id + thread_id）
@@ -29,8 +30,9 @@
     (4) 翻译 stream_modes（前端名称 → LangGraph 内部名称）
     (5) 调用 agent.astream()，每轮检查 abort_event
     (6) 每个 chunk 转换为 SSE 事件 publish 到 bridge
-    (7) 终态处理：success / interrupted（rollback 时用旧 checkpoint 恢复 thread 状态）/ error
-    (8) finally: publish_end 关流 + 延迟缓存清理
+    (7) 监控开关开启时镜像 commitment_messages，不改变 SSE 消费
+    (8) 终态处理：success / interrupted（rollback 时用旧 checkpoint 恢复 thread 状态）/ error
+    (9) finally: publish_end 关流 + 延迟缓存清理
 
 示例:
     task = asyncio.create_task(run_agent(
@@ -45,7 +47,9 @@
     ))
 """
 
+import json
 import logging
+import os
 from typing import Any
 
 from langchain_core.messages import BaseMessage
@@ -225,10 +229,13 @@ async def run_agent(
         mapped_stream_modes = _map_stream_modes(stream_modes)
         if app_config.commitment.enabled:
             if isinstance(mapped_stream_modes, str):
-                if mapped_stream_modes != "values":
-                    mapped_stream_modes = [mapped_stream_modes, "values"]
-            elif mapped_stream_modes is not None and "values" not in mapped_stream_modes:
-                mapped_stream_modes = [*mapped_stream_modes, "values"]
+                mapped_stream_modes = list(
+                    dict.fromkeys([mapped_stream_modes, "values", "custom"])
+                )
+            elif mapped_stream_modes is not None:
+                mapped_stream_modes = list(
+                    dict.fromkeys([*mapped_stream_modes, "values", "custom"])
+                )
         user_id = langgraph_context.get("user_id") if langgraph_context else None
 
         agent = await make_lead_agent(
@@ -274,12 +281,24 @@ async def run_agent(
                 and len(serialized_chunk) == 2
                 and serialized_chunk[0] == "custom"
                 and isinstance(serialized_chunk[1], dict)
-                and serialized_chunk[1].get("type") == "commitment_trace"
+                and serialized_chunk[1].get("type") == "commitment_messages"
             ):
+                if os.getenv("COMMITMENT_MESSAGES_MONITOR") == "1":
+                    print(
+                        "COMMITMENT_MESSAGES "
+                        + json.dumps(
+                            {
+                                "run_id": record.run_id,
+                                **serialized_chunk[1],
+                            },
+                            ensure_ascii=True,
+                        ),
+                        flush=True,
+                    )
                 bridge.publish(
                     record.run_id,
                     _build_chunk_event(
-                        "commitment_trace",
+                        "events",
                         serialized_chunk[1],
                     ),
                 )

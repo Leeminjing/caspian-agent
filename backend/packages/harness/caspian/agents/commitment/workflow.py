@@ -10,15 +10,14 @@
     BaseTool — Supervisor 唯一可调用的 delegate_with_review 工具。
     CompiledStateGraph — 严格按 stage 1 到 9 推进的 Supervisor 子图。
     Command — 阶段推进、人工等待、知识合同落盘及消息更新。
-    commitment_trace — Supervisor 调度、人工处理和 artifact 写入的 custom stream 事件。
 
 具体工作流:
     (1) Supervisor 根据最后完成阶段构造下一份 TaskEnvelope。
     (2) delegate_with_review 校验 stage 后调用 ReviewedDelegator。
     (3) 固定人工节点、条件冲突或失败结果通过 interrupt 等待人工处理。
     (4) 人工修订重新经过 Evaluator，未批准前不推进业务阶段。
-    (5) 阶段六和七写入知识与合同，阶段九生成最终合同消息。
-    (6) 在动作边界发布自然语言工作日志和必要输入输出，不发布隐藏思维链。
+    (5) 阶段六写入知识；阶段七人工确认后写入合同；阶段九生成最终合同消息。
+    (6) Supervisor messages 只保留阶段委派和最终工具结果。
 
 示例:
     supervisor = _build_supervisor(ReviewedDelegator(model, context7_tools))
@@ -86,6 +85,30 @@ def _human_payload(stage: int, state: dict[str, Any], error: str = "") -> dict[s
         "error": error,
     }
 
+def _tool_message_id(tool_call_id: str) -> str:
+    return f"{tool_call_id}-result"
+
+def _replace_stage_tool_message(
+    state: dict[str, Any],
+    stage: int,
+    content: str,
+) -> ToolMessage:
+    for message in reversed(state.get("messages", [])):
+        if not isinstance(message, ToolMessage):
+            continue
+        try:
+            payload = json.loads(str(message.content))
+        except (TypeError, ValueError):
+            continue
+        if int(payload.get("stage", 0) or 0) != stage:
+            continue
+        return ToolMessage(
+            content=content,
+            tool_call_id=message.tool_call_id,
+            id=message.id or _tool_message_id(message.tool_call_id),
+        )
+    raise ValueError(f"第{stage}步缺少可更新的 ToolMessage")
+
 async def _review_human_revision(
     response: dict[str, Any],
     stage: int,
@@ -100,7 +123,7 @@ async def _review_human_revision(
         error = _validate_stage_result(
             stage,
             replacement,
-            _stage_envelope(stage, state, feedback).context,
+            list(state.get("messages", [])),
         )
         if error:
             return None, error
@@ -109,6 +132,8 @@ async def _review_human_revision(
                 delegator._evaluator(
                     _stage_envelope(stage, state, feedback),
                     WorkerOutput(result=replacement),
+                    list(state.get("messages", [])),
+                    1,
                 ),
                 timeout=_stage_timeout(stage),
             )
@@ -122,13 +147,147 @@ async def _review_human_revision(
     if feedback:
         try:
             output, error = await asyncio.wait_for(
-                delegator.run(_stage_envelope(stage, state, feedback)),
+                delegator.run(
+                    _stage_envelope(stage, state, feedback),
+                    list(state.get("messages", [])),
+                ),
                 timeout=_stage_timeout(stage),
             )
         except TimeoutError:
             return None, f"阶段{stage}执行超时，请重试或提交 replacement"
         return (output.result, "") if output else (None, error)
     return None, "revise 必须提供 replacement 或 feedback"
+
+async def _human_review(
+    state: CommitmentState,
+    delegator: ReviewedDelegator,
+) -> dict[str, Any]:
+    stage = int(state.get("awaiting_human") or 0)
+    if not stage:
+        return {}
+    artifacts = dict(state.get("artifacts", {}))
+    error = ""
+    while True:
+        emit_commitment_trace(
+            actor="supervisor",
+            event="awaiting_human",
+            title="Supervisor 等待人工确认",
+            status="waiting",
+            stage=stage,
+            payload=_human_payload(stage, dict(state), error),
+        )
+        response = interrupt(_human_payload(stage, dict(state), error))
+        if not isinstance(response, dict):
+            error = "resume 必须是对象"
+            continue
+        decision = response.get("decision")
+        if decision == "approve":
+            if _must_revise(stage, artifacts.get(str(stage))):
+                error = f"第{stage}步仍需修订，不能直接批准"
+                continue
+            if stage == 5 and _contains_unresolved_versions(artifacts.get("5")):
+                error = "技术版本仍有 unresolved，必须先 revise"
+                continue
+            emit_commitment_trace(
+                actor="human",
+                event="approved",
+                title="人工已批准阶段结果",
+                status="approved",
+                stage=stage,
+            )
+            artifact_ref = None
+            updates: dict[str, Any] = {"awaiting_human": None}
+            if stage == 7:
+                emit_commitment_trace(
+                    actor="system",
+                    event="artifact_started",
+                    title="正在写入人工确认的任务合同",
+                    status="running",
+                    stage=7,
+                )
+                try:
+                    contract, artifact_ref = _write_contract(
+                        str(state.get("thread_id", "")),
+                        artifacts["7"],
+                    )
+                except (OSError, ValueError) as exc:
+                    error = f"合同写入失败: {exc}"
+                    continue
+                updates["task_contract"] = contract
+                emit_commitment_trace(
+                    actor="system",
+                    event="artifact_completed",
+                    title="人工确认的任务合同已写入",
+                    status="completed",
+                    stage=7,
+                    payload={"artifact_ref": artifact_ref},
+                )
+            updates["messages"] = [
+                _replace_stage_tool_message(
+                    dict(state),
+                    stage,
+                    _json(
+                        {
+                            "status": "approved",
+                            "stage": stage,
+                            "result": artifacts.get(str(stage)),
+                            "artifact_ref": artifact_ref,
+                        }
+                    ),
+                )
+            ]
+            return updates
+        if decision == "revise":
+            emit_commitment_trace(
+                actor="human",
+                event="revision_submitted",
+                title="人工已提交修订",
+                status="running",
+                stage=stage,
+                payload=response,
+            )
+            revised, error = await _review_human_revision(
+                response,
+                stage,
+                dict(state),
+                delegator,
+            )
+            if revised is None:
+                continue
+            artifacts[str(stage)] = revised
+            knowledge_files = list(state.get("knowledge_files", []))
+            artifact_ref = None
+            if stage == 6:
+                knowledge_files = _write_knowledge(revised)
+                artifact_ref = ",".join(knowledge_files)
+            emit_commitment_trace(
+                actor="supervisor",
+                event="revision_accepted",
+                title="修订结果已通过审核",
+                status="completed",
+                stage=stage,
+                payload={"result": revised},
+            )
+            return {
+                "stage": stage,
+                "artifacts": artifacts,
+                "knowledge_files": knowledge_files,
+                "messages": [
+                    _replace_stage_tool_message(
+                        dict(state),
+                        stage,
+                        _json(
+                            {
+                                "status": "revised",
+                                "stage": stage,
+                                "result": revised,
+                                "artifact_ref": artifact_ref,
+                            }
+                        ),
+                    )
+                ],
+            }
+        error = "decision 只允许 approve 或 revise"
 
 def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
     @tool(
@@ -145,104 +304,6 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
     ) -> Command:
         state = dict(runtime.state)
         artifacts = dict(state.get("artifacts", {}))
-        awaiting = state.get("awaiting_human")
-
-        if awaiting:
-            emit_commitment_trace(
-                actor="supervisor",
-                event="awaiting_human",
-                title="Supervisor 等待人工确认",
-                status="waiting",
-                stage=int(awaiting),
-                payload=_human_payload(int(awaiting), state),
-            )
-            error = ""
-            while True:
-                response = interrupt(_human_payload(awaiting, state, error))
-                if not isinstance(response, dict):
-                    error = "resume 必须是对象"
-                    continue
-                decision = response.get("decision")
-                if decision == "approve":
-                    if _must_revise(awaiting, artifacts.get(str(awaiting))):
-                        error = f"第{awaiting}步仍需修订，不能直接批准"
-                        continue
-                    if awaiting == 5 and _contains_unresolved_versions(
-                        artifacts.get("5")
-                    ):
-                        error = "技术版本仍有 unresolved，必须先 revise"
-                        continue
-                    emit_commitment_trace(
-                        actor="human",
-                        event="approved",
-                        title="人工已批准阶段结果",
-                        status="approved",
-                        stage=int(awaiting),
-                    )
-                    content = _json(
-                        {
-                            "status": "approved",
-                            "stage": awaiting,
-                            "result": artifacts.get(str(awaiting)),
-                        }
-                    )
-                    return Command(
-                        update={
-                            "awaiting_human": None,
-                            "messages": [
-                                ToolMessage(
-                                    content=content,
-                                    tool_call_id=runtime.tool_call_id,
-                                )
-                            ],
-                        }
-                    )
-                if decision == "revise":
-                    emit_commitment_trace(
-                        actor="human",
-                        event="revision_submitted",
-                        title="人工已提交修订",
-                        status="running",
-                        stage=int(awaiting),
-                        payload=response,
-                    )
-                    revised, error = await _review_human_revision(
-                        response, awaiting, state, delegator
-                    )
-                    if revised is None:
-                        continue
-                    artifacts[str(awaiting)] = revised
-                    knowledge_files = state.get("knowledge_files", [])
-                    if awaiting == 6:
-                        knowledge_files = _write_knowledge(revised)
-                    emit_commitment_trace(
-                        actor="supervisor",
-                        event="revision_accepted",
-                        title="修订结果已通过审核",
-                        status="completed",
-                        stage=int(awaiting),
-                        payload={"result": revised},
-                    )
-                    return Command(
-                        update={
-                            "artifacts": artifacts,
-                            "knowledge_files": knowledge_files,
-                            "messages": [
-                                ToolMessage(
-                                    content=_json(
-                                        {
-                                            "status": "revised",
-                                            "stage": awaiting,
-                                            "result": revised,
-                                            "next_action": "call_again_for_approval",
-                                        }
-                                    ),
-                                    tool_call_id=runtime.tool_call_id,
-                                )
-                            ],
-                        }
-                    )
-                error = "decision 只允许 approve 或 revise"
 
         expected = int(state.get("stage", 0)) + 1
         if stage != expected:
@@ -266,6 +327,7 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                                 }
                             ),
                             tool_call_id=runtime.tool_call_id,
+                            id=_tool_message_id(runtime.tool_call_id),
                         )
                     ]
                 }
@@ -274,11 +336,7 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
         envelope = TaskEnvelope(
             stage=stage,
             instruction=instruction,
-            context={
-                **context,
-                "source_text": state.get("source_text", ""),
-                "approved_stages": artifacts,
-            },
+            context=context,
             acceptance_criteria=acceptance_criteria,
         )
 
@@ -286,7 +344,10 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
         if stage <= 7:
             try:
                 output, error = await asyncio.wait_for(
-                    delegator.run(envelope),
+                    delegator.run(
+                        envelope,
+                        list(state.get("messages", [])),
+                    ),
                     timeout=_stage_timeout(stage),
                 )
             except TimeoutError:
@@ -315,12 +376,14 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                             ToolMessage(
                                 content=_json(
                                     {
-                                        "status": "needs_human",
+                                        "status": "reviewed_failed",
                                         "stage": stage,
-                                        "feedback": error,
+                                        "result": result,
+                                        "artifact_ref": None,
                                     }
                                 ),
                                 tool_call_id=runtime.tool_call_id,
+                                id=_tool_message_id(runtime.tool_call_id),
                             )
                         ]
                     }
@@ -359,26 +422,6 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                 stage=stage,
                 payload={"artifact_ref": updates["knowledge_files"]},
             )
-        elif stage == 7:
-            emit_commitment_trace(
-                actor="system",
-                event="artifact_started",
-                title="正在写入任务合同",
-                status="running",
-                stage=stage,
-            )
-            contract, artifact_ref = _write_contract(
-                str(state.get("thread_id", "")), result
-            )
-            updates["task_contract"] = contract
-            emit_commitment_trace(
-                actor="system",
-                event="artifact_completed",
-                title="任务合同已写入",
-                status="completed",
-                stage=stage,
-                payload={"artifact_ref": artifact_ref},
-            )
         elif stage == 8:
             updates["task_contract"] = state.get("task_contract", "")
         elif stage == 9:
@@ -412,10 +455,10 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
                         "stage": stage,
                         "result": result,
                         "artifact_ref": artifact_ref,
-                        "next_stage": stage + 1 if stage < 9 else None,
                     }
                 ),
                 tool_call_id=runtime.tool_call_id,
+                id=_tool_message_id(runtime.tool_call_id),
             )
         ]
         return Command(update=updates)
@@ -423,7 +466,7 @@ def build_delegate_with_review_tool(delegator: ReviewedDelegator) -> BaseTool:
     return delegate_with_review
 
 def _prepare_supervisor_call(state: CommitmentState) -> dict[str, Any]:
-    stage = int(state.get("awaiting_human") or state.get("stage", 0) + 1)
+    stage = int(state.get("stage", 0)) + 1
     envelope = _stage_envelope(stage, dict(state))
     emit_commitment_trace(
         actor="supervisor",
@@ -437,7 +480,11 @@ def _prepare_supervisor_call(state: CommitmentState) -> dict[str, Any]:
     return {
         "messages": [
             AIMessage(
-                content="",
+                content=(
+                    f"第 {stage} 步：{envelope.instruction}\n"
+                    f"验收条件：{'；'.join(envelope.acceptance_criteria)}\n"
+                    "调用 delegate_with_review，由 Evaluator 决定通过或在工具内部重试。"
+                ),
                 tool_calls=[
                     {
                         "name": "delegate_with_review",
@@ -451,10 +498,14 @@ def _prepare_supervisor_call(state: CommitmentState) -> dict[str, Any]:
     }
 
 def _route_supervisor(state: CommitmentState) -> str:
+    if state.get("awaiting_human"):
+        return "human_review"
     if int(state.get("stage", 0)) >= 9:
         return END
     messages = state.get("messages", [])
     if messages and isinstance(messages[-1], ToolMessage):
+        if messages[-1].status == "error":
+            return END
         try:
             if json.loads(str(messages[-1].content)).get("status") == "reviewed_failed":
                 return END
@@ -463,13 +514,21 @@ def _route_supervisor(state: CommitmentState) -> str:
     return "prepare_call"
 
 def _build_supervisor(delegator: ReviewedDelegator):
+    async def human_review(state: CommitmentState) -> dict[str, Any]:
+        return await _human_review(state, delegator)
+
     builder = StateGraph(CommitmentState)
     builder.add_node("prepare_call", _prepare_supervisor_call)
+    builder.add_node("human_review", human_review)
     builder.add_node(
         "delegate_with_review",
-        ToolNode([build_delegate_with_review_tool(delegator)]),
+        ToolNode(
+            [build_delegate_with_review_tool(delegator)],
+            handle_tool_errors=False,
+        ),
     )
     builder.add_edge(START, "prepare_call")
     builder.add_edge("prepare_call", "delegate_with_review")
     builder.add_conditional_edges("delegate_with_review", _route_supervisor)
+    builder.add_conditional_edges("human_review", _route_supervisor)
     return builder.compile()
