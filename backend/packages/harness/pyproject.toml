@@ -22,7 +22,7 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 [project.optional-dependencies]
-mcp = ["langchain-mcp-adapters>=0.1.0"]
+mcp = ["langchain-mcp-adapters>=0.1.0", "mcp>=1.24,<2"]
 postgres = ["asyncpg", "langgraph-checkpoint-postgres"]
 sqlite = ["aiosqlite"]
 aiosandbox = ["agent-sandbox", "docker"]
