@@ -174,11 +174,67 @@ def _discover_and_build_catalog(
     return SkillCatalog(skills)
 
 
+def build_enabled_skill_catalog(user_id: str | None = None) -> "SkillCatalog":
+    return _discover_and_build_catalog(
+        _load_enabled_skill_names(),
+        host_base_path=None,
+        user_id=user_id,
+    )
+
+
+def skill_by_name(catalog: "SkillCatalog") -> dict[str, "Skill"]:
+    return {skill.name: skill for skill in catalog.skills}
+
+
+def canonicalize_selected_skills(
+    selected_skills: list[str] | None,
+    catalog: "SkillCatalog",
+) -> tuple[list[str], list[str]]:
+    available = skill_by_name(catalog)
+    result: list[str] = []
+    seen: set[str] = set()
+    invalid: list[str] = []
+    for raw in selected_skills or []:
+        name = str(raw).strip()
+        if name not in available:
+            invalid.append(name)
+            continue
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    return result, invalid
+
+
+def _selected_skill_prompt(catalog: "SkillCatalog", selected_skills: list[str]) -> str:
+    if not selected_skills:
+        return ""
+
+    available = skill_by_name(catalog)
+    sections = [
+        "<selected_skill_instructions>",
+        "The following Skills were explicitly selected by the user for this run.",
+        "They are mandatory instructions. If selected Skills conflict, later sections take precedence.",
+    ]
+    for name in selected_skills:
+        skill = available.get(name)
+        if skill is None:
+            raise ValueError(f"Selected Skill is not enabled: {name}")
+        content = skill.skill_file.read_text(encoding="utf-8")
+        sections.extend([
+            f'<skill name="{name}">',
+            content,
+            "</skill>",
+        ])
+    sections.append("</selected_skill_instructions>")
+    return "\n\n".join(sections)
+
+
 async def make_lead_agent(
     model_name: str | None = None,
     agent_name: str | None = None,
     tool_groups: list[str] | None = None,
     user_id: str | None = None,
+    selected_skills: list[str] | None = None,
 ) -> CompiledStateGraph:
     # (1) 创建模型
     model = create_chat_model(name=model_name)
@@ -190,8 +246,7 @@ async def make_lead_agent(
     # container_base_path 用于 system prompt（沙箱内的 skill 路径），host 路径用 SKILLS_PUBLIC_REAL_ROOT
     container_base_path = app_config.skills.container_path if app_config.skills else None
 
-    enabled_names = _load_enabled_skill_names()
-    catalog = _discover_and_build_catalog(enabled_names, host_base_path=None, user_id=user_id)
+    catalog = build_enabled_skill_catalog(user_id=user_id)
     skill_names = ", ".join(sorted(catalog.names))
 
     # (3) 汇集工具
@@ -208,6 +263,9 @@ async def make_lead_agent(
         skill_names=skill_names,
         container_base_path=container_base_path,
     )
+    selected_prompt = _selected_skill_prompt(catalog, selected_skills or [])
+    if selected_prompt:
+        system_prompt = f"{system_prompt}\n\n{selected_prompt}"
 
     # (5) middleware
     context7_tools: list[BaseTool] = []

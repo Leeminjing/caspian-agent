@@ -31,7 +31,6 @@ Thumbs.db
 # Logs
 *.log
 
-
 # Distribution / packaging
 dist/
 build/

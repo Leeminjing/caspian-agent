@@ -79,6 +79,10 @@ class RunCreateRequest(BaseModel):
         default=None,
         description="Stream mode(s)",
     )
+    selected_skills: list[str] = Field(
+        default_factory=list,
+        description="Enabled Skill names explicitly selected for this run",
+    )
 
     @model_validator(mode="after")
     def validate_input_or_resume(self):

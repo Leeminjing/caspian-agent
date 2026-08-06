@@ -37,6 +37,7 @@ const state = {
   traceTimer: null,
   traceStreams: new Map(),
   traceScrollScheduled: false,
+  activeSelectedSkills: [],
 };
 
 function csrfToken() {
@@ -98,6 +99,8 @@ function selectThread(id) {
   state.commitmentMessageIds.clear();
   state.commitmentTraceItems.clear();
   state.tracePanel = null;
+  state.activeSelectedSkills = [];
+  window.CaspianSkills?.clearSelection();
   setBusy(false);
   setStatus("ready", "就绪");
   $("#messages").replaceChildren(emptyState());
@@ -127,6 +130,7 @@ function bindPrompts(root = document) {
   $$("[data-prompt]", root).forEach((button) => {
     button.addEventListener("click", () => {
       $("#message-input").value = button.dataset.prompt;
+      window.CaspianSkills?.clearSelection();
       resizeComposer();
       closeCommandMenu();
       $("#message-input").focus();
@@ -687,7 +691,7 @@ function handleSseFrame(frame) {
   }
 }
 
-async function submitTask(content) {
+async function submitTask(content, selectedSkills = []) {
   const thread = currentThread();
   if (thread && thread.title === "新会话") {
     thread.title = content.replace(/\s+/g, " ").slice(0, 32);
@@ -707,6 +711,7 @@ async function submitTask(content) {
         additional_kwargs: files.length ? { files } : undefined,
       }],
     },
+    selected_skills: selectedSkills,
   });
 }
 
@@ -714,7 +719,7 @@ async function resumeRun(payload) {
   state.pendingInterrupt = null;
   setBusy(true);
   try {
-    await streamRun({ resume: payload });
+    await streamRun({ resume: payload, selected_skills: state.activeSelectedSkills });
   } catch (error) {
     handleError(error);
   } finally {
@@ -723,6 +728,8 @@ async function resumeRun(payload) {
       setBusy(false);
       setStatus("ready", "就绪");
       setProgress(9, true);
+      window.CaspianSkills?.clearSelection();
+      state.activeSelectedSkills = [];
     }
   }
 }
@@ -812,11 +819,15 @@ function selectCommitCommand() {
 }
 
 function showLogin() {
+  window.CaspianSkills?.clearCache();
+  window.CaspianSkills?.clearSelection();
+  state.activeSelectedSkills = [];
   $("#login-view").hidden = false;
   $("#app-view").hidden = true;
 }
 
 function showApp(user) {
+  if (state.user?.id !== user.id) window.CaspianSkills?.clearCache();
   state.user = user;
   $("#login-view").hidden = true;
   $("#app-view").hidden = false;
@@ -899,6 +910,7 @@ $("#message-input").addEventListener("keyup", (event) => {
   if (!["Escape", "Enter", "ArrowUp", "ArrowDown"].includes(event.key)) updateCommandMenu();
 });
 $("#message-input").addEventListener("keydown", (event) => {
+  if (event.defaultPrevented) return;
   if (!$("#command-menu").hidden) {
     if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
@@ -928,12 +940,14 @@ $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
   closeCommandMenu();
   const input = $("#message-input");
-  const content = input.value.trim();
+  const selectedSkills = window.CaspianSkills?.selectedNames(input.value) || [];
+  const content = window.CaspianSkills?.messageText(input.value) || input.value.trim();
   if (!content || state.running || state.pendingInterrupt) return;
+  state.activeSelectedSkills = selectedSkills;
   input.value = "";
   resizeComposer();
   try {
-    await submitTask(content);
+    await submitTask(content, selectedSkills);
   } catch (error) {
     handleError(error);
   } finally {
@@ -941,9 +955,16 @@ $("#composer").addEventListener("submit", async (event) => {
       removeThinking();
       setBusy(false);
       setStatus("ready", "就绪");
+      window.CaspianSkills?.clearSelection();
+      state.activeSelectedSkills = [];
     }
   }
 });
 
 bindPrompts();
+window.CaspianSkills?.attach({
+  input: $("#message-input"),
+  host: $("#skill-picker"),
+  chips: $("#selected-skills"),
+});
 restoreSession().catch(handleError);

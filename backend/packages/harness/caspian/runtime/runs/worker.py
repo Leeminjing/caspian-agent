@@ -237,12 +237,14 @@ async def run_agent(
                     dict.fromkeys([*mapped_stream_modes, "values", "custom"])
                 )
         user_id = langgraph_context.get("user_id") if langgraph_context else None
+        selected_skills = langgraph_context.get("selected_skills", []) if langgraph_context else []
 
         agent = await make_lead_agent(
             model_name=model_name or None,
             agent_name=agent_name,
             tool_groups=tool_groups,
             user_id=user_id,
+            selected_skills=selected_skills,
         )
 
         # (3.5) 挂载 checkpointer 和 store 到 agent

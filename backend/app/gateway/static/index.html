@@ -5,7 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=commit-command-1">
+  <link rel="stylesheet" href="/assets/app.css?v=slash-commit-1">
+  <link rel="stylesheet" href="/assets/skills.css?v=slash-commit-1">
 </head>
 <body>
   <section id="login-view" class="login-view">
@@ -77,11 +78,13 @@
 
       <section class="composer-wrap">
         <div id="attachments" class="attachments" hidden></div>
+        <div id="skill-picker" class="skill-picker" hidden></div>
         <form id="composer" class="composer">
           <input id="file-input" type="file" multiple hidden>
           <button id="attach-button" class="icon-button composer-icon" type="button" title="添加文件" aria-label="添加文件">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.6l-8.9 8.9a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.6-8.6"/></svg>
           </button>
+          <div id="selected-skills" class="selected-skills" aria-label="Selected Skills" hidden></div>
           <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"
             role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
             aria-expanded="false" aria-controls="command-menu"></textarea>
@@ -146,6 +149,7 @@
     </details>
   </template>
 
-  <script src="/assets/app.js?v=commit-command-1" defer></script>
+  <script src="/assets/skills.js?v=slash-commit-1" defer></script>
+  <script src="/assets/app.js?v=slash-commit-1" defer></script>
 </body>
 </html>

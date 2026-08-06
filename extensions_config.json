@@ -1,5 +1,9 @@
 {
-  "skills": {},
+  "skills": {
+    "docx": {
+      "enabled": true
+    }
+  },
   "mcpServers": {
     "filesystem": {
       "enabled": false,

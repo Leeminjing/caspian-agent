@@ -34,6 +34,7 @@ class FrontendTests(unittest.TestCase):
                 "command-menu",
                 "command-option-commit",
                 "commitment-progress",
+                "skill-picker",
                 "review-template",
                 "trace-template",
             }.issubset(parser.ids)
@@ -59,6 +60,10 @@ class FrontendTests(unittest.TestCase):
         self.assertIn("trace-elapsed", script)
         self.assertIn("isNearBottom", script)
         self.assertIn('event === "end" && !state.pendingInterrupt', script)
+        self.assertIn("selected_skills", script)
+        self.assertIn("state.activeSelectedSkills", script)
+        self.assertIn("window.CaspianSkills?.selectedNames", script)
+        self.assertIn("event.defaultPrevented", script)
         self.assertIn('setStatus("ready", "就绪")', script)
         self.assertIn("review-contract-editor", script)
         self.assertIn("提交编辑并审核", script)
@@ -98,6 +103,13 @@ class FrontendTests(unittest.TestCase):
         self.assertIn('input.value = "/commit "', selection)
         self.assertIn("input.setSelectionRange", selection)
         self.assertNotIn("requestSubmit", selection)
+
+    def test_skill_picker_assets_are_registered(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn("/assets/skills.css", html)
+        self.assertIn("/assets/skills.js", html)
+        self.assertTrue((STATIC_DIR / "skills.css").exists())
+        self.assertTrue((STATIC_DIR / "skills.js").exists())
 
 
 if __name__ == "__main__":

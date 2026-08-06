@@ -32,7 +32,7 @@ import asyncio
 import logging
 from typing import Any
 
-from fastapi import Request
+from fastapi import HTTPException, Request
 from langchain_core.messages import HumanMessage
 from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
@@ -46,6 +46,25 @@ from caspian.runtime.stream_bridge.base import StreamBridge
 logger = logging.getLogger(__name__)
 
 _DEFAULT_RECURSION_LIMIT = 25
+
+
+def _validated_selected_skills(body: Any, user_id: str) -> list[str]:
+    from caspian.agents.lead.agent import (
+        build_enabled_skill_catalog,
+        canonicalize_selected_skills,
+    )
+
+    catalog = build_enabled_skill_catalog(user_id=user_id)
+    selected_skills, invalid_skills = canonicalize_selected_skills(
+        getattr(body, "selected_skills", []),
+        catalog,
+    )
+    if invalid_skills:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unknown or disabled selected Skills: {', '.join(invalid_skills)}",
+        )
+    return selected_skills
 
 
 def _build_graph_input(body: Any) -> dict | Command:
@@ -93,6 +112,9 @@ async def start_run(
     # (2) 获取 AppConfig
     app_config = get_app_config("config.yaml")
 
+    user_id = str(request.state.current_user.id)
+    selected_skills = _validated_selected_skills(body, user_id)
+
     # (3) 创建 RunRecord
     model_name = None
     if hasattr(body, "context") and body.context:
@@ -120,11 +142,11 @@ async def start_run(
     }
 
     # LangGraph context
-    user_id = str(request.state.current_user.id)
     langgraph_context: dict = {
         "model_name": model_name,
         "app_config": app_config,
         "user_id": user_id,
+        "selected_skills": selected_skills,
     }
 
     # stream_modes

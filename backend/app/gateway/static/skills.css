@@ -1,0 +1,119 @@
+.composer-wrap {
+  position: relative;
+}
+
+.selected-skills {
+  display: flex;
+  flex: 0 0 auto;
+  max-width: 260px;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-self: center;
+  padding: 0 2px;
+}
+
+.skill-chip {
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #9fd5ce;
+  border-radius: 7px;
+  padding: 0 9px;
+  color: #062f2b;
+  background: #eaf7f5;
+  font-weight: 650;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.skill-chip button {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  padding: 0;
+  color: #49746f;
+  background: transparent;
+}
+
+.skill-chip button:hover {
+  color: #063a35;
+  background: rgb(8 127 115 / 10%);
+}
+
+.skill-picker {
+  position: absolute;
+  right: max(24px, calc((100% - 820px) / 2));
+  bottom: calc(100% - 12px);
+  left: max(24px, calc((100% - 820px) / 2));
+  z-index: 20;
+  max-height: 244px;
+  overflow-y: auto;
+  border: 1px solid #dfe2e4;
+  border-radius: 8px;
+  padding: 6px;
+  background: white;
+  box-shadow: 0 10px 30px rgb(22 30 34 / 12%);
+}
+
+.skill-picker-option {
+  display: grid;
+  width: 100%;
+  min-height: 44px;
+  grid-template-columns: 22px auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  border: 0;
+  border-radius: 6px;
+  padding: 7px 10px;
+  color: #24282b;
+  background: transparent;
+  text-align: left;
+}
+
+.skill-picker-option:hover,
+.skill-picker-option.active {
+  background: #eef8f6;
+}
+
+.skill-picker-icon {
+  width: 17px;
+  height: 17px;
+  border: 1.8px solid #327cff;
+  border-radius: 3px;
+}
+
+.skill-picker-option strong {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.skill-picker-option em,
+.skill-picker-status {
+  min-width: 0;
+  overflow: hidden;
+  color: #8c9296;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-picker-status {
+  padding: 10px 12px;
+}
+
+@media (max-width: 720px) {
+  .skill-picker {
+    right: 12px;
+    left: 12px;
+    bottom: calc(100% - 8px);
+    max-height: 210px;
+  }
+
+  .selected-skills {
+    max-width: 42vw;
+  }
+}
