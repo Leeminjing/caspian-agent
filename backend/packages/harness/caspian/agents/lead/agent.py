@@ -12,6 +12,7 @@
         agent_name: str | None — system prompt 中的 agent 名称，None 时使用默认值 "Caspian"
         tool_groups: list[str] | None — 需要加载的工具分组名列表，None 表示加载全部
         user_id: str | None — 用户标识，用于定位 per-user custom skills 路径，None 时跳过 custom
+        selected_skills: list[str] | None — 用户显式选中的技能名列表，注入 system prompt
 
 输出:
     CompiledStateGraph — langchain.agents.create_agent() 产出的可执行 agent graph
@@ -65,6 +66,7 @@ def _build_middlewares(
     app_config,
     model: BaseChatModel,
     context7_tools: list[BaseTool],
+    skill_names: frozenset[str] | None = None,
 ) -> list[AgentMiddleware]:
     """组装 lead_agent 的中间件链：通用链 + lead_agent 专属中间件。
 
@@ -82,6 +84,7 @@ def _build_middlewares(
         commitment_enabled=app_config.commitment.enabled,
         model=model,
         context7_tools=context7_tools,
+        skill_names=skill_names,
     )
     # ponytail: lead_agent 专属中间件预留扩展点
     return middlewares
@@ -275,7 +278,9 @@ async def make_lead_agent(
         context7_tools = await get_context7_tools(app_config.commitment.context7_url)
         if not context7_tools:
             raise RuntimeError("CommitmentMiddleware 已启用，但 Context7 工具不可用")
-    middleware = _build_middlewares(app_config, model, context7_tools)
+    middleware = _build_middlewares(
+        app_config, model, context7_tools, frozenset(catalog.names)
+    )
 
     # (6) create_agent
     return create_agent(

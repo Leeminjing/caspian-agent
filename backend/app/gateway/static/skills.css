@@ -117,3 +117,13 @@
     max-width: 42vw;
   }
 }
+
+.skill-picker-command {
+  border-bottom: 1px solid #e3e6e8;
+  border-radius: 6px 6px 0 0;
+}
+
+.skill-picker-command .skill-picker-icon {
+  border-color: #0f9d8f;
+  border-radius: 50%;
+}

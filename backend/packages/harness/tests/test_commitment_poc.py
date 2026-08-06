@@ -40,6 +40,7 @@ from caspian.agents.commitment import (
     WorkerOutput,
     _build_final_message,
     _build_supervisor,
+    _commit_instruction,
     _contains_unresolved_versions,
     _context7_candidate_version,
     _context7_stable_version,
@@ -1725,6 +1726,81 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(bridge.events[-2][1].data["actor"], "worker")
         self.assertTrue(bridge.ended)
+
+
+class CommitInstructionSkillTokenTests(unittest.TestCase):
+    def test_leading_skill_tokens_do_not_block_commit_trigger(self):
+        self.assertEqual(
+            _commit_instruction(
+                HumanMessage(content="/docx /commit 做X"),
+                frozenset({"docx"}),
+            ),
+            "做X",
+        )
+
+    def test_multiple_leading_skill_tokens_all_stripped(self):
+        self.assertEqual(
+            _commit_instruction(
+                HumanMessage(content="/docx /data-analysis /commit 做X"),
+                frozenset({"docx", "data-analysis"}),
+            ),
+            "做X",
+        )
+
+    def test_unknown_leading_token_is_not_stripped(self):
+        self.assertIsNone(
+            _commit_instruction(
+                HumanMessage(content="/unknown /commit 做X"),
+                frozenset({"docx"}),
+            )
+        )
+
+    def test_plain_commit_without_tokens_unchanged(self):
+        self.assertEqual(
+            _commit_instruction(
+                HumanMessage(content="/commit 做X"),
+                frozenset({"docx"}),
+            ),
+            "做X",
+        )
+
+    def test_empty_commit_not_triggered(self):
+        self.assertIsNone(
+            _commit_instruction(
+                HumanMessage(content="/commit   "),
+                frozenset({"docx"}),
+            )
+        )
+
+    def test_empty_skill_names_disables_stripping(self):
+        self.assertIsNone(
+            _commit_instruction(
+                HumanMessage(content="/docx /commit 做X"),
+                frozenset(),
+            )
+        )
+
+    def test_trailing_slash_token_is_instruction_text(self):
+        self.assertEqual(
+            _commit_instruction(
+                HumanMessage(content="/commit 做X /docx"),
+                frozenset({"docx"}),
+            ),
+            "做X /docx",
+        )
+
+    def test_enabled_builder_forwards_skill_names_to_commitment(self):
+        with patch(
+            "caspian.agents.middlewares.builder.CommitmentMiddleware",
+            return_value=object(),
+        ) as middleware_cls:
+            build_general_middlewares(
+                commitment_enabled=True,
+                model=object(),
+                context7_tools=[],
+                skill_names=frozenset({"docx"}),
+            )
+        self.assertEqual(middleware_cls.call_args[0][2], frozenset({"docx"}))
 
 
 if __name__ == "__main__":

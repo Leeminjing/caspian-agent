@@ -58,3 +58,28 @@ test("replace token keeps slash text representation", () => {
   const info = skills.triggerInfo(value, 3);
   assert.equal(skills.replaceToken(value, info, "docx"), "/docx summarize");
 });
+
+test("messageText keeps /commit text verbatim", () => {
+  assert.equal(skills.messageText("/commit 做X"), "/commit 做X");
+  assert.equal(skills.messageText("  /commit  做X  "), "/commit  做X");
+  assert.equal(skills.messageText("/commit"), "/commit");
+});
+
+test("messageText keeps trailing slash token inside /commit instruction", () => {
+  assert.equal(skills.messageText("/commit 做X /docx"), "/commit 做X /docx");
+});
+
+test("messageText leaves non-commit text unchanged without selection", () => {
+  assert.equal(skills.messageText("帮我写文档"), "帮我写文档");
+  assert.equal(skills.messageText("/commitment 做X"), "/commitment 做X");
+});
+
+test("commit command visibility follows commit prefix", () => {
+  assert.equal(skills.commitVisible(""), true);
+  assert.equal(skills.commitVisible("c"), true);
+  assert.equal(skills.commitVisible("co"), true);
+  assert.equal(skills.commitVisible("commit"), true);
+  assert.equal(skills.commitVisible("COMMIT"), true);
+  assert.equal(skills.commitVisible("doc"), false);
+  assert.equal(skills.commitVisible("comm"), true);
+});

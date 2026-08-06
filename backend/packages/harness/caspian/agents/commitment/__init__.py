@@ -26,6 +26,7 @@ from caspian.agents.commitment.artifacts import (
 from caspian.agents.commitment.delegation import ReviewedDelegator
 from caspian.agents.commitment.middleware import (
     CommitmentMiddleware,
+    _commit_instruction,
     _extract_uploads_tag,
 )
 from caspian.agents.commitment.references import _SearchResultParser
@@ -58,6 +59,7 @@ from caspian.agents.commitment.workflow import (
 __all__ = [
     "CommitmentMiddleware",
     "CommitmentState",
+    "_commit_instruction",
     "ReviewOutput",
     "ReviewedDelegator",
     "TaskEnvelope",

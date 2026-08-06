@@ -4,6 +4,7 @@
 输入:
     model — 承诺层内部 Worker 和 Evaluator 使用的 BaseChatModel。
     context7_tools — 只提供给承诺子图的 Context7 BaseTool 列表。
+    skill_names — 当前用户 enabled 技能名集合，用于剥离消息前导的 /name skill token。
     AgentState / runtime — lead agent 当前消息状态和包含 thread_id 的运行时信息。
 
 输出:
@@ -12,7 +13,8 @@
     GraphInterrupt — 人工确认节点暂停时向父图传播的中断。
 
 具体工作流:
-    (1) before_agent 检查当前 thread 是否已经存在任务合同及有效 /commit 指令。
+    (1) before_agent 检查当前 thread 是否已经存在任务合同及有效 /commit 指令；
+        消息前导的 skill token（如 /docx）先剥离再匹配，剥离的 token 不进入承诺任务文本。
     (2) 只把指令 HumanMessage（沿用触发消息 id）种子化隔离的九阶段子图；
         /commit 前置历史不进入子图，指令经 source_text 传递，<current_uploads> 标签
         从指令中分离后经 uploads_tag 显式传递。
@@ -24,7 +26,7 @@
     (6) 返回状态更新，由 LangGraph reducer 以相同 id 原位写入合同 HumanMessage。
 
 示例:
-    middleware = CommitmentMiddleware(model, context7_tools)
+    middleware = CommitmentMiddleware(model, context7_tools, skill_names)
 """
 
 import asyncio
@@ -56,10 +58,38 @@ _UPLOADS_TAG_RE = re.compile(
 )
 
 
-def _commit_instruction(message: Any) -> str | None:
+def _strip_leading_skill_tokens(text: str, skill_names: frozenset[str]) -> str:
+    """剥离文本前导的 /<skill-name> token 序列，返回剩余文本。
+
+    输入:
+        text: str — 去除外围空白后的消息文本
+        skill_names: frozenset[str] — 当前用户 enabled 技能名集合
+
+    输出:
+        str — 剥离前导 skill token 后的文本；无 token 或集合为空时原样返回
+
+    工作流:
+        (1) 从文本首部逐 token 匹配 /<skill-name>（精确、大小写敏感）。
+        (2) 连续匹配的 token 全部剥离，遇到第一个不匹配 token 停止并返回剩余文本。
+    """
+    if not skill_names:
+        return text
+    rest = text
+    while True:
+        match = re.match(r"/(\S+)(?:\s+|$)", rest)
+        if not match or match.group(1) not in skill_names:
+            return rest
+        rest = rest[match.end():].lstrip()
+
+
+def _commit_instruction(
+    message: Any,
+    skill_names: frozenset[str] = frozenset(),
+) -> str | None:
     if not isinstance(message, HumanMessage) or not isinstance(message.content, str):
         return None
-    match = re.fullmatch(r"/commit\s+(.+)", message.content.strip(), re.DOTALL)
+    stripped = _strip_leading_skill_tokens(message.content.strip(), skill_names)
+    match = re.fullmatch(r"/commit\s+(.+)", stripped, re.DOTALL)
     if not match:
         return None
     return match.group(1).strip() or None
@@ -166,15 +196,18 @@ def _seed_subgraph_input(
 
 class CommitmentMiddleware(AgentMiddleware):
     state_schema = CommitmentState
+    _skill_names: frozenset[str] = frozenset()
 
     def __init__(
         self,
         model: BaseChatModel,
         context7_tools: list[BaseTool],
+        skill_names: frozenset[str] = frozenset(),
     ) -> None:
         super().__init__()
         delegator = ReviewedDelegator(model, context7_tools)
         self._supervisor = _build_supervisor(delegator)
+        self._skill_names = skill_names
 
     async def _run(self, state: AgentState, runtime: Any) -> dict[str, Any] | None:
         if state.get("task_contract"):
@@ -183,7 +216,7 @@ class CommitmentMiddleware(AgentMiddleware):
         if not messages:
             return None
         trigger = messages[-1]
-        instruction = _commit_instruction(trigger)
+        instruction = _commit_instruction(trigger, self._skill_names)
         if instruction is None:
             return None
         if trigger.id is None:

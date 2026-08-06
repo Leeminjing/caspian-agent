@@ -4,6 +4,16 @@
   let selected = [];
   let chipHost = null;
 
+  const COMMIT_ENTRY = {
+    name: "commit",
+    description: "启动九阶段承诺流程",
+    command: true,
+  };
+
+  function commitVisible(query) {
+    return "commit".startsWith(String(query || "").toLowerCase());
+  }
+
   function normalizeSkill(raw) {
     return {
       name: String(raw?.name || ""),
@@ -73,9 +83,9 @@
   }
 
   function messageText(value) {
-    return [selected.map((name) => `/${name}`).join(" "), value.trim()]
-      .filter(Boolean)
-      .join(" ");
+    const text = value.trim();
+    if (/^\/commit(?=\s|$)/.test(text)) return text;
+    return [selected.map((name) => `/${name}`).join(" "), text].filter(Boolean).join(" ");
   }
 
   function filterSkills(skills, query) {
@@ -130,6 +140,7 @@
     function close() {
       open = false;
       host.hidden = true;
+      input.setAttribute("aria-expanded", "false");
       input.removeAttribute("aria-controls");
       input.removeAttribute("aria-activedescendant");
     }
@@ -149,11 +160,11 @@
         const item = document.createElement("button");
         item.type = "button";
         item.id = `skill-option-${index}`;
-        item.className = `skill-picker-option${index === active ? " active" : ""}`;
+        item.className = `skill-picker-option${index === active ? " active" : ""}${skill.command ? " skill-picker-command" : ""}`;
         item.setAttribute("role", "option");
         item.setAttribute("aria-selected", index === active ? "true" : "false");
         item.innerHTML = '<span class="skill-picker-icon" aria-hidden="true"></span><strong></strong><em></em>';
-        item.querySelector("strong").textContent = skill.name;
+        item.querySelector("strong").textContent = skill.command ? `/${skill.name}` : skill.name;
         item.querySelector("em").textContent = skill.description;
         item.addEventListener("mousedown", (event) => {
           event.preventDefault();
@@ -168,6 +179,7 @@
         host.append(item);
       }
       host.hidden = false;
+      input.setAttribute("aria-expanded", "true");
       input.setAttribute("aria-controls", host.id);
       if (rows[active]) input.setAttribute("aria-activedescendant", `skill-option-${active}`);
     }
@@ -180,8 +192,9 @@
       render();
       try {
         skills = await loadSkills();
-        status = skills.length ? "" : "No enabled Skills";
+        status = skills.length || commitVisible(info.query) ? "" : "No enabled Skills";
         matches = filterSkills(skills, info.query);
+        if (commitVisible(info.query)) matches = [COMMIT_ENTRY, ...matches];
         active = Math.min(active, Math.max(0, matches.length - 1));
       } catch {
         status = "Could not load Skills";
@@ -192,10 +205,16 @@
 
     function choose(index = active) {
       if (!info || !matches[index]) return;
-      const name = matches[index].name;
-      if (!selected.includes(name)) selected.push(name);
-      input.value = removeToken(input.value, info);
-      const caret = info.start;
+      const row = matches[index];
+      let caret = info.start;
+      if (row.command) {
+        input.value = replaceToken(input.value, info, "commit");
+        caret += "/commit ".length;
+      } else {
+        const name = row.name;
+        if (!selected.includes(name)) selected.push(name);
+        input.value = removeToken(input.value, info);
+      }
       input.dispatchEvent(new Event("input", { bubbles: true }));
       renderChips();
       close();
@@ -236,6 +255,7 @@
     attach,
     clearCache,
     clearSelection,
+    commitVisible,
     filterSkills,
     loadSkills,
     messageText,
