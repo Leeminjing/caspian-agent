@@ -1,25 +1,37 @@
 """
-本文件对外提供 apply_prompt_template 函数。
+本文件对外提供 apply_prompt_template 函数与 build_subagent_section 函数。
 
 输入:
-    agent_name: str | None — Agent 名称，None 时使用默认值 "Caspian"
-    skill_names: str — 已启用 skill 名称的逗号分隔列表，填充 {names} 占位符
-    container_base_path: str | None — skill 文件挂载路径，填充 {container_base_path} 占位符
+    apply_prompt_template:
+        agent_name: str | None — Agent 名称，None 时使用默认值 "Caspian"
+        skill_names: str — 已启用 skill 名称的逗号分隔列表，填充 {names} 占位符
+        container_base_path: str | None — skill 文件挂载路径，填充 {container_base_path} 占位符
+
+    build_subagent_section:
+        app_config: AppConfig | None — 应用配置，用于解析 subagent 类型说明
 
 输出:
     str — 填充后的完整 system prompt 字符串
+    str — subagent 委托纪律段（无可用类型时为空字符串）
 
 工作流:
+    apply_prompt_template:
     (1) 若 agent_name 为 None，取默认值 "Caspian"
     (2) 若 skill_names 为 ""，{names} 渲染为空，<skill_index> 无内容
     (3) 若 container_base_path 为 None，{container_base_path} 渲染为空
     (4) 调用 SYSTEM_PROMPT_TEMPLATE.format(...) 填入占位符
     (5) 返回填充后的 system prompt
 
+    build_subagent_section:
+    (1) 列出可用 subagent 类型（内置 + 自定义）
+    (2) 组装委托纪律（收益 / 不委托 / 代价清单）与类型说明
+    (3) 自定义类型 description 取首行并转义，防止破坏外层标签块
+
 示例:
     prompt = apply_prompt_template()  → agent_name="Caspian"
     prompt = apply_prompt_template("DeepSeek")  → agent_name="DeepSeek"
     prompt = apply_prompt_template(skill_names="pdf, code-review", container_base_path="/mnt/skills")
+    section = build_subagent_section()
 """
 
 SYSTEM_PROMPT_TEMPLATE = """
@@ -245,3 +257,68 @@ def apply_prompt_template(
         names=skill_names,
         container_base_path=container_base_path or "",
     )
+
+
+def build_subagent_section(app_config=None) -> str:
+    """组装 subagent 委托纪律段（委托收益 / 不委托 / 代价 + 类型说明）。
+
+    输入:
+        app_config: AppConfig | None — 应用配置，None 时自动加载
+
+    输出:
+        str — 委托纪律段；无可用类型时返回空字符串
+
+    工作流:
+        (1) 从注册表列出可用类型
+        (2) 无可用类型 → 返回空
+        (3) 组装委托纪律清单与逐类型说明（自定义 description 取首行并转义）
+    """
+    from html import escape
+
+    from caspian.subagents import get_available_subagent_names, get_subagent_config
+
+    if app_config is None:
+        from caspian.config import get_app_config
+
+        app_config = get_app_config("config.yaml")
+
+    available_names = get_available_subagent_names(app_config=app_config)
+    if not available_names:
+        return ""
+
+    builtin_descriptions = {
+        "general-purpose": "通用推理与执行 agent，适合多步推理、检索、文件操作等有界子任务。",
+        "bash": "沙箱命令行执行专家，仅限有界 shell 工作流（脚本、数据处理、环境搭建）。",
+    }
+
+    lines = ["## Subagent Delegation", ""]
+    lines.extend([
+        "Delegate work to a subagent ONLY when the expected benefit clearly exceeds the overhead. Useful benefits:",
+        "- Material wall-clock savings from independent parallel work",
+        "- Specialist tools, skills, models, or domain instructions",
+        "- Context isolation for a bounded, unusually context-heavy investigation",
+        "",
+        "Do NOT delegate:",
+        "- Merely because a task is complex, multi-step, verbose, or touches a large repo",
+        "- Splitting dependent steps across parallel subagents; keep the chain together",
+        "- Parallel work with overlapping files, shared mutable state, or external side effects",
+        "- Tasks requiring user interaction or clarification",
+        "",
+        "Costs to include in the delegation decision:",
+        "- Repeating the same repository discovery in multiple contexts",
+        "- Coordination, verification, and synthesis of returned results",
+        "- Any task you can complete more cheaply with direct tools",
+        "",
+        "Available subagent types:",
+    ])
+    for name in available_names:
+        if name in builtin_descriptions:
+            lines.append(f"- **{name}**: {builtin_descriptions[name]}")
+        else:
+            config = get_subagent_config(name, app_config=app_config)
+            if config is not None:
+                # 转义 description 首行，防止注入破坏外层标签块
+                desc = escape(config.description.split("\n")[0].strip(), quote=False)
+                lines.append(f"- **{name}**: {desc}")
+
+    return "\n".join(lines)

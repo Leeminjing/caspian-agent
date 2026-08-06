@@ -610,6 +610,67 @@ textarea:focus-visible {
   background: #fff;
 }
 
+.subtask-card {
+  margin: 8px 0 24px 38px;
+  border: 1px solid #d9dfde;
+  border-radius: 8px;
+  background: #fff;
+  padding: 12px 14px;
+}
+
+.subtask-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.subtask-title {
+  color: #27312f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.subtask-status {
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: #eef2f0;
+  color: #697370;
+  font-size: 11px;
+  padding: 2px 10px;
+}
+
+.subtask-card.is-terminal .subtask-status {
+  background: #e7f0ea;
+  color: #2f6b46;
+}
+
+.subtask-steps {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+}
+
+.subtask-steps li {
+  color: #5b6764;
+  font-size: 12px;
+  line-height: 1.5;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtask-result {
+  margin: 10px 0 0;
+  color: #27312f;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .trace-panel > summary {
   display: flex;
   align-items: center;

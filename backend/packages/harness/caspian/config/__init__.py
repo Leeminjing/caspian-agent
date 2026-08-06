@@ -26,16 +26,28 @@ from caspian.config.extensions_config import (
 )
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
 from caspian.config.stream_bridge_config import StreamBridgeConfig
+from caspian.config.subagents_config import (
+    CustomSubagentConfig,
+    SubagentOverrideConfig,
+    SubagentsAppConfig,
+    clamp_subagent_concurrency,
+    clamp_total_subagents_per_run,
+)
 
 __all__ = [
     "AppConfig",
     "CheckpointerConfig",
     "CommitmentConfig",
+    "CustomSubagentConfig",
     "DatabaseConfig",
     "ExtensionsConfig",
     "LanggraphStoreConfig",
     "McpServerConfig",
     "StreamBridgeConfig",
+    "SubagentOverrideConfig",
+    "SubagentsAppConfig",
+    "clamp_subagent_concurrency",
+    "clamp_total_subagents_per_run",
     "get_app_config",
     "get_enabled_mcp_servers",
     "get_extensions_config",

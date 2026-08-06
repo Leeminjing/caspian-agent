@@ -1,12 +1,14 @@
 """
-本文件对外提供 LeadAgentState 类及两个辅助 TypedDict 和两个自定义 reducer。
+本文件对外提供 LeadAgentState 类及辅助 TypedDict 和自定义 reducer。
 
 LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展业务字段
 SandboxState: 沙箱绑定状态
 ViewedImageData: 已查看图片数据
+DelegationEntry: task 委派账本条目
 
 merge_artifacts: artifacts 字段的 reducer，只增不减，去重保序
 merge_viewed_images: viewed_images 字段的 reducer，累积/覆盖/清空
+merge_delegations: delegations 字段的 reducer，同 id 原位替换保首见顺序，终态不可被非终态覆盖
 
 输入: 无 — 本文件为纯定义文件，不包含函数入口
 输出: LeadAgentState 类及辅助类型供 create_agent() 的 state_schema 参数使用
@@ -30,6 +32,63 @@ class SandboxState(TypedDict):
 class ViewedImageData(TypedDict):
     base64: str
     mime_type: str
+
+
+class DelegationEntry(TypedDict):
+    """task 委派账本条目。"""
+
+    id: str
+    run_id: NotRequired[str]
+    description: str
+    subagent_type: str
+    status: str
+    result_brief: NotRequired[str]
+    result_sha256: NotRequired[str]
+    stop_reason: NotRequired[str]
+    created_at: str
+
+
+TERMINAL_DELEGATION_STATUSES: frozenset[str] = frozenset(
+    {"completed", "failed", "cancelled", "timed_out", "polling_timed_out"}
+)
+
+
+def merge_delegations(
+    existing: list[DelegationEntry] | None,
+    new: list[DelegationEntry] | None,
+) -> list[DelegationEntry]:
+    """delegations 字段的 reducer：同 id 原位替换保首见顺序，终态不可被非终态覆盖。
+
+    输入:
+        existing: list[DelegationEntry] | None — 既有账本
+        new: list[DelegationEntry] | None — 新提交条目
+
+    输出:
+        list[DelegationEntry] — 合并后账本
+
+    工作流:
+        (1) new 为空 → 保留既有
+        (2) 按 id 合并：新条目追加，同 id 以新版本替换，保持首见顺序
+        (3) 既有条目为终态且新条目非终态 → 拒绝替换
+    """
+    if not new:
+        return existing or []
+
+    by_id: dict[str, DelegationEntry] = {}
+    order: list[str] = []
+    for entry in [*(existing or []), *new]:
+        entry_id = entry["id"]
+        previous = by_id.get(entry_id)
+        if (
+            previous is not None
+            and previous["status"] in TERMINAL_DELEGATION_STATUSES
+            and entry["status"] not in TERMINAL_DELEGATION_STATUSES
+        ):
+            continue
+        if entry_id not in by_id:
+            order.append(entry_id)
+        by_id[entry_id] = entry
+    return [by_id[entry_id] for entry_id in order]
 
 
 def merge_artifacts(existing: list[str] | None, new: list[str] | None) -> list[str]:
@@ -63,3 +122,4 @@ class LeadAgentState(AgentState):
     artifacts: Annotated[list[str], merge_artifacts]
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]
     task_contract: NotRequired[str]
+    delegations: Annotated[list[DelegationEntry], merge_delegations]

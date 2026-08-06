@@ -227,7 +227,7 @@ async def run_agent(
         # (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
         model_name = record.model_name or (app_config.models[0].name if app_config.models else None)
         mapped_stream_modes = _map_stream_modes(stream_modes)
-        if app_config.commitment.enabled:
+        if app_config.commitment.enabled or app_config.subagents.enabled:
             if isinstance(mapped_stream_modes, str):
                 mapped_stream_modes = list(
                     dict.fromkeys([mapped_stream_modes, "values", "custom"])
@@ -238,6 +238,9 @@ async def run_agent(
                 )
         user_id = langgraph_context.get("user_id") if langgraph_context else None
         selected_skills = langgraph_context.get("selected_skills", []) if langgraph_context else []
+        if langgraph_context is not None:
+            # run_id 供 SubagentLimitMiddleware 按 run 记账委托总额
+            langgraph_context["run_id"] = record.run_id
 
         agent = await make_lead_agent(
             model_name=model_name or None,
@@ -245,6 +248,7 @@ async def run_agent(
             tool_groups=tool_groups,
             user_id=user_id,
             selected_skills=selected_skills,
+            subagent_enabled=app_config.subagents.enabled,
         )
 
         # (3.5) 挂载 checkpointer 和 store 到 agent

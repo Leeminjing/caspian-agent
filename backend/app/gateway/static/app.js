@@ -99,6 +99,7 @@ function selectThread(id) {
   state.commitmentTraceItems.clear();
   state.tracePanel = null;
   state.activeSelectedSkills = [];
+  subtaskEvents.clear();
   window.CaspianSkills?.clearSelection();
   setBusy(false);
   setStatus("ready", "就绪");
@@ -234,7 +235,80 @@ function collectMessages(value, found = []) {
   return found;
 }
 
+const subtaskEvents = new Map();
+
+function consumeTaskEvent(value) {
+  if (!value || typeof value !== "object") return false;
+  if (typeof value.type === "string" && value.type.startsWith("task_")) {
+    handleSubtaskEvent(value);
+    return true;
+  }
+  return Object.values(value).some(consumeTaskEvent);
+}
+
+function subtaskCard(taskId) {
+  if (subtaskEvents.has(taskId)) return subtaskEvents.get(taskId);
+  removeEmptyState();
+  const card = document.createElement("article");
+  card.className = "subtask-card";
+  card.innerHTML = `
+    <header>
+      <strong class="subtask-title"></strong>
+      <span class="subtask-status"></span>
+    </header>
+    <ol class="subtask-steps"></ol>
+    <p class="subtask-result" hidden></p>`;
+  $("#messages").append(card);
+  subtaskEvents.set(taskId, card);
+  scrollMessages();
+  return card;
+}
+
+function subtaskStatusLabel(type) {
+  const labels = {
+    task_started: "运行中",
+    task_running: "运行中",
+    task_completed: "已完成",
+    task_failed: "失败",
+    task_cancelled: "已取消",
+    task_timed_out: "超时",
+  };
+  return labels[type] || "运行中";
+}
+
+function handleSubtaskEvent(event) {
+  const taskId = String(event.task_id || "");
+  if (!taskId) return;
+  const card = subtaskCard(taskId);
+  const type = String(event.type);
+  $(".subtask-status", card).textContent = subtaskStatusLabel(type);
+  if (type === "task_started") {
+    $(".subtask-title", card).textContent =
+      String(event.description || taskId).slice(0, 64);
+    $(".subtask-title", card).title = taskId;
+    return;
+  }
+  if (type === "task_running") {
+    const message = event.message || {};
+    const step = document.createElement("li");
+    const text = contentText(message.content) || message.tool_calls?.[0]?.name || "";
+    step.textContent = String(text).slice(0, 300);
+    $(".subtask-steps", card).append(step);
+    scrollMessages();
+    return;
+  }
+  const result = $(".subtask-result", card);
+  result.hidden = false;
+  if (type === "task_completed") {
+    result.textContent = String(event.result || "").slice(0, 500);
+  } else {
+    result.textContent = String(event.error || "Task ended.").slice(0, 500);
+  }
+  card.classList.add("is-terminal");
+}
+
 function consumeGraphEvent(data) {
+  if (consumeTaskEvent(data)) return;
   const batches = collectCommitmentMessages(data);
   if (batches.length) {
     batches.forEach(appendCommitmentMessages);

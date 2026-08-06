@@ -100,6 +100,21 @@ class FrontendTests(unittest.TestCase):
         self.assertIn("/assets/skills.css", html)
         self.assertIn("/assets/skills.js", html)
         self.assertTrue((STATIC_DIR / "skills.css").exists())
+
+    def test_subtask_events_rendered_as_cards(self):
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("function consumeTaskEvent", script)
+        self.assertIn("function handleSubtaskEvent", script)
+        self.assertIn('type.startsWith("task_")', script)
+        self.assertIn('"task_started"', script)
+        self.assertIn('"task_running"', script)
+        self.assertIn('"task_completed"', script)
+        self.assertIn("subtaskEvents.clear()", script)
+
+        self.assertIn(".subtask-card {", css)
+        self.assertIn(".subtask-steps {", css)
         self.assertTrue((STATIC_DIR / "skills.js").exists())
 
 

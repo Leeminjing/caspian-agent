@@ -54,6 +54,25 @@ commitment:
   enabled: true
   context7_url: https://mcp.context7.com/mcp
 
+subagents:
+  # 内置 subagent 的默认超时秒数（自定义类型用自身值）
+  timeout_seconds: 1800
+  # 可选：覆盖全部 subagent 的默认最大轮数（None = 保持内置默认 general-purpose=150 / bash=60）
+  # max_turns: 120
+  # 单个 lead run 允许的 subagent 委托总数（1-50）
+  max_total_per_run: 6
+  # per-agent 覆盖（timeout_seconds / max_turns / model / skills）
+  # agents:
+  #   general-purpose:
+  #     timeout_seconds: 1800
+  #     max_turns: 160
+  # 用户自定义 subagent 类型（description / system_prompt / tools / disallowed_tools / skills / model / max_turns / timeout_seconds）
+  # custom_agents:
+  #   my-analyst:
+  #     description: 数据分析专家，用于需要多步数据处理的委托
+  #     system_prompt: 你是数据分析专家。
+  #     model: inherit
+
 stream_bridge:
   type: memory
   queue_maxsize: 512

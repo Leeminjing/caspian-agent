@@ -1,23 +1,36 @@
 """
-本文件对外提供 `build_general_middlewares` 函数，作为通用中间件链的组装入口。
+本文件对外提供 `build_general_middlewares` 与 `build_subagent_middlewares` 函数，
+作为中间件链的组装入口。
 
 对外提供:
-    build_general_middlewares — 返回 agent 通用的 AgentMiddleware 列表
+    build_general_middlewares — 返回 lead agent 通用的 AgentMiddleware 列表
+    build_subagent_middlewares — 返回 subagent 专用的 AgentMiddleware 列表
 
 输入:
-    commitment_enabled: bool — 是否装配 CommitmentMiddleware
-    model/context7_tools — CommitmentMiddleware 的内部依赖
-    skill_names: frozenset[str] | None — 当前用户 enabled 技能名集合，透传给承诺层剥离前导 skill token
+    build_general_middlewares:
+        commitment_enabled: bool — 是否装配 CommitmentMiddleware
+        model/context7_tools — CommitmentMiddleware 的内部依赖
+        skill_names: frozenset[str] | None — 当前用户 enabled 技能名集合，透传给承诺层剥离前导 skill token
+
+    build_subagent_middlewares:
+        model: BaseChatModel | None — 预留（签名对齐）
+        skill_names: frozenset[str] | None — subagent 可用技能名集合（预留）
 
 输出:
-    list[AgentMiddleware] — 按固定顺序排列的通用中间件列表
+    list[AgentMiddleware] — 按固定顺序排列的中间件列表
 
 具体工作流:
+    build_general_middlewares:
     (1) 实例化 UploadsMiddleware（No.1）
     (2) 实例化 DecisionTableMiddleware（No.2，始终装配，无等级表时自动跳过）
     (3) 开启时实例化 CommitmentMiddleware（No.3）
     (4) 实例化 SandboxAuditMiddleware
     (5) 返回有序列表
+
+    build_subagent_middlewares:
+    (1) 只装配 SandboxAuditMiddleware（shell 安全审计）
+    (2) 不装配 UploadsMiddleware / CommitmentMiddleware（子上下文干净、防嵌套承诺）
+    (3) 返回列表
 
 示例:
     from caspian.agents.middlewares.builder import build_general_middlewares
@@ -43,12 +56,10 @@ def build_general_middlewares(
     context7_tools: list[BaseTool] | None = None,
     skill_names: frozenset[str] | None = None,
 ) -> list[AgentMiddleware]:
-    """组装通用中间件链。
-
-    输入: 无
+    """组装 lead agent 通用中间件链。
 
     输出:
-        list[AgentMiddleware] — [UploadsMiddleware, DecisionTableMiddleware, SandboxAuditMiddleware]
+        list[AgentMiddleware] — [UploadsMiddleware, DecisionTableMiddleware(, CommitmentMiddleware), SandboxAuditMiddleware]
     """
     middlewares: list[AgentMiddleware] = [
         UploadsMiddleware(),
@@ -61,4 +72,22 @@ def build_general_middlewares(
             CommitmentMiddleware(model, context7_tools or [], skill_names or frozenset())
         )
     middlewares.append(SandboxAuditMiddleware())
+    return middlewares
+
+
+def build_subagent_middlewares(
+    *,
+    model: BaseChatModel | None = None,
+    skill_names: frozenset[str] | None = None,
+) -> list[AgentMiddleware]:
+    """组装 subagent 专用中间件链。
+
+    输出:
+        list[AgentMiddleware] — [SandboxAuditMiddleware]
+
+    工作流:
+        (1) 只保留 SandboxAuditMiddleware（shell 高危命令审计不可丢）
+        (2) 不含 UploadsMiddleware（子上下文只含任务输入）与 CommitmentMiddleware（防嵌套承诺流程）
+    """
+    middlewares: list[AgentMiddleware] = [SandboxAuditMiddleware()]
     return middlewares

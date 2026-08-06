@@ -4,6 +4,7 @@
 输入:
     app_config: AppConfig | None  — 应用配置对象，None 时内部自动加载
     tool_groups: list[str] | None  — 需要加载的工具分组名列表，None 表示加载全部
+    subagent_enabled: bool        — True 时包含 task 委托工具，False（subagent 场景）时排除防递归
 
 输出:
     list[BaseTool] — 经过去重和过滤的可用 LangChain Tool 列表
@@ -12,11 +13,13 @@
     (1) app_config 为 None 时内部调用 get_app_config() 自动加载 config.yaml
     (2) 并行获取三类工具: config.yaml 声明式工具、built-in 工具、MCP 远端工具
     (3) 若指定 tool_groups，仅保留 group 匹配的 config.yaml 工具，built-in 和 MCP 不受过滤
-    (4) 三类工具按名称去重，优先级 config.yaml > built-in > MCP
-    (5) 返回完整工具列表
+    (4) subagent_enabled=False 时从 built-in 排除 task 工具（防递归嵌套）
+    (5) 三类工具按名称去重，优先级 config.yaml > built-in > MCP
+    (6) 返回完整工具列表
 
 示例:
     tools = await get_available_tools(tool_groups=["file:read", "bash"])
+    subagent_tools = await get_available_tools(subagent_enabled=False)
     agent = create_agent(model, tools=tools)
 """
 
@@ -44,15 +47,24 @@ def _load_config_tools(app_config: AppConfig) -> list[BaseTool]:
     return tools
 
 
-def _load_builtin_tools() -> list[BaseTool]:
+def _load_builtin_tools(subagent_enabled: bool = True) -> list[BaseTool]:
     from caspian.tools.builtins import (
         list_uploaded_files,
         present_file_tool,
+        task_tool,
         update_decision_table,
         view_image_tool,
     )
 
-    return [present_file_tool, view_image_tool, list_uploaded_files, update_decision_table]
+    tools: list[BaseTool] = [
+        present_file_tool,
+        view_image_tool,
+        list_uploaded_files,
+        update_decision_table,
+    ]
+    if subagent_enabled:
+        tools.append(task_tool)
+    return tools
 
 
 async def _load_mcp_tools() -> list[BaseTool]:
@@ -99,6 +111,7 @@ def _deduplicate_tools(
 async def get_available_tools(
     app_config: AppConfig | None = None,
     tool_groups: list[str] | None = None,
+    subagent_enabled: bool = True,
 ) -> list[BaseTool]:
     if app_config is None:
         app_config = get_app_config("config.yaml")
@@ -108,7 +121,7 @@ async def get_available_tools(
     if tool_groups is not None:
         config_tools = _filter_config_tools(config_tools, tool_groups, app_config)
 
-    builtin_tools = _load_builtin_tools()
+    builtin_tools = _load_builtin_tools(subagent_enabled=subagent_enabled)
     mcp_tools = await _load_mcp_tools()
 
     return _deduplicate_tools(config_tools, builtin_tools, mcp_tools)

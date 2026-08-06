@@ -1857,6 +1857,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         config = SimpleNamespace(
             models=[],
             commitment=SimpleNamespace(enabled=True),
+            subagents=SimpleNamespace(enabled=True),
         )
         with patch(
             "caspian.runtime.runs.worker.make_lead_agent",

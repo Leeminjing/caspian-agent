@@ -26,6 +26,7 @@ from caspian.config.model_config import ModelConfig
 from caspian.config.sandbox_config import SandboxConfig
 from caspian.config.skills_config import SkillsConfig
 from caspian.config.stream_bridge_config import StreamBridgeConfig
+from caspian.config.subagents_config import SubagentsAppConfig
 from caspian.config.tool_config import ToolConfig
 from caspian.config.tool_group_config import ToolGroupConfig
 
@@ -44,6 +45,7 @@ class AppConfig(BaseModel):
     langgraph_store: LanggraphStoreConfig = LanggraphStoreConfig()
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
     commitment: CommitmentConfig = CommitmentConfig()
+    subagents: SubagentsAppConfig = SubagentsAppConfig()
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

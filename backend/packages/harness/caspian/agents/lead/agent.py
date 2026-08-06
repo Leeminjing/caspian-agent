@@ -4,7 +4,7 @@
 
 对外提供:
     make_lead_agent — 装配并返回可执行的 CompiledStateGraph
-    _build_middlewares — 组装 lead_agent 的中间件链（通用 + 专属）
+    _build_middlewares — 组装 lead_agent 的中间件链（通用 + subagent 限制/账本）
 
 输入:
     make_lead_agent:
@@ -13,6 +13,7 @@
         tool_groups: list[str] | None — 需要加载的工具分组名列表，None 表示加载全部
         user_id: str | None — 用户标识，用于定位 per-user custom skills 路径，None 时跳过 custom
         selected_skills: list[str] | None — 用户显式选中的技能名列表，注入 system prompt
+        subagent_enabled: bool — 是否装配 task 委托工具与 SubagentLimitMiddleware（默认 True）
 
 输出:
     CompiledStateGraph — langchain.agents.create_agent() 产出的可执行 agent graph
@@ -26,13 +27,14 @@
         (2d) 逐个 parse_skill_file() 解析 + _validate_skill_frontmatter 校验
         (2e) 过滤 enabled=true 的 Skill → 构建 SkillCatalog
         (2f) skill_names = catalog.names → 逗号分隔字符串
-    (3) await get_available_tools(tool_groups=tool_groups) 汇集全局工具
+    (3) await get_available_tools(tool_groups=tool_groups, subagent_enabled=subagent_enabled) 汇集全局工具
         (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
         (3b) 合并: [describe_skill_tool] + global_tools
-    (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware
+    (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware 与 subagent 限制/账本
         (4a) 调用 build_general_middlewares() 获取通用中间件链
-        (4b) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
-    (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt
+        (4b) subagent_enabled 时追加 SubagentLimitMiddleware 与 DelegationLedgerMiddleware
+    (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt，
+        追加委托纪律段与选中技能段
     (6) 调用 langchain.agents.create_agent(model, tools, middleware, system_prompt, state_schema=LeadAgentState)
     (7) 返回 CompiledStateGraph
 
@@ -67,17 +69,23 @@ def _build_middlewares(
     model: BaseChatModel,
     context7_tools: list[BaseTool],
     skill_names: frozenset[str] | None = None,
+    subagent_enabled: bool = True,
 ) -> list[AgentMiddleware]:
-    """组装 lead_agent 的中间件链：通用链 + lead_agent 专属中间件。
+    """组装 lead_agent 的中间件链：通用链 + subagent 限制/账本。
 
-    输入: 无
+    输入:
+        app_config: AppConfig — 应用配置
+        model: BaseChatModel — 承诺层内部依赖
+        context7_tools: list[BaseTool] — 承诺层内部依赖
+        skill_names: frozenset[str] | None — enabled 技能名集合
+        subagent_enabled: bool — 是否装配 subagent 限制与账本中间件
 
     输出:
         list[AgentMiddleware] — 按顺序排列的中间件列表
 
     工作流:
         (1) 调用 build_general_middlewares() 获取通用中间件链
-        (2) 追加 lead_agent 专属中间件（当前无额外中间件，预留 extend 调用点）
+        (2) subagent_enabled 时追加 SubagentLimitMiddleware 与 DelegationLedgerMiddleware
         (3) 返回完整列表
     """
     middlewares = build_general_middlewares(
@@ -86,7 +94,16 @@ def _build_middlewares(
         context7_tools=context7_tools,
         skill_names=skill_names,
     )
-    # ponytail: lead_agent 专属中间件预留扩展点
+    if subagent_enabled:
+        from caspian.agents.middlewares.delegation_ledger_middleware import (
+            DelegationLedgerMiddleware,
+        )
+        from caspian.agents.middlewares.subagent_limit_middleware import (
+            SubagentLimitMiddleware,
+        )
+
+        middlewares.append(SubagentLimitMiddleware())
+        middlewares.append(DelegationLedgerMiddleware())
     return middlewares
 
 
@@ -238,6 +255,7 @@ async def make_lead_agent(
     tool_groups: list[str] | None = None,
     user_id: str | None = None,
     selected_skills: list[str] | None = None,
+    subagent_enabled: bool = True,
 ) -> CompiledStateGraph:
     # (1) 创建模型
     model = create_chat_model(name=model_name)
@@ -252,20 +270,29 @@ async def make_lead_agent(
     catalog = build_enabled_skill_catalog(user_id=user_id)
     skill_names = ", ".join(sorted(catalog.names))
 
-    # (3) 汇集工具
-    tools = await get_available_tools(tool_groups=tool_groups)
+    # (3) 汇集工具（subagent_enabled=False 时不加载 task 委托工具）
+    tools = await get_available_tools(
+        tool_groups=tool_groups,
+        subagent_enabled=subagent_enabled,
+    )
 
     from caspian.tools.builtins.describe_skill_tool import build_describe_skill_tool
 
     describe_skill_tool = build_describe_skill_tool(catalog)
     tools = [describe_skill_tool] + tools
 
-    # (4) system prompt
+    # (4) system prompt（委托纪律段 + 选中技能段）
     system_prompt = apply_prompt_template(
         agent_name=agent_name,
         skill_names=skill_names,
         container_base_path=container_base_path,
     )
+    if subagent_enabled:
+        from caspian.agents.lead.prompt import build_subagent_section
+
+        subagent_section = build_subagent_section(app_config=app_config)
+        if subagent_section:
+            system_prompt = f"{system_prompt}\n\n{subagent_section}"
     selected_prompt = _selected_skill_prompt(catalog, selected_skills or [])
     if selected_prompt:
         system_prompt = f"{system_prompt}\n\n{selected_prompt}"
@@ -279,7 +306,11 @@ async def make_lead_agent(
         if not context7_tools:
             raise RuntimeError("CommitmentMiddleware 已启用，但 Context7 工具不可用")
     middleware = _build_middlewares(
-        app_config, model, context7_tools, frozenset(catalog.names)
+        app_config,
+        model,
+        context7_tools,
+        frozenset(catalog.names),
+        subagent_enabled=subagent_enabled,
     )
 
     # (6) create_agent
