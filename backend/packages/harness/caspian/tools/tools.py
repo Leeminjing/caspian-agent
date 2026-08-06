@@ -71,11 +71,13 @@ def _filter_config_tools(
     app_config: AppConfig,
 ) -> list[BaseTool]:
     group_set = frozenset(tool_groups)
-    config_by_name = {t.name: t for t in config_tools}
+    # use 声明后段即模块级工具名（caspian.sandbox.tools:read_file_tool → read_file_tool）
+    tools_by_name = {t.name: t for t in config_tools}
     result: list[BaseTool] = []
     for item in app_config.tools:
-        if item.group in group_set and item.name in config_by_name:
-            result.append(config_by_name[item.name])
+        tool_name = item.use.rsplit(":", 1)[-1]
+        if item.group in group_set and tool_name in tools_by_name:
+            result.append(tools_by_name[tool_name])
     return result
 
 
