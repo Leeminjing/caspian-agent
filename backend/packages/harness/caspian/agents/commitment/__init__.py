@@ -24,7 +24,10 @@ from caspian.agents.commitment.artifacts import (
     _write_knowledge,
 )
 from caspian.agents.commitment.delegation import ReviewedDelegator
-from caspian.agents.commitment.middleware import CommitmentMiddleware
+from caspian.agents.commitment.middleware import (
+    CommitmentMiddleware,
+    _extract_uploads_tag,
+)
 from caspian.agents.commitment.references import _SearchResultParser
 from caspian.agents.commitment.schemas import (
     CommitmentState,
@@ -66,6 +69,7 @@ __all__ = [
     "_context7_candidate_version",
     "_context7_stable_version",
     "_extract_structured",
+    "_extract_uploads_tag",
     "_filter_stage_four_result",
     "_has_open_conflicts",
     "_human_payload",

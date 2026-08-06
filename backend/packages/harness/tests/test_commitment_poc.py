@@ -17,13 +17,14 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from langchain.agents import create_agent
-from langchain.messages import HumanMessage, RemoveMessage
+from langchain.messages import HumanMessage
 from langchain.tools import tool
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
+from langgraph.graph.message import add_messages
 from langgraph.types import Command, Interrupt, interrupt
 
 from backend.app.gateway.routers.thread_runs import RunCreateRequest
@@ -43,6 +44,7 @@ from caspian.agents.commitment import (
     _context7_candidate_version,
     _context7_stable_version,
     _extract_structured,
+    _extract_uploads_tag,
     _filter_stage_four_result,
     _has_open_conflicts,
     _human_payload,
@@ -122,8 +124,10 @@ class StubDelegator(ReviewedDelegator):
 class FakeSupervisor:
     def __init__(self, result):
         self.result = result
+        self.inputs = []
 
-    async def astream(self, _input, stream_mode):
+    async def astream(self, graph_input, stream_mode, **kwargs):
+        self.inputs.append(graph_input)
         yield "custom", {
             "type": "commitment_messages",
             "actor": "worker",
@@ -712,6 +716,34 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(events[0]["actor"], "evaluator")
         review = json.loads(events[0]["messages"][1].content)
         self.assertFalse(review["approved"])
+
+    async def test_evaluator_schema_error_reaches_next_worker_and_stops_at_three(self):
+        class InvalidEvaluatorDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+                self.worker_feedback = []
+
+            async def _worker(
+                self,
+                envelope,
+                feedback,
+                supervisor_messages=None,
+                attempt=1,
+            ):
+                self.worker_feedback.append(feedback)
+                return WorkerOutput(result={"goal": "valid worker output"})
+
+        delegator = InvalidEvaluatorDelegator()
+        output, error = await delegator.run(
+            TaskEnvelope(stage=1, instruction="goal")
+        )
+
+        self.assertIsNone(output)
+        self.assertEqual(len(delegator.worker_feedback), 3)
+        self.assertEqual(delegator.worker_feedback[0], "")
+        self.assertIn("Evaluator输出不符合ReviewOutput结构", error)
+        self.assertEqual(delegator.worker_feedback[1], error)
+        self.assertEqual(delegator.worker_feedback[2], error)
 
     async def test_unexpected_tool_error_is_not_wrapped_as_tool_message(self):
         class ExplodingDelegator(ReviewedDelegator):
@@ -1384,35 +1416,198 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     (Path(temp_dir) / files[1]).read_text(encoding="utf-8"),
                 )
 
-    async def test_middleware_returns_only_contract_message(self):
+    async def test_middleware_only_runs_for_explicit_commit_command(self):
         middleware = object.__new__(CommitmentMiddleware)
-        middleware._supervisor = FakeSupervisor(
+        supervisor = FakeSupervisor({})
+        middleware._supervisor = supervisor
+        runtime = SimpleNamespace()
+
+        messages = [
+            HumanMessage(content="普通对话", id="plain"),
+            HumanMessage(content="/commit", id="empty"),
+            HumanMessage(content="/commit   ", id="blank"),
+            HumanMessage(content="请稍后 /commit 执行", id="middle"),
+            HumanMessage(content="/commitment 执行", id="long-command"),
+            HumanMessage(content="/Commit 执行", id="wrong-case"),
+            AIMessage(content="/commit 执行", id="assistant"),
+        ]
+        for message in messages:
+            with self.subTest(content=message.content):
+                self.assertIsNone(
+                    await middleware._run({"messages": [message]}, runtime)
+                )
+        self.assertEqual(supervisor.inputs, [])
+
+    async def test_middleware_preserves_history_and_replaces_commit_message(self):
+        middleware = object.__new__(CommitmentMiddleware)
+        supervisor = FakeSupervisor(
             {
                 "stage": 9,
                 "task_contract": "# Contract",
                 "final_message": "<task_contract># Contract</task_contract>",
             }
         )
+        middleware._supervisor = supervisor
         runtime = SimpleNamespace(
             execution_info=SimpleNamespace(thread_id="thread-1")
         )
+        original = [
+            HumanMessage(content="先讨论目标", id="history-human"),
+            AIMessage(content="先澄清约束", id="history-ai"),
+            HumanMessage(
+                content="  /commit   实现登录流程  ",
+                id="commit-message",
+            ),
+        ]
         batches = []
         with patch(
             "caspian.agents.commitment.middleware._write_commitment_messages",
             side_effect=batches.append,
         ):
             update = await middleware._run(
-                {"messages": [HumanMessage(content="raw goal")]},
+                {"messages": original},
                 runtime,
             )
         self.assertEqual(update["task_contract"], "# Contract")
-        self.assertEqual(len(update["messages"]), 2)
-        self.assertIsInstance(update["messages"][0], RemoveMessage)
-        self.assertIsInstance(update["messages"][1], HumanMessage)
-        self.assertNotIn("Worker", update["messages"][1].content)
+        self.assertEqual(len(update["messages"]), 1)
+        self.assertIsInstance(update["messages"][0], HumanMessage)
+        self.assertEqual(update["messages"][0].id, "commit-message")
+        self.assertNotIn("Worker", update["messages"][0].content)
+        subgraph_seed = supervisor.inputs[0]
+        supervisor_messages = subgraph_seed["messages"]
+        self.assertEqual(
+            [message.content for message in supervisor_messages],
+            ["实现登录流程"],
+        )
+        self.assertEqual(supervisor_messages[0].id, "commit-message")
+        self.assertEqual(subgraph_seed["source_text"], "实现登录流程")
+        reduced = add_messages(original, update["messages"])
+        self.assertEqual(
+            [message.content for message in reduced],
+            [
+                "先讨论目标",
+                "先澄清约束",
+                "<task_contract># Contract</task_contract>",
+            ],
+        )
+        self.assertEqual(
+            [message.id for message in reduced],
+            ["history-human", "history-ai", "commit-message"],
+        )
         self.assertTrue(
             all(batch["type"] == "commitment_messages" for batch in batches)
         )
+
+    def test_uploads_tag_extracted_from_instruction(self):
+        clean, tag = _extract_uploads_tag(
+            "做X\n\n<current_uploads>\n- filename: a.md\n  size: 10\n"
+            "</current_uploads>"
+        )
+        self.assertEqual(clean, "做X")
+        self.assertIn("a.md", tag or "")
+        clean, tag = _extract_uploads_tag("做X")
+        self.assertEqual(clean, "做X")
+        self.assertIsNone(tag)
+
+    async def test_lead_history_and_tool_messages_never_enter_subgraph(self):
+        middleware = object.__new__(CommitmentMiddleware)
+        supervisor = FakeSupervisor(
+            {
+                "stage": 9,
+                "task_contract": "# Contract",
+                "final_message": "<task_contract># Contract</task_contract>",
+            }
+        )
+        middleware._supervisor = supervisor
+        runtime = SimpleNamespace(
+            execution_info=SimpleNamespace(thread_id="thread-1")
+        )
+        lead = [
+            HumanMessage(content="先讨论目标", id="history-human"),
+            AIMessage(content="先澄清约束", id="history-ai"),
+            ToolMessage(
+                content='{"stage": 2, "status": "approved", '
+                '"result": {"requirements": ["x"]}}',
+                tool_call_id="lead-tool",
+                id="history-tool",
+            ),
+            HumanMessage(
+                content="/commit 做X\n\n<current_uploads>\n"
+                "- filename: a.md\n  size: 10\n</current_uploads>",
+                id="commit-message",
+            ),
+        ]
+        with patch(
+            "caspian.agents.commitment.middleware._write_commitment_messages",
+            side_effect=lambda _payload: None,
+        ):
+            await middleware._run({"messages": lead}, runtime)
+        seed = supervisor.inputs[0]
+        self.assertEqual(
+            [message.content for message in seed["messages"]],
+            ["做X"],
+        )
+        self.assertEqual(seed["messages"][0].id, "commit-message")
+        self.assertEqual(seed["source_text"], "做X")
+        self.assertIn("a.md", seed["uploads_tag"])
+        self.assertNotIn("先讨论目标", str(seed["messages"]))
+        self.assertNotIn("先澄清约束", str(seed["messages"]))
+        self.assertNotIn("lead-tool", str(seed["messages"]))
+        self.assertNotIn("history-tool", str(seed["messages"]))
+
+    async def test_resume_does_not_replay_completed_stages(self):
+        class CountingDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+                self.calls: list[int] = []
+
+            async def run(self, envelope, supervisor_messages=None):
+                self.calls.append(envelope.stage)
+                stage = envelope.stage
+                if stage == 2:
+                    result = {
+                        "requirements": ["r1"],
+                        "discarded_requirements": [],
+                        "compatibility_checks": [
+                            {
+                                "technology": "t",
+                                "application_type": "web",
+                                "ui_surface": "browser",
+                                "runtime_platform": "server",
+                                "host_model": "web server",
+                                "status": "verified",
+                            }
+                        ],
+                        "conflicts": [],
+                    }
+                else:
+                    result = {"goal": f"stage-{stage}"}
+                return WorkerOutput(result=result), ""
+
+        delegator = CountingDelegator()
+        supervisor = _build_supervisor(delegator)
+        supervisor.checkpointer = InMemorySaver()
+        config = {"configurable": {"thread_id": "no-replay"}}
+        state = {
+            "messages": [HumanMessage(content="指令", id="inst")],
+            "stage": 0,
+            "awaiting_human": None,
+            "artifacts": {},
+            "source_text": "指令",
+            "thread_id": "no-replay",
+            "knowledge_files": [],
+        }
+        first = await supervisor.ainvoke(state, config=config)
+        self.assertEqual(first["__interrupt__"][0].value["stage"], 3)
+        self.assertEqual(delegator.calls, [1, 2, 3])
+
+        resumed = await supervisor.ainvoke(
+            Command(resume={"decision": "approve"}),
+            config=config,
+        )
+        self.assertEqual(resumed["__interrupt__"][0].value["stage"], 5)
+        # 已完成阶段 1-3 不得重跑；resume 后只新执行 stage 4、5
+        self.assertEqual(delegator.calls, [1, 2, 3, 4, 5])
 
     async def test_nested_interrupt_reaches_parent_and_resumes(self):
         async def pause_for_review(_state):
@@ -1440,17 +1635,39 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         config = {"configurable": {"thread_id": "nested-interrupt"}}
 
         paused = await agent.ainvoke(
-            {"messages": [HumanMessage(content="goal")]},
+            {
+                "messages": [
+                    HumanMessage(content="先讨论目标", id="history-human"),
+                    AIMessage(content="先澄清约束", id="history-ai"),
+                    HumanMessage(content="/commit goal", id="commit-message"),
+                ]
+            },
             config=config,
         )
         self.assertEqual(paused["__interrupt__"][0].value["stage"], 3)
+        self.assertEqual(
+            [message.content for message in paused["messages"]],
+            ["先讨论目标", "先澄清约束", "/commit goal"],
+        )
 
         resumed = await agent.ainvoke(
             Command(resume={"decision": "approve"}),
             config=config,
         )
         self.assertEqual(resumed["task_contract"], "# Contract")
-        self.assertEqual(resumed["messages"][-1].content, "lead done")
+        self.assertEqual(
+            [message.content for message in resumed["messages"]],
+            [
+                "先讨论目标",
+                "先澄清约束",
+                "<task_contract># Contract</task_contract>",
+                "lead done",
+            ],
+        )
+        self.assertEqual(
+            [message.id for message in resumed["messages"][:3]],
+            ["history-human", "history-ai", "commit-message"],
+        )
 
     def test_resume_request_and_graph_input(self):
         resume = {"decision": "approve"}

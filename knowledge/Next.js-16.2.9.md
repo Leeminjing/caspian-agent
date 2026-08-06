@@ -1,15 +1,7 @@
 # Next.js 16.2.9
 
-Source: https://github.com/vercel/next.js/blob/canary/docs/01-app/03-api-reference/02-components/image.mdx
+Source: https://github.com/vercel/next.js/blob/canary/docs/index.mdx
 
-### Configure Default Image Qualities in Next.js
+### Pre-requisite knowledge
 
-Specify the default allowed image quality values in `next.config.js`. This field is required starting with Next.js 16.
-
-```js
-module.exports = {
-  images: {
-    qualities: [75],
-  },
-}
-```
+To effectively use the Next.js documentation, familiarity with web development fundamentals such as HTML, CSS, JavaScript, and React is recommended. For those new to React or needing a refresher, the React Foundations course and the Next.js Foundations course are suggested resources.

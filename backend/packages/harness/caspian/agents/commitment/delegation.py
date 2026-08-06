@@ -599,10 +599,12 @@ class ReviewedDelegator:
         prompt = {
             "stage": envelope.stage,
             "instruction": envelope.instruction,
+            "source_text": envelope.context.get("source_text", ""),
             "supervisor_messages": [
                 message.model_dump() for message in supervisor_messages
             ],
             "human_feedback": envelope.context.get("human_feedback", ""),
+            "current_uploads": envelope.context.get("current_uploads", ""),
             "acceptance_criteria": envelope.acceptance_criteria,
             "reviewer_feedback": feedback,
         }
@@ -618,7 +620,8 @@ class ReviewedDelegator:
         if envelope.stage == 4:
             return _filter_stage_four_result(
                 output,
-                _source_text(supervisor_messages),
+                envelope.context.get("source_text", "")
+                or _source_text(supervisor_messages),
             )
         if envelope.stage == 3:
             return _normalize_stage_three_result(
@@ -642,6 +645,8 @@ class ReviewedDelegator:
                 message.model_dump() for message in supervisor_messages
             ],
             "task": envelope.model_dump(),
+            "source_text": envelope.context.get("source_text", ""),
+            "current_uploads": envelope.context.get("current_uploads", ""),
             "reviewer_feedback": reviewer_feedback,
             "worker_output": worker_output.model_dump(),
             "deterministic_validation_error": structure_error,

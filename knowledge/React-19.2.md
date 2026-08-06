@@ -1,11 +1,19 @@
 # React 19.2
 
-Source: https://github.com/reactjs/react.dev/blob/main/src/content/learn/creating-a-react-app.md
+Source: https://github.com/reactjs/react.dev/blob/main/src/content/learn/react-compiler/installation.md
 
-### Create Next.js App
+### Install React Compiler as a Development Dependency
 
-Official command to create a new Next.js app with App Router (React's recommended framework for full-stack React apps)
+Add `babel-plugin-react-compiler` to your project's development dependencies using npm, Yarn, or pnpm.
 
 ```bash
-npx create-next-app@latest
+npm install -D babel-plugin-react-compiler@latest
+```
+
+```bash
+yarn add -D babel-plugin-react-compiler@latest
+```
+
+```bash
+pnpm add -D babel-plugin-react-compiler@latest
 ```

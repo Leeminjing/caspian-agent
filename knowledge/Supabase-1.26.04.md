@@ -1,12 +1,19 @@
 # Supabase 1.26.04
 
-Source: https://github.com/supabase/supabase/blob/master/apps/docs/content/guides/getting-started/tutorials/with-nextjs.mdx
+Source: https://github.com/supabase/supabase/blob/master/apps/docs/content/guides/getting-started/quickstarts/kotlin.mdx
 
-### Configure Supabase Environment Variables
+### Initialize the Supabase client
 
-Save your Supabase API URL and publishable key in a `.env.local` file at the project root for application access.
+Create the Supabase client instance with your project URL and key, installing the Postgrest plugin.
 
-```bash
-NEXT_PUBLIC_SUPABASE_URL=YOUR_SUPABASE_URL
-NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+```kotlin
+import ...
+
+val supabase = createSupabaseClient(
+    supabaseUrl = "https://xyzcompany.supabase.co",
+    supabaseKey = "your_publishable_key"
+  ) {
+    install(Postgrest)
+}
+...
 ```

@@ -1,27 +1,11 @@
 # Tailwind CSS latest-stable
 
-Source: https://github.com/tailwindlabs/tailwindcss.com/blob/main/tailwindcss.com/src/docs/upgrade-guide.mdx
+Source: https://github.com/tailwindlabs/tailwindcss.com/blob/main/src/docs/theme.mdx
 
-### PostCSS Plugin Configuration for v4
+### Overview > What are theme variables?
 
-Official upgrade guide for PostCSS plugin setup in Tailwind CSS v4, showing the transition from v3's integrated plugin to the dedicated @tailwindcss/postcss package.
+Tailwind automatically generates standard CSS variables for every theme variable defined. This allows you to reference your design tokens in arbitrary values or inline styles using standard CSS variable syntax.
 
-```markdown
-In v3, the `tailwindcss` package was a PostCSS plugin, but in v4 the PostCSS plugin lives in a dedicated `@tailwindcss/postcss` package.
+### Default theme variables
 
-Additionally, in v4 imports and vendor prefixing is now handled for you automatically, so you can remove `postcss-import` and `autoprefixer` if they are in your project:
-
-```js
-// [!code filename:postcss.config.mjs]
-export default {
-  plugins: {
-    // [!code --:4]
-    "postcss-import": {},
-    tailwindcss: {},
-    autoprefixer: {},
-    // [!code ++:2]
-    "@tailwindcss/postcss": {},
-  },
-};
-```
-```
+Tailwind CSS includes a set of default theme variables that provide foundational design tokens such as color palettes, type scales, shadows, and fonts. These variables are imported automatically when including the framework in your CSS file. Utilities like background colors, font families, and shadows are driven by these theme variables rather than being hardcoded, allowing for a flexible and consistent design system.

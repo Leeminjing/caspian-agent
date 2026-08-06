@@ -90,6 +90,7 @@ function renderThreads() {
 function selectThread(id) {
   if (state.running) return;
   finishTracePanel("已停止");
+  closeCommandMenu();
   state.threadId = id;
   state.pendingInterrupt = null;
   state.uploads = [];
@@ -127,6 +128,7 @@ function bindPrompts(root = document) {
     button.addEventListener("click", () => {
       $("#message-input").value = button.dataset.prompt;
       resizeComposer();
+      closeCommandMenu();
       $("#message-input").focus();
     });
   });
@@ -159,6 +161,7 @@ function setBusy(value) {
   $("#message-input").disabled = value || Boolean(state.pendingInterrupt);
   $("#send-button").disabled = value || Boolean(state.pendingInterrupt);
   $("#attach-button").disabled = value || Boolean(state.pendingInterrupt);
+  if (value || state.pendingInterrupt) closeCommandMenu();
   if (value) setStatus("running", "处理中");
 }
 
@@ -774,6 +777,40 @@ function resizeComposer() {
   input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
 }
 
+function closeCommandMenu() {
+  const input = $("#message-input");
+  $("#command-menu").hidden = true;
+  $("#command-option-commit").setAttribute("aria-selected", "false");
+  input.setAttribute("aria-expanded", "false");
+  input.removeAttribute("aria-activedescendant");
+}
+
+function updateCommandMenu() {
+  const input = $("#message-input");
+  const matches = /^\/[^\s]*$/.test(input.value) && "/commit".startsWith(input.value);
+  if (
+    input.disabled || document.activeElement !== input ||
+    input.selectionStart !== input.value.length || input.selectionEnd !== input.value.length ||
+    !matches
+  ) {
+    closeCommandMenu();
+    return;
+  }
+  $("#command-menu").hidden = false;
+  $("#command-option-commit").setAttribute("aria-selected", "true");
+  input.setAttribute("aria-expanded", "true");
+  input.setAttribute("aria-activedescendant", "command-option-commit");
+}
+
+function selectCommitCommand() {
+  const input = $("#message-input");
+  input.value = "/commit ";
+  input.setSelectionRange(input.value.length, input.value.length);
+  closeCommandMenu();
+  resizeComposer();
+  input.focus();
+}
+
 function showLogin() {
   $("#login-view").hidden = false;
   $("#app-view").hidden = true;
@@ -851,16 +888,45 @@ $("#file-input").addEventListener("change", async (event) => {
   }
 });
 
-$("#message-input").addEventListener("input", resizeComposer);
+$("#message-input").addEventListener("input", () => {
+  resizeComposer();
+  updateCommandMenu();
+});
+$("#message-input").addEventListener("focus", updateCommandMenu);
+$("#message-input").addEventListener("click", updateCommandMenu);
+$("#message-input").addEventListener("blur", closeCommandMenu);
+$("#message-input").addEventListener("keyup", (event) => {
+  if (!["Escape", "Enter", "ArrowUp", "ArrowDown"].includes(event.key)) updateCommandMenu();
+});
 $("#message-input").addEventListener("keydown", (event) => {
+  if (!$("#command-menu").hidden) {
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      return;
+    }
+    if (event.key === "Enter") {
+      event.preventDefault();
+      selectCommitCommand();
+      return;
+    }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeCommandMenu();
+      return;
+    }
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     $("#composer").requestSubmit();
   }
 });
 
+$("#command-option-commit").addEventListener("mousedown", (event) => event.preventDefault());
+$("#command-option-commit").addEventListener("click", selectCommitCommand);
+
 $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
+  closeCommandMenu();
   const input = $("#message-input");
   const content = input.value.trim();
   if (!content || state.running || state.pendingInterrupt) return;

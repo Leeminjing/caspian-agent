@@ -31,6 +31,8 @@ class FrontendTests(unittest.TestCase):
                 "login-form",
                 "messages",
                 "composer",
+                "command-menu",
+                "command-option-commit",
                 "commitment-progress",
                 "review-template",
                 "trace-template",
@@ -45,6 +47,9 @@ class FrontendTests(unittest.TestCase):
         self.assertIn('allowed.includes("approve")', script)
         self.assertIn("/uploads", script)
         self.assertIn('stream_mode: ["values"]', script)
+        self.assertIn("renderedMessageIds: new Set()", script)
+        self.assertIn("if (state.renderedMessageIds.has(key)) return", script)
+        self.assertIn('type !== "ai" && type !== "assistant"', script)
         self.assertIn('"commitment_messages"', script)
         self.assertIn("collectCommitmentMessages", script)
         self.assertIn("commitmentTraceItems", script)
@@ -65,6 +70,34 @@ class FrontendTests(unittest.TestCase):
     def test_frontend_assets_are_public(self):
         self.assertIn("/", _AUTH_WHITELIST_PATHS)
         self.assertIn("/assets/", _AUTH_WHITELIST_PREFIXES)
+
+    def test_commit_command_menu_behavior_and_accessibility(self):
+        markup = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('role="combobox"', markup)
+        self.assertIn('aria-autocomplete="list"', markup)
+        self.assertIn('aria-controls="command-menu"', markup)
+        self.assertIn('id="command-menu" class="command-menu" role="listbox"', markup)
+        self.assertIn('id="command-option-commit" class="command-option"', markup)
+        self.assertIn('role="option"', markup)
+        self.assertIn('aria-selected="false"', markup)
+
+        self.assertIn('/^\\/[^\\s]*$/.test(input.value)', script)
+        self.assertIn('"/commit".startsWith(input.value)', script)
+        self.assertIn('input.selectionStart !== input.value.length', script)
+        self.assertIn('event.key === "ArrowDown" || event.key === "ArrowUp"', script)
+        self.assertIn('event.key === "Escape"', script)
+        self.assertIn('addEventListener("blur", closeCommandMenu)', script)
+        self.assertIn('addEventListener("mousedown"', script)
+        self.assertIn('if (value || state.pendingInterrupt) closeCommandMenu()', script)
+        self.assertIn('input.setAttribute("aria-expanded", "true")', script)
+        self.assertIn('input.removeAttribute("aria-activedescendant")', script)
+
+        selection = script.split("function selectCommitCommand()", 1)[1].split("\n}", 1)[0]
+        self.assertIn('input.value = "/commit "', selection)
+        self.assertIn("input.setSelectionRange", selection)
+        self.assertNotIn("requestSubmit", selection)
 
 
 if __name__ == "__main__":

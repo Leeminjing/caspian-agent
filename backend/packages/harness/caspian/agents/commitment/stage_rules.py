@@ -114,7 +114,11 @@ def _slug_segment(value: str, label: str) -> str:
 
 def _stage_envelope(stage: int, state: dict[str, Any], feedback: str = "") -> TaskEnvelope:
     instruction, criteria = _STAGE_INSTRUCTIONS[stage]
-    context = {}
+    context: dict[str, Any] = {}
+    if source_text := state.get("source_text"):
+        context["source_text"] = source_text
+    if uploads_tag := state.get("uploads_tag"):
+        context["current_uploads"] = uploads_tag
     if feedback:
         context["human_feedback"] = feedback
     return TaskEnvelope(
