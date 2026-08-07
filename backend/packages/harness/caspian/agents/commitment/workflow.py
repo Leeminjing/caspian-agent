@@ -209,6 +209,8 @@ async def _human_review(
                     contract, artifact_ref = _write_contract(
                         str(state.get("thread_id", "")),
                         artifacts["7"],
+                        artifacts.get("2"),
+                        artifacts.get("3"),
                     )
                 except (OSError, ValueError) as exc:
                     error = f"合同写入失败: {exc}"

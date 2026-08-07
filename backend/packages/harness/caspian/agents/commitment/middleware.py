@@ -173,11 +173,41 @@ def _subgraph_config(thread_id: str) -> dict[str, Any]:
     return {"configurable": configurable}
 
 
+def _load_decision_table_dict(thread_id: str) -> dict[str, Any]:
+    """读取当前 thread 的决策等级表并转为 JSON 兼容 dict（受保护 helper）。
+
+    输入:
+        thread_id: str — 线程标识
+
+    输出:
+        dict — {"version", "updated", "rows": [{requirement, decision, priority}, ...]}；
+               无等级表时返回空 dict
+    """
+    from caspian.agents.commitment.decision_table import read_decision_table
+
+    table = read_decision_table(str(thread_id))
+    if table is None:
+        return {}
+    return {
+        "version": table.version,
+        "updated": table.updated,
+        "rows": [
+            {
+                "requirement": row.requirement,
+                "decision": row.decision,
+                "priority": row.priority,
+            }
+            for row in table.rows
+        ],
+    }
+
+
 def _seed_subgraph_input(
     trigger: HumanMessage,
     instruction: str,
     uploads_tag: str | None,
     thread_id: str,
+    decision_table: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """构造子图首次执行的种子输入：只含指令消息，不携带 /commit 前置历史。"""
     return {
@@ -191,6 +221,7 @@ def _seed_subgraph_input(
         "knowledge_files": [],
         "source_text": instruction,
         "uploads_tag": uploads_tag or "",
+        "decision_table": decision_table or {},
     }
 
 
@@ -257,7 +288,11 @@ class CommitmentMiddleware(AgentMiddleware):
                         "拒绝静默重新从 stage 0 执行并丢弃人工决定"
                     )
             subgraph_input = _seed_subgraph_input(
-                trigger, instruction, uploads_tag, str(thread_id)
+                trigger,
+                instruction,
+                uploads_tag,
+                str(thread_id),
+                _load_decision_table_dict(str(thread_id)),
             )
 
         result: dict[str, Any] = {}

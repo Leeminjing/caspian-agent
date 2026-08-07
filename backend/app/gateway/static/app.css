@@ -1175,3 +1175,82 @@ textarea:focus-visible {
     padding: 10px 16px;
   }
 }
+
+/* --- 决策等级表面板 --- */
+.decision-table-panel {
+  position: fixed;
+  top: 64px;
+  right: 16px;
+  z-index: 50;
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100vh - 96px);
+  overflow: auto;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+.decision-table-panel header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.decision-table-panel header strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.decision-table-version {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.decision-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.decision-table th,
+.decision-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.decision-table th {
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.decision-table td:first-child {
+  width: 62%;
+}
+
+.decision-kept {
+  color: var(--teal-dark);
+  font-weight: 600;
+}
+
+.decision-dropped {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+.decision-level {
+  color: var(--amber);
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.decision-table-empty {
+  padding: 10px 0;
+  color: var(--muted);
+  font-size: 13px;
+}

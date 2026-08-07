@@ -2,17 +2,20 @@
 本文件对外提供承诺层的 Pydantic 数据模型和 CommitmentState 图状态。
 
 输入:
-    各阶段产生的目标、要求、兼容性、文件、网址、技术版本、理由摘要及审核结果数据。
+    各阶段产生的目标、要求、兼容性、文件、网址、技术版本、理由摘要及审核结果数据，
+    以及可选的决策等级表（decision_table）与等级表冲突（table_conflicts）。
 
 输出:
     TaskEnvelope — Supervisor 传给 delegate_with_review 的固定输入。
     WorkerOutput / ReviewOutput — Worker 产物与 Evaluator 审核结论。
+    TableConflict — 新要求与等级表条目冲突的结构化描述。
     CommitmentState — 九阶段 Supervisor 子图共享的状态结构。
 
 具体工作流:
     (1) 使用字段类型和约束声明阶段数据边界。
     (2) Worker、Evaluator 和 Supervisor 通过相同模型交换结构化数据。
-    (3) LangGraph 使用 CommitmentState 保存阶段、人工等待、产物和最终合同。
+    (3) LangGraph 使用 CommitmentState 保存阶段、人工等待、产物、最终合同和等级表。
+    (4) 阶段2通过 table_conflicts 携带与已批准决策的冲突，供确定性等级比较。
 
 示例:
     envelope = TaskEnvelope(stage=1, instruction="明确目标")
@@ -55,11 +58,18 @@ class RequirementConflict(BaseModel):
     status: Literal["open", "resolved"]
     resolution: str | None = None
 
+class TableConflict(BaseModel):
+    requirement: str
+    table_requirement: str
+    table_priority: int
+    explanation: str = ""
+
 class StageTwoResult(BaseModel):
     requirements: list[str] = Field(min_length=1)
     discarded_requirements: list[str] = Field(default_factory=list)
     compatibility_checks: list[CompatibilityCheck] = Field(min_length=1)
     conflicts: list[RequirementConflict]
+    table_conflicts: list[TableConflict] = Field(default_factory=list)
 
 class FileReference(BaseModel):
     mention: str
@@ -108,3 +118,4 @@ class CommitmentState(AgentState):
     knowledge_files: NotRequired[list[str]]
     task_contract: NotRequired[str]
     final_message: NotRequired[str]
+    decision_table: NotRequired[dict[str, Any]]

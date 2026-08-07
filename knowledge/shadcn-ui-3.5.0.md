@@ -1,9 +1,32 @@
 # shadcn/ui 3.5.0
 
-Source: https://github.com/shadcn-ui/ui/blob/main/apps/v4/registry/new-york-v4/ui/switch.tsx
+Source: https://github.com/shadcn-ui/ui/blob/main/apps/v4/registry/new-york-v4/ui/button.tsx
 
-### Switch component composition (new-york-v4 style)
+### Button asChild composition pattern
 
-The official shadcn/ui Switch built on Radix UI SwitchPrimitive.Root and SwitchPrimitive.Thumb, with size variants (`sm` and `default`) and data-slot attributes.
+The Button component shows the canonical shadcn/ui composition semantic: the `asChild` prop uses `Slot.Root` from Radix UI to merge styling onto a child element while preserving the child's own semantic role. This pattern is shared across Button, Badge, SidebarMenuButton, BreadcrumbLink, and other primitives.
 
-Context7 证据中该组件源码以 `"use client"` 开头，导入 `React`、`SwitchPrimitive` 与 `cn`，并导出 `Switch` 组件；`Root` 使用 `data-slot="switch"`、`data-size={size}` 以及多个 `data-[state=...]`/`data-[size=...]` Tailwind 类，`Thumb` 使用 `data-slot="switch-thumb"`。
+```typescript
+function Button({
+  className,
+  variant = "default",
+  size = "default",
+  asChild = false,
+  ...props
+}: React.ComponentProps<"button"> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean
+  }) {
+  const Comp = asChild ? Slot.Root : "button"
+
+  return (
+    <Comp
+      data-slot="button"
+      data-variant={variant}
+      data-size={size}
+      className={cn(buttonVariants({ variant, size, className }))}
+      {...props}
+    />
+  )
+}
+```

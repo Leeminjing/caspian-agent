@@ -902,4 +902,71 @@ window.CaspianSkills?.attach({
   host: $("#skill-picker"),
   chips: $("#selected-skills"),
 });
+
+// --- 决策等级表查看 ---
+const _LEVEL_LABELS = { 3: "3 必须", 2: "2 可协商", 1: "1 可选" };
+
+function renderDecisionTable(data) {
+  const version = $("#decision-table-version");
+  const body = $("#decision-table-body");
+  if (!data.exists || !data.rows.length) {
+    version.textContent = "";
+    body.innerHTML = '<p class="decision-table-empty">暂无等级表</p>';
+    return;
+  }
+  version.textContent = `版本 ${data.version}`;
+  const table = document.createElement("table");
+  table.className = "decision-table";
+  table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th></tr></thead>";
+  const tbody = document.createElement("tbody");
+  for (const row of data.rows) {
+    const tr = document.createElement("tr");
+    const cells = [row.requirement, row.decision, _LEVEL_LABELS[row.priority] ?? String(row.priority)];
+    for (const [i, text] of cells.entries()) {
+      const td = document.createElement("td");
+      td.textContent = text;
+      if (i === 1) td.className = row.decision === "丢弃" ? "decision-dropped" : "decision-kept";
+      if (i === 2) td.className = "decision-level";
+      tr.append(td);
+    }
+    tbody.append(tr);
+  }
+  table.append(tbody);
+  body.replaceChildren(table);
+}
+
+async function loadDecisionTable() {
+  const version = $("#decision-table-version");
+  const body = $("#decision-table-body");
+  if (!state.threadId) {
+    version.textContent = "";
+    body.innerHTML = '<p class="decision-table-empty">请先发送一条消息创建会话</p>';
+    return;
+  }
+  body.innerHTML = '<p class="decision-table-empty">加载中…</p>';
+  try {
+    const response = await fetch(
+      `/api/threads/${encodeURIComponent(state.threadId)}/decision-table`,
+      { credentials: "same-origin" }
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    renderDecisionTable(await response.json());
+  } catch (error) {
+    version.textContent = "";
+    body.innerHTML = '<p class="decision-table-empty">加载失败</p>';
+  }
+}
+
+const decisionTablePanel = $("#decision-table-panel");
+$("#decision-table-toggle")?.addEventListener("click", () => {
+  const willOpen = decisionTablePanel.hidden;
+  decisionTablePanel.hidden = !willOpen;
+  $("#decision-table-toggle").setAttribute("aria-expanded", String(willOpen));
+  if (willOpen) loadDecisionTable();
+});
+$("#decision-table-close")?.addEventListener("click", () => {
+  decisionTablePanel.hidden = true;
+  $("#decision-table-toggle").setAttribute("aria-expanded", "false");
+});
+
 restoreSession().catch(handleError);

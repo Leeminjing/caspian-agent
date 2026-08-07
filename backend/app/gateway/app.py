@@ -122,9 +122,11 @@ from backend.app.gateway.routers.thread_runs import router as thread_runs_router
 from backend.app.gateway.routers.auth import router as auth_router
 from backend.app.gateway.routers.uploads import router as uploads_router
 from backend.app.gateway.routers.skills import router as skills_router
+from backend.app.gateway.routers.decision_table import router as decision_table_router
 
 app.include_router(thread_runs_router, prefix="/api/threads")
 app.include_router(uploads_router, prefix="/api/threads")
+app.include_router(decision_table_router, prefix="/api/threads")
 app.include_router(skills_router)
 app.include_router(auth_router)
-logger.info("路由已注册: thread_runs, uploads, auth")
+logger.info("路由已注册: thread_runs, uploads, decision_table, skills, auth")

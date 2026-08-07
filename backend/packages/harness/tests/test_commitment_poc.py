@@ -630,7 +630,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(CommitmentConfig().enabled)
         self.assertEqual(
             [type(item).__name__ for item in build_general_middlewares()],
-            ["UploadsMiddleware", "SandboxAuditMiddleware"],
+            ["UploadsMiddleware", "DecisionTableMiddleware", "SandboxAuditMiddleware"],
         )
 
     def test_enabled_builder_inserts_commitment(self):
@@ -644,9 +644,10 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 model=object(),
                 context7_tools=[],
             )
-        self.assertIs(result[1], sentinel)
+        self.assertIs(result[2], sentinel)
         self.assertEqual(type(result[0]).__name__, "UploadsMiddleware")
-        self.assertEqual(type(result[2]).__name__, "SandboxAuditMiddleware")
+        self.assertEqual(type(result[1]).__name__, "DecisionTableMiddleware")
+        self.assertEqual(type(result[3]).__name__, "SandboxAuditMiddleware")
 
     async def test_reviewed_delegator_retries_without_exposing_failures(self):
         delegator = StubDelegator([False, True])
@@ -742,9 +743,116 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(output)
         self.assertEqual(len(delegator.worker_feedback), 3)
         self.assertEqual(delegator.worker_feedback[0], "")
-        self.assertIn("Evaluator输出不符合ReviewOutput结构", error)
+        self.assertIn("无法解析为审核结论", error)
         self.assertEqual(delegator.worker_feedback[1], error)
         self.assertEqual(delegator.worker_feedback[2], error)
+
+    def test_parse_failure_logs_raw_output(self):
+        from caspian.agents.commitment.delegation import _extract_structured_logged
+
+        raw_text = "审核意见：该结果不完整，需要补充说明。"
+        with patch(
+            "caspian.agents.commitment.delegation.logger"
+        ) as mock_logger:
+            with self.assertRaises(ValueError):
+                _extract_structured_logged(
+                    {"messages": [AIMessage(content=raw_text)]},
+                    ReviewOutput,
+                    actor="evaluator",
+                    stage=2,
+                    attempt=1,
+                )
+        mock_logger.warning.assert_called_once()
+        log_args = mock_logger.warning.call_args.args
+        self.assertIn(raw_text, log_args[-1])
+        self.assertIn("evaluator", log_args)
+        self.assertIn("ReviewOutput", log_args)
+
+    def test_stage_two_dimension_semantics_in_prompt(self):
+        import inspect
+
+        from caspian.agents.commitment.delegation import ReviewedDelegator
+
+        source = inspect.getsource(ReviewedDelegator)
+        self.assertIn("compatibility_checks是逐项技术检查", source)
+        self.assertIn("单项verified与组合conflict并存不构成矛盾", source)
+
+    async def test_validation_rejection_logs_worker_result(self):
+        class MissingPriorityDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+
+            async def _worker(
+                self,
+                envelope,
+                feedback,
+                supervisor_messages=None,
+                attempt=1,
+            ):
+                return WorkerOutput(
+                    result={"requirements": [{"requirement": "代码必须尽可能简单"}]}
+                )
+
+        delegator = MissingPriorityDelegator()
+        with patch(
+            "caspian.agents.commitment.delegation.logger"
+        ) as mock_logger:
+            output, error = await delegator.run(
+                TaskEnvelope(stage=3, instruction="分配优先级")
+            )
+        self.assertIsNone(output)
+        self.assertIn("缺少有效的 priority", error)
+        rejection_logs = [
+            call.args
+            for call in mock_logger.warning.call_args_list
+            if "校验拒绝" in call.args[0]
+        ]
+        self.assertTrue(rejection_logs)
+        self.assertIn("代码必须尽可能简单", rejection_logs[0][-1])
+        self.assertIn("缺少有效的 priority", rejection_logs[0][-2])
+
+    async def test_evaluator_empty_output_readable_feedback(self):
+        class EmptyEvaluatorDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+
+            async def _stream_agent(self, agent, messages, **kwargs):
+                # 模拟模型空输出：最后一条 AIMessage 内容为空
+                return {"messages": [AIMessage(content="")]}
+
+        delegator = EmptyEvaluatorDelegator()
+        review = await delegator._evaluator(
+            TaskEnvelope(stage=1, instruction="goal"),
+            WorkerOutput(result={"goal": "x"}),
+            [],
+            1,
+        )
+        self.assertFalse(review.approved)
+        self.assertIn("输出为空", review.feedback)
+
+    async def test_worker_empty_output_readable_feedback(self):
+        class EmptyWorkerDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+
+            async def _worker(
+                self,
+                envelope,
+                feedback,
+                supervisor_messages=None,
+                attempt=1,
+            ):
+                # 真实复现：模型返回空内容时的 EOF ValidationError
+                ReviewOutput.model_validate_json("")
+
+        delegator = EmptyWorkerDelegator()
+        output, error = await delegator.run(
+            TaskEnvelope(stage=1, instruction="goal")
+        )
+
+        self.assertIsNone(output)
+        self.assertIn("输出为空", error)
+        self.assertNotIn("validation error", error)
 
     async def test_unexpected_tool_error_is_not_wrapped_as_tool_message(self):
         class ExplodingDelegator(ReviewedDelegator):
@@ -1353,6 +1461,53 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 ReviewOutput,
             )
             self.assertEqual(parsed.approved, '"approved": true' in content)
+
+    def test_review_output_lenient_parse_trailing_garbage(self):
+        parsed = _extract_structured(
+            {
+                "messages": [
+                    AIMessage(
+                        content='{"approved": true, "feedback": "通过"} '
+                        '后续继续执行。"}}'
+                    )
+                ]
+            },
+            ReviewOutput,
+        )
+        self.assertTrue(parsed.approved)
+        self.assertEqual(parsed.feedback, "通过")
+
+    def test_review_output_lenient_parse_truncated(self):
+        parsed = _extract_structured(
+            {
+                "messages": [
+                    AIMessage(content='{"approved": true, "feedback": "部分')
+                ]
+            },
+            ReviewOutput,
+        )
+        self.assertTrue(parsed.approved)
+
+    def test_stage_two_prompt_forbids_requirement_annotations(self):
+        import inspect
+
+        from caspian.agents.commitment.delegation import ReviewedDelegator
+
+        source = inspect.getsource(ReviewedDelegator._worker)
+        self.assertIn("不得添加任何括注", source)
+        self.assertIn("逐字来自用户输入原文", source)
+
+    def test_stage_five_prompt_boundaries(self):
+        import inspect
+
+        from caspian.agents.commitment.delegation import ReviewedDelegator
+
+        source = inspect.getsource(ReviewedDelegator)
+        # Evaluator 边界：能力/质量要求不属于阶段 5 范围，不得要求臆造技术名
+        self.assertIn("没有独立技术名的能力或质量要求不属于", source)
+        self.assertIn("不得要求补入未指名的臆造技术名", source)
+        # selector 加固：未指名具体库的能力不提取，反馈要求也不臆造
+        self.assertIn("不得臆造技术名", source)
 
     def test_knowledge_contract_and_final_message(self):
         with tempfile.TemporaryDirectory() as temp_dir:

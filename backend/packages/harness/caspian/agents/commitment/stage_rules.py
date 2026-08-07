@@ -1,22 +1,26 @@
 """
-本文件对外提供九阶段指令、结果校验、路径片段校验和 Context7 结果解析函数。
+本文件对外提供九阶段指令、结果校验、路径片段校验、Context7 结果解析和等级表仲裁函数。
 
 输入:
-    当前阶段编号、Supervisor messages、WorkerOutput 及 Context7 工具返回内容。
+    当前阶段编号、Supervisor messages、WorkerOutput、Context7 工具返回内容及决策等级表。
 
 输出:
     TaskEnvelope — 根据阶段规则生成的下一阶段任务信封。
     str | None — 阶段结果的校验错误；None 表示结构与前置约束通过。
     规范化结果 — 优先级、版本证据、冲突状态和参考输入判断结果。
+    仲裁结果 — 新要求与已批准决策的降级冲突错误列表、升级冲突列表。
 
 具体工作流:
     (1) 根据阶段编号选择指令、验收条件和执行时限。
     (2) 解析模型或 Context7 返回的结构化内容。
     (3) 从 Supervisor ToolMessage 读取前序结果并校验阶段一致性。
-    (4) 输出 Supervisor 决定推进、重试或人工介入所需的确定性判断。
+    (4) 对阶段2记录的等级表冲突做机械等级比较：降级冲突返回拒绝错误；
+        升级/未声明冲突返回升级列表，由阶段3结果携带进入人工确认。
+    (5) 输出 Supervisor 决定推进、重试或人工介入所需的确定性判断。
 
 示例:
     error = _validate_stage_result(3, result, envelope.context)
+    downgrades = _compare_table_conflicts(conflicts, rows, stage_three)
 """
 
 import json
@@ -119,6 +123,11 @@ def _stage_envelope(stage: int, state: dict[str, Any], feedback: str = "") -> Ta
         context["source_text"] = source_text
     if uploads_tag := state.get("uploads_tag"):
         context["current_uploads"] = uploads_tag
+    if decision_table := state.get("decision_table"):
+        context["decision_table"] = decision_table
+        rows = decision_table.get("rows", [])
+        if rows:
+            context["decision_table_rows"] = rows
     if feedback:
         context["human_feedback"] = feedback
     return TaskEnvelope(
@@ -153,6 +162,21 @@ def _extract_structured(result: dict[str, Any], schema: type[BaseModel]) -> Base
         except ValueError:
             if schema is not ReviewOutput:
                 raise
+            # 宽容解析链：尾随垃圾 → 截断 JSON → 正则回退
+            try:
+                import json as _json
+
+                value, _ = _json.JSONDecoder().raw_decode(text)
+                return ReviewOutput.model_validate(value)
+            except Exception:
+                pass
+            try:
+                from pydantic_core import from_json
+
+                value = from_json(text, allow_partial=True)
+                return ReviewOutput.model_validate(value)
+            except Exception:
+                pass
             approved = re.search(
                 r'"approved"\s*:\s*(true|false)',
                 text,
@@ -232,6 +256,35 @@ def _context7_candidate_version(
         default=None,
     )
 
+_POLLUTED_VERSION_PATTERN: re.Pattern = re.compile(
+    r"__branch__[A-Za-z0-9._-]+"
+    r"|\bv?\d[\d.]*-(?:canary|beta|rc|nightly|alpha)[\d.]*\b",
+    re.IGNORECASE,
+)
+
+
+def _evidence_snippet(line: str, version: str) -> str | None:
+    """截取版本附近短片段并清洗污染 token（受保护 helper）。
+
+    输入:
+        line: str — Context7 返回的原始行
+        version: str — 目标版本号
+
+    输出:
+        str | None — 目标版本附近 ±60 字符的清洗片段；清洗后为空返回 None
+    """
+    idx = line.find(version)
+    if idx == -1:
+        return None
+    start = max(0, idx - 60)
+    end = min(len(line), idx + len(version) + 60)
+    snippet = line[start:end]
+    # 移除分支名与预发布版本 token，与 _context7_candidate_version 同一过滤标准
+    snippet = _POLLUTED_VERSION_PATTERN.sub("", snippet)
+    snippet = re.sub(r"\s{2,}", " ", snippet).strip(" ,|")
+    return snippet or None
+
+
 def _context7_version_evidence(
     result: Any,
     version: str,
@@ -241,7 +294,9 @@ def _context7_version_evidence(
             "version" in line.lower()
             or "latest stable" in line.lower()
         ):
-            return line.strip()[:1000]
+            snippet = _evidence_snippet(line, version)
+            if snippet:
+                return snippet[:1000]
     return None
 
 def _normalize_stage_three_result(
@@ -261,7 +316,7 @@ def _normalize_stage_three_result(
         "must": 3,
     }
 
-    def priority_at(index: int, requirement: str) -> int:
+    def priority_at(index: int, requirement: str) -> int | None:
         raw = (
             raw_items[index].get("priority")
             if index < len(raw_items) and isinstance(raw_items[index], dict)
@@ -276,7 +331,8 @@ def _normalize_stage_three_result(
             return 1
         if any(word in requirement for word in ("可协商", "可以", "尽量")):
             return 2
-        return 3
+        # ponytail: 完全无优先级信息时不推断默认值，由确定性校验显式拒绝，避免掩盖模型意图
+        return None
 
     return output.model_copy(
         update={"result": {
@@ -333,6 +389,7 @@ def _validate_stage_result(
     stage: int,
     result: dict[str, Any],
     messages: list[BaseMessage] | None = None,
+    decision_table_rows: list[Any] | None = None,
 ) -> str | None:
     if not result:
         return "结果为空"
@@ -376,14 +433,21 @@ def _validate_stage_result(
                 return "阶段4 proposed URL 必须包含完整候选 URL"
     if stage == 3:
         requirements = result.get("requirements")
-        if not isinstance(requirements, list) or any(
-            not isinstance(item, dict)
-            or not str(item.get("requirement") or item.get("text") or "").strip()
-            or type(item.get("priority")) is not int
-            or item["priority"] not in {1, 2, 3}
-            for item in requirements
-        ):
-            return "阶段3必须返回 requirements 列表，priority 仅允许1、2、3"
+        if not isinstance(requirements, list):
+            return "阶段3必须返回 requirements 列表"
+        for index, item in enumerate(requirements, start=1):
+            if not isinstance(item, dict) or not str(
+                item.get("requirement") or item.get("text") or ""
+            ).strip():
+                return f"阶段3第 {index} 条要求缺少 requirement 文本"
+            if (
+                type(item.get("priority")) is not int
+                or item["priority"] not in {1, 2, 3}
+            ):
+                return (
+                    f"阶段3第 {index} 条要求缺少有效的 priority"
+                    "（仅允许 1、2、3）"
+                )
         expected = _stage_three_requirements(messages or [])
         actual = [
             str(item.get("requirement") or item.get("text")).strip()
@@ -391,6 +455,15 @@ def _validate_stage_result(
         ]
         if actual != expected:
             return "阶段3只能逐字、逐项沿用阶段2仍需完成的 requirements"
+        if decision_table_rows:
+            conflicts = _stage_result(messages or [], 2).get("table_conflicts", [])
+            errors = _compare_table_conflicts(
+                conflicts,
+                decision_table_rows,
+                requirements,
+            )
+            if errors:
+                return "; ".join(errors)
     if stage == 5:
         try:
             StageFiveResult.model_validate(result)
@@ -406,6 +479,138 @@ def _validate_stage_result(
     ):
         return "阶段7必须返回 contract_markdown"
     return None
+
+def _table_priority_by_requirement(rows: Any) -> dict[str, int]:
+    """提取等级表条目的 requirement → priority 映射（受保护 helper）。
+
+    输入:
+        rows: Any — 等级表行列表（dict 或 DecisionRow 均可）
+
+    输出:
+        dict[str, int] — 表内 requirement（strip 后）到优先级的映射
+    """
+    result: dict[str, int] = {}
+    for row in rows or []:
+        requirement = getattr(row, "requirement", None) if not isinstance(row, dict) else row.get("requirement")
+        priority = getattr(row, "priority", None) if not isinstance(row, dict) else row.get("priority")
+        if isinstance(requirement, str) and isinstance(priority, int):
+            result[requirement.strip()] = priority
+    return result
+
+
+def _classify_table_conflicts(
+    conflicts: list[Any],
+    table_priorities: dict[str, int],
+    stage_three_requirements: list[Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """机械比较等级表冲突的等级大小（受保护 helper）。
+
+    输入:
+        conflicts: list[Any] — 阶段2记录的 table_conflicts（requirement/table_requirement/table_priority）
+        table_priorities: dict[str, int] — 表内 requirement → priority 映射
+        stage_three_requirements: list[Any] — 阶段3结果 requirements（含逐条 priority）
+
+    输出:
+        tuple[list[dict], list[dict]] — (升级/未声明冲突列表, 降级冲突列表)
+
+    具体工作流:
+        (1) 从阶段3结果构建新要求 → 新等级映射。
+        (2) 对每个冲突取新等级与表内等级做 int 比较。
+        (3) 新等级缺失（未声明）或大于等于表内等级 → 升级列表。
+        (4) 新等级低于表内等级 → 降级列表。
+    """
+    new_priorities: dict[str, int] = {}
+    for item in stage_three_requirements or []:
+        if not isinstance(item, dict):
+            continue
+        requirement = str(item.get("requirement") or item.get("text") or "").strip()
+        priority = item.get("priority")
+        if requirement and isinstance(priority, int):
+            new_priorities[requirement] = priority
+
+    escalations: list[dict[str, Any]] = []
+    downgrades: list[dict[str, Any]] = []
+    for conflict in conflicts or []:
+        if not isinstance(conflict, dict):
+            continue
+        requirement = str(conflict.get("requirement", "")).strip()
+        table_requirement = str(conflict.get("table_requirement", "")).strip()
+        table_priority = conflict.get("table_priority")
+        if not isinstance(table_priority, int):
+            continue
+        # 冲突引用的表内条目不在等级表中 → 视为无效冲突，忽略
+        if table_requirement not in table_priorities:
+            continue
+        new_priority = new_priorities.get(requirement)
+        if new_priority is None or new_priority >= table_priority:
+            escalations.append(conflict)
+        else:
+            downgrades.append(conflict)
+    return escalations, downgrades
+
+
+def _compare_table_conflicts(
+    conflicts: list[Any],
+    decision_table_rows: list[Any],
+    stage_three_requirements: list[Any],
+) -> list[str]:
+    """机械等级比较等级表冲突，返回降级冲突的拒绝错误列表。
+
+    输入:
+        conflicts: list[Any] — 阶段2记录的 table_conflicts
+        decision_table_rows: list[Any] — 等级表行（用于校验冲突引用与提取表内等级）
+        stage_three_requirements: list[Any] — 阶段3结果 requirements（新要求等级）
+
+    输出:
+        list[str] — 降级冲突的拒绝错误；空列表表示无降级冲突
+
+    示例:
+        errors = _compare_table_conflicts(conflicts, rows, stage_three_requirements)
+        # → ["新要求 'X' 与已批准决策 'Y' 冲突，新等级 1 低于表内等级 3，降级决策被拒绝"]
+    """
+    table_priorities = _table_priority_by_requirement(decision_table_rows)
+    _, downgrades = _classify_table_conflicts(
+        conflicts, table_priorities, stage_three_requirements
+    )
+    errors: list[str] = []
+    for conflict in downgrades:
+        requirement = conflict.get("requirement", "")
+        table_requirement = conflict.get("table_requirement", "")
+        table_priority = conflict.get("table_priority", "?")
+        errors.append(
+            f"新要求 '{requirement}' 与已批准决策 '{table_requirement}' 冲突且等级更低"
+            f"（表内等级 {table_priority}），降级决策被拒绝"
+        )
+    return errors
+
+
+def _merge_table_escalations(
+    result: dict[str, Any],
+    conflicts: list[Any],
+    decision_table_rows: list[Any],
+    stage_three_requirements: list[Any],
+) -> dict[str, Any]:
+    """将升级/未声明的等级表冲突合并进阶段结果（受保护 helper）。
+
+    输入:
+        result: dict — 阶段结果（阶段3 requirements）
+        conflicts: list[Any] — 阶段2记录的 table_conflicts
+        decision_table_rows: list[Any] — 等级表行
+        stage_three_requirements: list[Any] — 阶段3结果 requirements
+
+    输出:
+        dict — 含 table_escalations 字段的副本（无升级冲突时原样返回）
+    """
+    table_priorities = _table_priority_by_requirement(decision_table_rows)
+    escalations, _ = _classify_table_conflicts(
+        conflicts, table_priorities, stage_three_requirements
+    )
+    if not escalations:
+        return result
+    merged = dict(result)
+    merged["table_escalations"] = escalations
+    return merged
+
 
 def _contains_unresolved_versions(result: Any) -> bool:
     if not isinstance(result, dict):

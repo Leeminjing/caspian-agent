@@ -14,15 +14,16 @@
 
 具体工作流:
     (1) 实例化 UploadsMiddleware（No.1）
-    (2) 开启时实例化 CommitmentMiddleware（No.2）
-    (3) 实例化 SandboxAuditMiddleware
-    (4) 返回有序列表
+    (2) 实例化 DecisionTableMiddleware（No.2，始终装配，无等级表时自动跳过）
+    (3) 开启时实例化 CommitmentMiddleware（No.3）
+    (4) 实例化 SandboxAuditMiddleware
+    (5) 返回有序列表
 
 示例:
     from caspian.agents.middlewares.builder import build_general_middlewares
 
     middlewares = build_general_middlewares()
-    # → [UploadsMiddleware(), SandboxAuditMiddleware()]
+    # → [UploadsMiddleware(), DecisionTableMiddleware(), SandboxAuditMiddleware()]
 """
 
 from langchain.agents.middleware import AgentMiddleware
@@ -30,6 +31,7 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
 from caspian.agents.commitment import CommitmentMiddleware
+from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
 
@@ -46,9 +48,12 @@ def build_general_middlewares(
     输入: 无
 
     输出:
-        list[AgentMiddleware] — [UploadsMiddleware, SandboxAuditMiddleware]
+        list[AgentMiddleware] — [UploadsMiddleware, DecisionTableMiddleware, SandboxAuditMiddleware]
     """
-    middlewares: list[AgentMiddleware] = [UploadsMiddleware()]
+    middlewares: list[AgentMiddleware] = [
+        UploadsMiddleware(),
+        DecisionTableMiddleware(),
+    ]
     if commitment_enabled:
         if model is None:
             raise ValueError("启用 CommitmentMiddleware 时必须提供 model")

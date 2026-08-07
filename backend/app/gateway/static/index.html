@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=slash-commit-1">
-  <link rel="stylesheet" href="/assets/skills.css?v=slash-commit-1">
+  <link rel="stylesheet" href="/assets/app.css?v=decision-table-1">
+  <link rel="stylesheet" href="/assets/skills.css?v=decision-table-1">
 </head>
 <body>
   <section id="login-view" class="login-view">
@@ -54,6 +54,9 @@
           <h1 id="thread-title">新会话</h1>
           <p id="thread-id" class="thread-id"></p>
         </div>
+        <button id="decision-table-toggle" class="icon-button" type="button" title="查看等级表" aria-label="查看等级表" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM3 9h18M3 13h18M3 17h18"/></svg>
+        </button>
         <span id="run-status" class="status status-ready"><span></span>就绪</span>
       </header>
 
@@ -142,7 +145,18 @@
     </details>
   </template>
 
+  <section id="decision-table-panel" class="decision-table-panel" hidden aria-label="决策等级表">
+    <header>
+      <strong>决策等级表</strong>
+      <span id="decision-table-version" class="decision-table-version"></span>
+      <button id="decision-table-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div id="decision-table-body"></div>
+  </section>
+
   <script src="/assets/skills.js?v=slash-commit-3" defer></script>
-  <script src="/assets/app.js?v=slash-commit-1" defer></script>
+  <script src="/assets/app.js?v=decision-table-1" defer></script>
 </body>
 </html>

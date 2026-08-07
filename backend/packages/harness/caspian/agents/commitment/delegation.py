@@ -25,7 +25,10 @@
 """
 
 import asyncio
+import logging
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 from langchain.agents import create_agent
 from langchain.messages import AIMessage, HumanMessage
@@ -53,6 +56,7 @@ from caspian.agents.commitment.stage_rules import (
     _extract_structured,
     _filter_stage_four_result,
     _json,
+    _merge_table_escalations,
     _normalize_stage_three_result,
     _source_text,
     _stage_result,
@@ -63,6 +67,66 @@ from caspian.agents.commitment.tracing import (
     emit_commitment_messages,
     emit_commitment_trace,
 )
+
+def _raw_output_text(result: dict[str, Any]) -> str:
+    """从流式结果提取最后一条非空 AIMessage 文本（受保护 helper）。
+
+    输入:
+        result: dict — _stream_agent 的返回（含 messages）
+
+    输出:
+        str — 最后一条非空 AIMessage 的文本，无则返回空串
+    """
+    for message in reversed(result.get("messages", [])):
+        if not isinstance(message, AIMessage):
+            continue
+        content = message.content
+        if isinstance(content, list):
+            content = "\n".join(
+                item.get("text", "")
+                for item in content
+                if isinstance(item, dict)
+            )
+        text = str(content).strip()
+        if text:
+            return text
+    return ""
+
+
+def _extract_structured_logged(
+    result: dict[str, Any],
+    schema: type[BaseModel],
+    *,
+    actor: str,
+    stage: int,
+    attempt: int,
+) -> BaseModel:
+    """解析结构化输出，失败时记录原始文本到日志后重抛（受保护 helper）。
+
+    输入:
+        result: dict — _stream_agent 的返回
+        schema: type[BaseModel] — 目标 Pydantic 模型
+        actor: str — 角色（worker/evaluator）
+        stage: int — 阶段
+        attempt: int — 尝试轮次
+
+    输出:
+        BaseModel — 解析结果；失败时记录日志（截断至 2000 字符）并重抛
+    """
+    try:
+        return _extract_structured(result, schema)
+    except ValueError:
+        raw = _raw_output_text(result)
+        logger.warning(
+            "承诺层解析失败 actor=%s stage=%s attempt=%s schema=%s raw=%s",
+            actor,
+            stage,
+            attempt,
+            schema.__name__,
+            raw[:2000],
+        )
+        raise
+
 
 class ReviewedDelegator:
     def __init__(
@@ -151,7 +215,13 @@ class ReviewedDelegator:
             stream_id=name,
             attempt=attempt,
         )
-        output = _extract_structured(result, schema)
+        output = _extract_structured_logged(
+            result,
+            schema,
+            actor="worker",
+            stage=int(prompt.get("stage", 0) or 0),
+            attempt=attempt,
+        )
         emit_commitment_trace(
             actor="worker",
             event="model_completed",
@@ -182,6 +252,8 @@ class ReviewedDelegator:
             system_prompt=(
                 "从第三步已确认要求中提取需要核验版本的具体软件技术、框架、库和服务名称。"
                 "不要返回SSR、SEO、错误处理等没有独立软件版本的能力或质量要求。"
+                "要求未指名具体库的能力（如“完整测试”“国际化”“无障碍”）不提取为技术；"
+                "即使reviewer_feedback要求覆盖未指名技术，也不得臆造技术名。"
                 "只返回 JSON。"
                 f"JSON Schema: {_json(TechnologySelection.model_json_schema())}"
             ),
@@ -548,6 +620,14 @@ class ReviewedDelegator:
                 "requirements只包含冲突解决后仍需完成的要求；用户明确放弃的要求必须从"
                 "requirements移入discarded_requirements，二者不得重叠。"
                 "每个冲突必须是对象；未由人解决时status=open，不能省略或写成字符串。"
+                "requirements与discarded_requirements每项必须逐字来自用户输入原文，"
+                "不得添加任何括注、解释、冲突解决说明或括号注释；解决结论只写入conflicts的"
+                "explanation字段，不得夹进要求文本。"
+                "如果提供了决策等级表（decision_table），必须将本轮全部新要求与表内条目"
+                "全量对照：语义冲突（包括措辞改写、技术替换等字面无关的冲突）必须写入"
+                "table_conflicts，每项包含requirement（新要求）、table_requirement（表内条目）、"
+                "table_priority（表内等级）和explanation（冲突说明）；没有冲突时table_conflicts"
+                "返回空列表，不得遗漏。"
             )
         elif envelope.stage == 3:
             stage_guidance = (
@@ -555,6 +635,8 @@ class ReviewedDelegator:
                 "必须排除discarded_requirements，已放弃的要求不得分配priority。"
                 "只在本步骤首次分配priority；第二步不包含优先级，"
                 "不得声称或推断第二步已为任何要求分配等级。"
+                "每项必须显式包含int类型的priority（1/2/3），不得省略；"
+                "reasoning_summary也不得包含对要求的新解释、核减说明或范围调整。"
             )
         elif envelope.stage == 4:
             stage_guidance = (
@@ -578,6 +660,9 @@ class ReviewedDelegator:
             stage_guidance = (
                 "第七步必须返回result.contract_markdown，值为完整Markdown任务合同；"
                 "不得使用contract、markdown或content等替代字段名。"
+                "合同中的优先级/要求等级部分必须逐条引用Supervisor messages中阶段3"
+                "ToolMessage的requirements与priority，不得散文化重述、概括或省略；"
+                "decision_table（若有）只表示承诺开始前的历史决策，不得作为本合同的等级来源。"
             )
         else:
             stage_guidance = ""
@@ -605,6 +690,7 @@ class ReviewedDelegator:
             ],
             "human_feedback": envelope.context.get("human_feedback", ""),
             "current_uploads": envelope.context.get("current_uploads", ""),
+            "decision_table": envelope.context.get("decision_table", {}),
             "acceptance_criteria": envelope.acceptance_criteria,
             "reviewer_feedback": feedback,
         }
@@ -616,7 +702,13 @@ class ReviewedDelegator:
             stream_id=f"worker-{envelope.stage}",
             attempt=attempt,
         )
-        output = _extract_structured(result, WorkerOutput)
+        output = _extract_structured_logged(
+            result,
+            WorkerOutput,
+            actor="worker",
+            stage=envelope.stage,
+            attempt=attempt,
+        )
         if envelope.stage == 4:
             return _filter_stage_four_result(
                 output,
@@ -624,9 +716,20 @@ class ReviewedDelegator:
                 or _source_text(supervisor_messages),
             )
         if envelope.stage == 3:
-            return _normalize_stage_three_result(
+            output = _normalize_stage_three_result(
                 output,
                 _stage_three_requirements(supervisor_messages),
+            )
+            stage_two = _stage_result(supervisor_messages, 2)
+            return output.model_copy(
+                update={
+                    "result": _merge_table_escalations(
+                        output.result,
+                        stage_two.get("table_conflicts", []),
+                        envelope.context.get("decision_table_rows", []),
+                        output.result.get("requirements", []),
+                    )
+                }
             )
         return output
 
@@ -681,9 +784,21 @@ class ReviewedDelegator:
                 "第三步只检查要求是否逐字、逐项沿用第二步结果以及priority是否为1到3；"
                 "第二步discarded_requirements中的已放弃要求不得出现在第三步；"
                 "第二步不包含优先级，严禁声称或推断第二步已为任何要求分配等级。"
+                "第二步requirements与discarded_requirements必须逐字来自用户输入原文，"
+                "含括注、解释或冲突解决说明的要求文本视为不合格，必须拒绝；"
+                "解决结论只允许出现在conflicts的explanation中。"
+                "第二步的compatibility_checks是逐项技术检查（技术自身是否成立），"
+                "conflicts是要求组合间的冲突；单项verified与组合conflict并存不构成矛盾，"
+                "不得因此拒绝。"
+                "存在决策等级表时，第二步必须对照等级表全量扫描本轮新要求并写入table_conflicts；"
+                "漏报语义冲突（包括措辞改写、技术替换等字面无关的冲突）视为审核不通过；"
+                "table_conflicts每项必须包含requirement、table_requirement、table_priority和explanation。"
                 "第四步仅核验明确引用的文件和网址；采用某项技术不等于引用其网站，"
                 "没有明确引用时files和urls为空是合格结果。"
-                "第五步technologies不得为空，且必须覆盖第三步要求涉及的全部技术；"
+                "第五步technologies不得为空，且必须覆盖第三步requirements中明确指名的技术"
+                "（有独立软件版本、可从文本识别的具体技术/框架/库/服务）；"
+                "测试、国际化、无障碍、文档、错误处理等没有独立技术名的能力或质量要求不属于"
+                "第五步覆盖范围，不得要求补入未指名的臆造技术名，也不得要求声明能力实现方式；"
                 "每项必须有name和version，未核实精确版本时使用latest-stable。第五步的具体 "
                 "version由受控代码直接取自Context7官方文档的明确稳定版，或Context7所选库的"
                 "版本列表在过滤canary、beta、rc、nightly后得到；原始工具回包不会进入"
@@ -693,6 +808,8 @@ class ReviewedDelegator:
                 "你不得用自身世界知识、记忆中的版本历史或缺少完整原始回包为由推翻这些结论。"
                 "第五步只审核技术覆盖、字段结构以及具体版本是否同时具有basis和evidence；"
                 "latest-stable配合latest_stable_policy是合格结果，随后由人工节点确认。"
+                "version_evidence是受控代码从Context7原文截取的短片段（可能不含URL），"
+                "审核version_basis与version的匹配即可，不得因证据缺少URL而拒绝。"
                 "最终只返回一个 JSON 对象，不要 Markdown。"
                 f"JSON Schema: {_json(ReviewOutput.model_json_schema())}"
             ),
@@ -711,11 +828,27 @@ class ReviewedDelegator:
             attempt=attempt,
         )
         try:
-            return _extract_structured(result, ReviewOutput)
-        except ValidationError as exc:
+            return _extract_structured_logged(
+                result,
+                ReviewOutput,
+                actor="evaluator",
+                stage=envelope.stage,
+                attempt=attempt,
+            )
+        except ValidationError:
+            raw = _raw_output_text(result)
+            if not raw:
+                feedback = (
+                    "Evaluator 输出为空（模型未返回内容），请重新生成并只输出 JSON"
+                )
+            else:
+                feedback = (
+                    "Evaluator 输出不是有效的 JSON 对象（可能被截断或包含尾随内容），"
+                    "无法解析为审核结论；请重新生成并只输出 JSON。"
+                )
             review = ReviewOutput(
                 approved=False,
-                feedback=f"Evaluator输出不符合ReviewOutput结构：{exc}",
+                feedback=feedback,
                 reasoning_summary="Evaluator输出结构无效，需要重新执行Worker-Evaluator审核。",
             )
             emit_commitment_messages(
@@ -743,7 +876,14 @@ class ReviewedDelegator:
                     attempt,
                 )
             except ValidationError as exc:
-                feedback = f"Worker输出不符合WorkerOutput结构：{exc}"
+                exc_text = str(exc)
+                # ponytail: 空输出以 EOF/空输入 报错特征识别，给可读反馈；其他结构错误保留字段说明供重试
+                if "EOF while parsing" in exc_text and "input_value=''" in exc_text:
+                    feedback = (
+                        "Worker 输出为空（模型未返回内容），请重新生成并只输出 JSON"
+                    )
+                else:
+                    feedback = f"Worker输出不符合WorkerOutput结构：{exc_text}"
                 if envelope.stage == 7:
                     feedback += "；阶段7必须返回result.contract_markdown"
                 review = ReviewOutput(
@@ -778,7 +918,16 @@ class ReviewedDelegator:
                 envelope.stage,
                 worker_output.result,
                 supervisor_messages,
+                envelope.context.get("decision_table_rows", []),
             )
+            if structure_error:
+                logger.warning(
+                    "承诺层校验拒绝 actor=worker stage=%s attempt=%s error=%s result=%s",
+                    envelope.stage,
+                    attempt,
+                    structure_error,
+                    _json(worker_output.result)[:2000],
+                )
             review = await self._evaluator(
                 envelope,
                 worker_output,
