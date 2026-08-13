@@ -284,6 +284,15 @@ async def _human_review(
                                 "stage": stage,
                                 "result": revised,
                                 "artifact_ref": artifact_ref,
+                                "revision_provenance": {
+                                    "stage": stage,
+                                    "decision": "revise",
+                                    **(
+                                        {"feedback": str(response["feedback"]).strip()}
+                                        if str(response.get("feedback", "")).strip()
+                                        else {"replacement_type": "structured"}
+                                    ),
+                                },
                             }
                         ),
                     )

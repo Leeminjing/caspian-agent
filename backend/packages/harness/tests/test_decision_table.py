@@ -638,7 +638,7 @@ class TestStageThreePriorityMissing(unittest.TestCase):
         "包含完整的测试、错误处理、国际化、无障碍支持和详细文档",
     ]
 
-    def test_normalize_missing_priority_keeps_none(self):
+    def test_normalize_legacy_requirements_is_rejected_without_inference(self):
         raw = [
             {"requirement": "必须支持多用户注册、登录、权限隔离", "priority": 3},
             {"requirement": "代码必须尽可能简单"},  # 缺 priority
@@ -648,10 +648,11 @@ class TestStageThreePriorityMissing(unittest.TestCase):
             WorkerOutput(result={"requirements": raw}),
             self.STAGE_TWO,
         )
-        priorities = [item["priority"] for item in out.result["requirements"]]
-        self.assertEqual(priorities[0], 3)
-        self.assertIsNone(priorities[1])  # 缺失不被默认补全
-        self.assertEqual(priorities[2], 2)
+        messages = stage_two_messages([], requirements=self.STAGE_TWO)
+        error = _validate_stage_result(3, out.result, messages)
+        self.assertIsNotNone(error)
+        self.assertIn("priority_assignments", error)
+        self.assertEqual(out.result["worker_result"], {"requirements": raw})
 
     def test_validate_rejects_missing_priority(self):
         result = {

@@ -13,7 +13,7 @@
 具体工作流:
     (1) 根据阶段编号选择指令、验收条件和执行时限。
     (2) 解析模型或 Context7 返回的结构化内容。
-    (3) 从 Supervisor ToolMessage 读取前序结果并校验阶段一致性。
+    (3) 从 Supervisor ToolMessage 读取前序结果，按稳定 requirement ID 关联阶段三优先级并校验一致性。
     (4) 对阶段2记录的等级表冲突做机械等级比较：降级冲突返回拒绝错误；
         升级/未声明冲突返回升级列表，由阶段3结果携带进入人工确认。
     (5) 输出 Supervisor 决定推进、重试或人工介入所需的确定性判断。
@@ -303,47 +303,58 @@ def _normalize_stage_three_result(
     output: WorkerOutput,
     requirements: list[str],
 ) -> WorkerOutput:
-    raw_items = output.result.get("requirements", [])
-    priorities = {
-        "1": 1,
-        "low": 1,
-        "optional": 1,
-        "2": 2,
-        "medium": 2,
-        "negotiable": 2,
-        "3": 3,
-        "high": 3,
-        "must": 3,
-    }
-
-    def priority_at(index: int, requirement: str) -> int | None:
-        raw = (
-            raw_items[index].get("priority")
-            if index < len(raw_items) and isinstance(raw_items[index], dict)
-            else None
+    assignments = output.result.get("priority_assignments")
+    if not isinstance(assignments, list):
+        return output.model_copy(
+            update={
+                "result": {
+                    "priority_assignments": assignments,
+                    "worker_result": output.result,
+                }
+            }
         )
-        if type(raw) is int and raw in {1, 2, 3}:
-            return raw
-        mapped = priorities.get(str(raw).strip().lower())
-        if mapped:
-            return mapped
-        if any(word in requirement for word in ("可选", "最好")):
-            return 1
-        if any(word in requirement for word in ("可协商", "可以", "尽量")):
-            return 2
-        # ponytail: 完全无优先级信息时不推断默认值，由确定性校验显式拒绝，避免掩盖模型意图
-        return None
+
+    expected_ids = [f"R{index}" for index in range(1, len(requirements) + 1)]
+    if len(assignments) != len(expected_ids):
+        return output
+
+    by_id: dict[str, int] = {}
+    for item in assignments:
+        if not isinstance(item, dict):
+            return output
+        requirement_id = item.get("requirement_id")
+        priority = item.get("priority")
+        if (
+            requirement_id not in expected_ids
+            or requirement_id in by_id
+            or type(priority) is not int
+            or priority not in {1, 2, 3}
+        ):
+            return output
+        by_id[requirement_id] = priority
+
+    normalized = [
+        {"requirement": requirement, "priority": by_id[requirement_id]}
+        for requirement_id, requirement in zip(
+            expected_ids,
+            requirements,
+            strict=True,
+        )
+    ]
+    priority_map = "、".join(
+        f"R{index}={item['priority']}"
+        for index, item in enumerate(normalized, start=1)
+    )
 
     return output.model_copy(
-        update={"result": {
-            "requirements": [
-                {
-                    "requirement": requirement,
-                    "priority": priority_at(index, requirement),
-                }
-                for index, requirement in enumerate(requirements)
-            ]
-        }}
+        update={
+            "result": {"requirements": normalized},
+            "reasoning_summary": (
+                f"阶段3已逐项、逐字沿用阶段2的{len(normalized)}条保留要求并首次分配优先级："
+                f"{priority_map}。已放弃要求未进入等级列表；"
+                "result.requirements 是最终等级的唯一事实来源。"
+            ),
+        }
     )
 
 def _message_payload(message: BaseMessage) -> dict[str, Any] | None:
@@ -432,6 +443,55 @@ def _validate_stage_result(
             ):
                 return "阶段4 proposed URL 必须包含完整候选 URL"
     if stage == 3:
+        if "priority_assignments" in result:
+            assignments = result.get("priority_assignments")
+            if not isinstance(assignments, list):
+                return (
+                    "阶段3字段 result.priority_assignments 实际值不是列表；"
+                    "必须为每个稳定 requirement_id 明确返回 priority。"
+                )
+            expected_ids = [
+                f"R{index}"
+                for index in range(
+                    1,
+                    len(_stage_three_requirements(messages or [])) + 1,
+                )
+            ]
+            seen: set[str] = set()
+            for index, item in enumerate(assignments):
+                if not isinstance(item, dict):
+                    return (
+                        f"阶段3字段 result.priority_assignments[{index}] 实际值为 {item!r}；"
+                        "必须是包含 requirement_id 和 priority 的对象。"
+                    )
+                requirement_id = item.get("requirement_id")
+                if requirement_id not in expected_ids:
+                    return (
+                        f"阶段3字段 result.priority_assignments[{index}].requirement_id "
+                        f"实际值为 {requirement_id!r}；属于未知 requirement_id。"
+                    )
+                if requirement_id in seen:
+                    return (
+                        f"阶段3字段 result.priority_assignments[{index}].requirement_id "
+                        f"实际值为 {requirement_id!r}；同一 requirement_id 不得重复。"
+                    )
+                seen.add(requirement_id)
+                priority = item.get("priority")
+                if type(priority) is not int or priority not in {1, 2, 3}:
+                    return (
+                        f"阶段3字段 result.priority_assignments[{index}].priority "
+                        f"实际值为 {priority!r}；必须明确填写整数 1、2、3 之一。"
+                    )
+            missing = [item for item in expected_ids if item not in seen]
+            if missing:
+                return (
+                    "阶段3字段 result.priority_assignments 缺少稳定 requirement_id："
+                    f"{', '.join(missing)}。"
+                )
+            return (
+                "阶段3 priority_assignments 已通过校验但尚未关联为最终 requirements；"
+                "必须先使用阶段2不可变原文完成确定性关联。"
+            )
         requirements = result.get("requirements")
         if not isinstance(requirements, list):
             return "阶段3必须返回 requirements 列表"

@@ -15,9 +15,10 @@
     (1) 为当前阶段创建干净的 Worker 上下文并生成候选结果。
     (2) 对特殊阶段执行确定性 Context7 查询、版本处理或结果规范化。
     (3) 使用独立 Evaluator 按 TaskEnvelope 验收条件审核结果。
-    (4) Evaluator 不合格时携带反馈创建新的 Worker，最多执行三次。
-    (5) 流式发布 Worker 和 Evaluator 各自的真实 messages，不读取私密 reasoning 字段。
-    (6) 工具只向 Supervisor 返回最终通过结果或最后反馈。
+    (4) 单次语义尝试内有限重试模型传输故障，并区分截断、资源不足和结构错误。
+    (5) Evaluator 不合格时携带反馈创建新的 Worker，最多执行三次。
+    (6) 流式发布 Worker 和 Evaluator 各自的真实 messages，不读取私密 reasoning 字段。
+    (7) 工具只向 Supervisor 返回最终通过结果或最后反馈。
 
 示例:
     delegator = ReviewedDelegator(model, context7_tools)
@@ -31,10 +32,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 from langchain.agents import create_agent
-from langchain.messages import AIMessage, HumanMessage
+from langchain.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_core.messages import BaseMessage
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool, StructuredTool
+from httpx import TransportError
 from pydantic import BaseModel, ValidationError
 
 from caspian.agents.commitment.references import find_reference_urls
@@ -67,6 +69,46 @@ from caspian.agents.commitment.tracing import (
     emit_commitment_messages,
     emit_commitment_trace,
 )
+
+
+class _ModelOutputError(RuntimeError):
+    """模型请求未得到可解析的最终业务结果。"""
+
+
+# 思考模式慢请求上限 10 分钟；实际执行仍受外层阶段预算（600s/900s）约束
+_MODEL_REQUEST_TIMEOUT_SECONDS = 600
+
+
+def _public_content(message: Any) -> str:
+    content = getattr(message, "content", "")
+    if isinstance(content, list):
+        return "".join(
+            item
+            if isinstance(item, str)
+            else str(item.get("text", ""))
+            if isinstance(item, dict)
+            else ""
+            for item in content
+        )
+    return content if isinstance(content, str) else ""
+
+
+def _last_ai_message(result: dict[str, Any]) -> AIMessage | None:
+    for message in reversed(result.get("messages", [])):
+        if isinstance(message, AIMessage):
+            return message
+    return None
+
+
+def _finish_reason(message: AIMessage | None) -> str:
+    if message is None:
+        return ""
+    metadata = getattr(message, "response_metadata", {})
+    if not isinstance(metadata, dict):
+        return ""
+    reason = metadata.get("finish_reason")
+    return str(reason) if reason else ""
+
 
 def _raw_output_text(result: dict[str, Any]) -> str:
     """从流式结果提取最后一条非空 AIMessage 文本（受保护 helper）。
@@ -113,6 +155,20 @@ def _extract_structured_logged(
     输出:
         BaseModel — 解析结果；失败时记录日志（截断至 2000 字符）并重抛
     """
+    structured_response = result.get("structured_response")
+    if structured_response is not None:
+        output = (
+            structured_response
+            if isinstance(structured_response, schema)
+            else schema.model_validate(structured_response)
+        )
+        emit_commitment_messages(
+            actor=actor,
+            stage=stage,
+            attempt=attempt,
+            messages=[AIMessage(content=_json(output.model_dump()))],
+        )
+        return output
     try:
         return _extract_structured(result, schema)
     except ValueError:
@@ -147,42 +203,87 @@ class ReviewedDelegator:
         stream_id: str,
         attempt: int = 1,
     ) -> dict[str, Any]:
-        result: dict[str, Any] = {}
         emit_commitment_messages(
             actor=actor,
             stage=stage,
             attempt=attempt,
             messages=messages,
         )
-        async for mode, chunk in agent.astream(
-            {"messages": messages},
-            stream_mode=["messages", "values"],
-        ):
-            if mode == "values":
-                result = chunk
+        last_reason = "missing_final_message"
+        # DeepSeek 思考模式 + json_object 偶发"空正文 + finish_reason=stop"（vLLM #41132），
+        # 传输尝试 2 次不足，取 3 次；重试不消耗语义 attempt 额度
+        for transport_attempt in range(1, 4):
+            result: dict[str, Any] = {}
+            try:
+                async with asyncio.timeout(_MODEL_REQUEST_TIMEOUT_SECONDS):
+                    async for mode, chunk in agent.astream(
+                        {"messages": messages},
+                        stream_mode=["messages", "values"],
+                    ):
+                        if mode == "values":
+                            result = chunk
+                            continue
+                        if mode != "messages":
+                            continue
+                        message_chunk, _metadata = chunk
+                        if not _public_content(message_chunk):
+                            continue
+                        emit_commitment_messages(
+                            actor=actor,
+                            stage=stage,
+                            attempt=attempt,
+                            messages=[message_chunk],
+                        )
+            except (TransportError, TimeoutError) as exc:
+                last_reason = f"{type(exc).__name__}: {exc}"
+                if transport_attempt < 2:
+                    emit_commitment_trace(
+                        actor=actor,
+                        event="model_transport_retry",
+                        title=f"{actor} 模型流连接中断，正在重试",
+                        status="running",
+                        stage=stage,
+                        detail=(
+                            f"transport_attempt={transport_attempt}; "
+                            f"error={last_reason}"
+                        ),
+                    )
                 continue
-            if mode != "messages":
-                continue
-            message_chunk, _metadata = chunk
-            content = getattr(message_chunk, "content", "")
-            if isinstance(content, list):
-                content = "".join(
-                    item
-                    if isinstance(item, str)
-                    else str(item.get("text", ""))
-                    if isinstance(item, dict)
-                    else ""
-                    for item in content
+
+            final_message = _last_ai_message(result)
+            finish_reason = _finish_reason(final_message)
+            if finish_reason == "length":
+                raise _ModelOutputError("模型输出被截断（finish_reason=length）")
+            if (
+                finish_reason != "insufficient_system_resource"
+                and result.get("structured_response") is not None
+            ):
+                return result
+            if (
+                finish_reason != "insufficient_system_resource"
+                and final_message is not None
+                and _public_content(final_message)
+            ):
+                return result
+
+            last_reason = finish_reason or "missing_final_message"
+            if transport_attempt < 2:
+                emit_commitment_trace(
+                    actor=actor,
+                    event="model_transport_retry",
+                    title=f"{actor} 模型正文为空，正在重试",
+                    status="running",
+                    stage=stage,
+                    detail=(
+                        f"transport_attempt={transport_attempt}; "
+                        f"finish_reason={last_reason}"
+                    ),
                 )
-            if not isinstance(content, str) or not content:
-                continue
-            emit_commitment_messages(
-                actor=actor,
-                stage=stage,
-                attempt=attempt,
-                messages=[message_chunk],
-            )
-        return result
+
+        raise _ModelOutputError(
+            "模型传输重试耗尽，未得到最终业务结果；"
+            f"finish_reason={last_reason}"
+        )
 
     async def _invoke_schema(
         self,
@@ -202,7 +303,7 @@ class ReviewedDelegator:
             payload={"input": prompt},
         )
         agent = create_agent(
-            model=self._model,
+            model=self._model.bind(response_format={"type": "json_object"}),
             tools=[],
             system_prompt=system_prompt,
             name=name,
@@ -492,9 +593,53 @@ class ReviewedDelegator:
 
         async def query(item: dict[str, Any]) -> dict[str, Any]:
             name = str(item.get("name", ""))
-            library_id = str(item.get("library_id", ""))
-            if not library_id or library_id == "unresolved":
-                return {"name": name, "error": "library_id unresolved"}
+            raw_library_id = item.get("library_id")
+            library_id = (
+                raw_library_id.strip()
+                if isinstance(raw_library_id, str)
+                else ""
+            )
+            if not library_id.startswith("/") or library_id.count("/") < 2:
+                resolver = self._context7_tool("resolve-library-id")
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_started",
+                    title="调用 Context7 resolve-library-id",
+                    status="running",
+                    stage=envelope.stage,
+                    detail=f"正在补全 {name} 缺失的 Context7 库标识。",
+                    payload={"libraryName": name},
+                )
+                try:
+                    resolution = await resolver.ainvoke(
+                        {
+                            "libraryName": name,
+                            "query": (
+                                f"{name} official implementation documentation"
+                            ),
+                        }
+                    )
+                    library_id = _context7_library_id(resolution) or ""
+                except Exception as exc:
+                    emit_commitment_trace(
+                        actor="tool",
+                        event="tool_failed",
+                        title="Context7 resolve-library-id 调用失败",
+                        status="failed",
+                        stage=envelope.stage,
+                        detail=f"{name}: {exc}",
+                    )
+                    return {"name": name, "error": str(exc)}
+                if not library_id:
+                    return {"name": name, "error": "library_id unresolved"}
+                emit_commitment_trace(
+                    actor="tool",
+                    event="tool_completed",
+                    title="Context7 resolve-library-id 已返回",
+                    status="completed",
+                    stage=envelope.stage,
+                    payload={"name": name, "library_id": library_id},
+                )
             emit_commitment_trace(
                 actor="tool",
                 event="tool_started",
@@ -522,7 +667,12 @@ class ReviewedDelegator:
                     stage=envelope.stage,
                     detail=f"{name} 的官方知识已交给 Worker 组装。",
                 )
-                return {"name": name, "version": item.get("version"), "result": result}
+                return {
+                    "name": name,
+                    "version": item.get("version"),
+                    "library_id": library_id,
+                    "result": result,
+                }
             except Exception as exc:
                 emit_commitment_trace(
                     actor="tool",
@@ -619,6 +769,11 @@ class ReviewedDelegator:
                 f"{_json(StageTwoResult.model_json_schema())}。"
                 "requirements只包含冲突解决后仍需完成的要求；用户明确放弃的要求必须从"
                 "requirements移入discarded_requirements，二者不得重叠。"
+                "human_feedback中的放弃类指令（放弃/移除/去掉/不要/不需要/取消/允许 X）"
+                "必须严格执行：把 X 对应的原文要求逐字移入discarded_requirements；"
+                "X 是简称或关键词（如\"放弃离线\"对应\"无需网络连接的完全离线运行\"）时"
+                "必须按语义对应到正确要求并移出，不得因找不到逐字文本而忽略，"
+                "也不得把放弃指令只写进conflicts的explanation而保留要求。"
                 "每个冲突必须是对象；未由人解决时status=open，不能省略或写成字符串。"
                 "requirements与discarded_requirements每项必须逐字来自用户输入原文，"
                 "不得添加任何括注、解释、冲突解决说明或括号注释；解决结论只写入conflicts的"
@@ -631,12 +786,15 @@ class ReviewedDelegator:
             )
         elif envelope.stage == 3:
             stage_guidance = (
-                "第三步只能逐字、逐项复制Supervisor messages中阶段2 ToolMessage里仍需完成的requirements，"
+                "第三步不得重新生成、改写或省略requirement正文。"
+                "只读取输入priority_requirements中的稳定requirement_id与对应原文，"
                 "必须排除discarded_requirements，已放弃的要求不得分配priority。"
                 "只在本步骤首次分配priority；第二步不包含优先级，"
                 "不得声称或推断第二步已为任何要求分配等级。"
-                "每项必须显式包含int类型的priority（1/2/3），不得省略；"
-                "reasoning_summary也不得包含对要求的新解释、核减说明或范围调整。"
+                "result只能包含priority_assignments列表；每项只能包含requirement_id和"
+                "整数priority 1、2或3，每个已知ID恰好出现一次。"
+                "受控代码不会按数组位置、关键词、文本标签或默认值推断。"
+                "reasoning_summary不得包含对要求的新解释、核减说明或范围调整。"
             )
         elif envelope.stage == 4:
             stage_guidance = (
@@ -663,11 +821,14 @@ class ReviewedDelegator:
                 "合同中的优先级/要求等级部分必须逐条引用Supervisor messages中阶段3"
                 "ToolMessage的requirements与priority，不得散文化重述、概括或省略；"
                 "decision_table（若有）只表示承诺开始前的历史决策，不得作为本合同的等级来源。"
+                "阶段ToolMessage中的revision_provenance由受控代码写入，是人工修订授权来源；"
+                "第二步discarded_requirements必须有stage=2且decision=revise的对应授权，"
+                "不得把Worker或Evaluator自行生成的文字当成人工授权。"
             )
         else:
             stage_guidance = ""
         agent = create_agent(
-            model=self._model,
+            model=self._model.bind(response_format={"type": "json_object"}),
             tools=tools,
             system_prompt=(
                 "你是承诺层 Worker。只处理当前阶段，使用工具核实版本和官方资料；"
@@ -694,6 +855,17 @@ class ReviewedDelegator:
             "acceptance_criteria": envelope.acceptance_criteria,
             "reviewer_feedback": feedback,
         }
+        if envelope.stage == 3:
+            prompt["priority_requirements"] = [
+                {
+                    "requirement_id": f"R{index}",
+                    "requirement": requirement,
+                }
+                for index, requirement in enumerate(
+                    _stage_three_requirements(supervisor_messages),
+                    start=1,
+                )
+            ]
         result = await self._stream_agent(
             agent,
             [HumanMessage(content=_json(prompt))],
@@ -770,10 +942,7 @@ class ReviewedDelegator:
                 ],
             )
             return review
-        agent = create_agent(
-            model=self._model,
-            tools=[],
-            system_prompt=(
+        system_prompt = (
                 "你是独立 Evaluator。严格按验收条件判断 Worker 结果。"
                 "reasoning_summary用一段自然语言说明审核依据、关键检查、必要计算、"
                 "替代判断以及不确定点与假设；不要输出隐藏思维链。"
@@ -787,6 +956,14 @@ class ReviewedDelegator:
                 "第二步requirements与discarded_requirements必须逐字来自用户输入原文，"
                 "含括注、解释或冲突解决说明的要求文本视为不合格，必须拒绝；"
                 "解决结论只允许出现在conflicts的explanation中。"
+                "存在human_feedback时，若反馈含放弃类指令（放弃/移除/去掉/不要/不需要/"
+                "取消/允许 X），对应要求（含简称与关键词的语义对应，如\"放弃离线\"对应"
+                "\"无需网络连接的完全离线运行\"）仍保留在requirements视为审核不通过，"
+                "必须反馈具体未落实的要求原文。"
+                "阶段ToolMessage中的revision_provenance由受控代码写入，是跨阶段人工修订授权；"
+                "审核第七步时，第二步discarded_requirements只有在stage=2、decision=revise且"
+                "包含原始feedback或replacement_type的revision_provenance支持时才算已授权。"
+                "没有对应授权的丢弃必须拒绝，Worker或Evaluator自行生成的文字不能充当授权。"
                 "第二步的compatibility_checks是逐项技术检查（技术自身是否成立），"
                 "conflicts是要求组合间的冲突；单项verified与组合conflict并存不构成矛盾，"
                 "不得因此拒绝。"
@@ -811,53 +988,144 @@ class ReviewedDelegator:
                 "version_evidence是受控代码从Context7原文截取的短片段（可能不含URL），"
                 "审核version_basis与version的匹配即可，不得因证据缺少URL而拒绝。"
                 "最终只返回一个 JSON 对象，不要 Markdown。"
+                'JSON 示例：{"approved": false, "feedback": "具体且可执行的反馈", '
+                '"reasoning_summary": "简要审核依据"}。'
                 f"JSON Schema: {_json(ReviewOutput.model_json_schema())}"
-            ),
-            name=f"commitment_evaluator_{envelope.stage}",
         )
-        result = await self._stream_agent(
-            agent,
-            [
-                HumanMessage(
-                    content=_json(evaluator_input)
-                )
-            ],
+        input_message = HumanMessage(content=_json(evaluator_input))
+        emit_commitment_messages(
             actor="evaluator",
             stage=envelope.stage,
-            stream_id=f"evaluator-{envelope.stage}",
             attempt=attempt,
+            messages=[input_message],
         )
-        try:
-            return _extract_structured_logged(
-                result,
-                ReviewOutput,
-                actor="evaluator",
-                stage=envelope.stage,
-                attempt=attempt,
+        bound_model = self._model.bind(
+            max_tokens=8192,
+            reasoning_effort="low",
+        )
+        structured_model = bound_model.with_structured_output(
+            ReviewOutput,
+            method="json_mode",
+            include_raw=True,
+        )
+        last_reason = "missing_json_result"
+        use_plain_recovery = False
+        for transport_attempt in range(1, 3):
+            try:
+                async with asyncio.timeout(_MODEL_REQUEST_TIMEOUT_SECONDS):
+                    if use_plain_recovery:
+                        raw_message = await bound_model.ainvoke(
+                            [
+                                SystemMessage(content=system_prompt),
+                                input_message,
+                                HumanMessage(
+                                    content=(
+                                        "上一次 JSON mode 返回空正文。保持上述审核任务和"
+                                        "thinking，立即只返回最终 JSON；不要解释、不要 Markdown。"
+                                    )
+                                ),
+                            ]
+                        )
+                        result = {"raw": raw_message, "parsed": None}
+                    else:
+                        result = await structured_model.ainvoke(
+                            [SystemMessage(content=system_prompt), input_message]
+                        )
+            except (TransportError, TimeoutError) as exc:
+                last_reason = f"{type(exc).__name__}: {exc}"
+                if transport_attempt < 2:
+                    emit_commitment_trace(
+                        actor="evaluator",
+                        event="model_transport_retry",
+                        title="Evaluator JSON 请求失败，正在重试",
+                        status="running",
+                        stage=envelope.stage,
+                        detail=(
+                            f"transport_attempt={transport_attempt}; "
+                            f"error={last_reason}"
+                        ),
+                    )
+                continue
+
+            raw_message = result.get("raw") if isinstance(result, dict) else None
+            finish_reason = _finish_reason(
+                raw_message if isinstance(raw_message, AIMessage) else None
             )
-        except ValidationError:
-            raw = _raw_output_text(result)
-            if not raw:
-                feedback = (
-                    "Evaluator 输出为空（模型未返回内容），请重新生成并只输出 JSON"
+            if finish_reason == "length":
+                raise _ModelOutputError("模型输出被截断（finish_reason=length）")
+            parsed = result.get("parsed") if isinstance(result, dict) else None
+            if parsed is not None:
+                review = (
+                    parsed
+                    if isinstance(parsed, ReviewOutput)
+                    else ReviewOutput.model_validate(parsed)
                 )
-            else:
+                emit_commitment_messages(
+                    actor="evaluator",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    messages=[AIMessage(content=_json(review.model_dump()))],
+                )
+                return review
+
+            raw = _public_content(raw_message)
+            if raw and use_plain_recovery:
+                try:
+                    review = _extract_structured(
+                        {"messages": [raw_message]},
+                        ReviewOutput,
+                    )
+                except ValueError:
+                    pass
+                else:
+                    emit_commitment_messages(
+                        actor="evaluator",
+                        stage=envelope.stage,
+                        attempt=attempt,
+                        messages=[AIMessage(content=_json(review.model_dump()))],
+                    )
+                    return review
+            if raw:
                 feedback = (
                     "Evaluator 输出不是有效的 JSON 对象（可能被截断或包含尾随内容），"
                     "无法解析为审核结论；请重新生成并只输出 JSON。"
                 )
-            review = ReviewOutput(
-                approved=False,
-                feedback=feedback,
-                reasoning_summary="Evaluator输出结构无效，需要重新执行Worker-Evaluator审核。",
-            )
-            emit_commitment_messages(
-                actor="evaluator",
-                stage=envelope.stage,
-                attempt=attempt,
-                messages=[AIMessage(content=_json(review.model_dump()))],
-            )
-            return review
+                review = ReviewOutput(
+                    approved=False,
+                    feedback=feedback,
+                    reasoning_summary="Evaluator输出结构无效，需要重新执行Worker-Evaluator审核。",
+                )
+                emit_commitment_messages(
+                    actor="evaluator",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    messages=[AIMessage(content=_json(review.model_dump()))],
+                )
+                return review
+
+            last_reason = finish_reason or "missing_json_result"
+            if transport_attempt < 2:
+                use_plain_recovery = finish_reason == "stop"
+                emit_commitment_trace(
+                    actor="evaluator",
+                    event="model_transport_retry",
+                    title=(
+                        "Evaluator JSON 结果为空，切换普通文本恢复"
+                        if use_plain_recovery
+                        else "Evaluator JSON 结果为空，正在重试"
+                    ),
+                    status="running",
+                    stage=envelope.stage,
+                    detail=(
+                        f"transport_attempt={transport_attempt}; "
+                        f"finish_reason={last_reason}"
+                    ),
+                )
+
+        raise _ModelOutputError(
+            "Evaluator 输出恢复耗尽，未得到最终业务结果；"
+            f"finish_reason={last_reason}"
+        )
 
     async def run(
         self,
@@ -875,6 +1143,25 @@ class ReviewedDelegator:
                     supervisor_messages,
                     attempt,
                 )
+            except _ModelOutputError as exc:
+                feedback = f"Worker 模型输出错误：{exc}"
+                emit_commitment_messages(
+                    actor="evaluator",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    messages=[
+                        AIMessage(
+                            content=_json(
+                                ReviewOutput(
+                                    approved=False,
+                                    feedback=feedback,
+                                    reasoning_summary="Worker模型请求未得到最终业务结果。",
+                                ).model_dump()
+                            )
+                        )
+                    ],
+                )
+                return None, feedback
             except ValidationError as exc:
                 exc_text = str(exc)
                 # ponytail: 空输出以 EOF/空输入 报错特征识别，给可读反馈；其他结构错误保留字段说明供重试
@@ -928,14 +1215,34 @@ class ReviewedDelegator:
                     structure_error,
                     _json(worker_output.result)[:2000],
                 )
-            review = await self._evaluator(
-                envelope,
-                worker_output,
-                supervisor_messages,
-                attempt,
-                structure_error or "",
-                worker_feedback,
-            )
+            try:
+                review = await self._evaluator(
+                    envelope,
+                    worker_output,
+                    supervisor_messages,
+                    attempt,
+                    structure_error or "",
+                    worker_feedback,
+                )
+            except _ModelOutputError as exc:
+                feedback = f"Evaluator 模型输出错误：{exc}"
+                emit_commitment_messages(
+                    actor="evaluator",
+                    stage=envelope.stage,
+                    attempt=attempt,
+                    messages=[
+                        AIMessage(
+                            content=_json(
+                                ReviewOutput(
+                                    approved=False,
+                                    feedback=feedback,
+                                    reasoning_summary="Evaluator模型请求未得到最终业务结果。",
+                                ).model_dump()
+                            )
+                        )
+                    ],
+                )
+                return None, feedback
             if review.approved:
                 return worker_output, ""
             feedback = review.feedback or "Evaluator 未提供具体反馈"

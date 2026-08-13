@@ -185,6 +185,20 @@ class PlainModel(BaseChatModel):
         return self
 
 
+class ScriptedStreamAgent:
+    def __init__(self, runs):
+        self.runs = runs
+        self.calls = 0
+
+    async def astream(self, _input, stream_mode):
+        run = self.runs[self.calls]
+        self.calls += 1
+        for item in run:
+            if isinstance(item, Exception):
+                raise item
+            yield item
+
+
 class RecordingReviewModel(BaseChatModel):
     recorded_messages: list = []
 
@@ -198,7 +212,7 @@ class RecordingReviewModel(BaseChatModel):
             generations=[
                 ChatGeneration(
                     message=AIMessage(
-                        content='{"approved": true, "feedback": ""}'
+                        content='{"approved": true, "feedback": ""}',
                     )
                 )
             ]
@@ -206,6 +220,24 @@ class RecordingReviewModel(BaseChatModel):
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         return self
+
+    def with_structured_output(self, schema, **kwargs):
+        model = self
+
+        class StructuredReviewModel:
+            async def ainvoke(self, messages):
+                model.recorded_messages = list(messages)
+                parsed = schema(approved=True, feedback="")
+                return {
+                    "raw": AIMessage(
+                        content=parsed.model_dump_json(),
+                        response_metadata={"finish_reason": "stop"},
+                    ),
+                    "parsed": parsed,
+                    "parsing_error": None,
+                }
+
+        return StructuredReviewModel()
 
 
 class AlwaysApprovedDelegator(ReviewedDelegator):
@@ -374,6 +406,77 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertIn("第二步不包含优先级", system_prompt)
 
+    async def test_worker_stage_two_prompt_enforces_discard_instructions(self):
+        captured = {}
+
+        def fake_create_agent(**kwargs):
+            captured["system_prompt"] = kwargs.get("system_prompt", "")
+            return object()
+
+        class RecordingDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+
+            async def _stream_agent(self, agent, messages, **kwargs):
+                return {
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                '{"result": {"requirements": ["X"], '
+                                '"discarded_requirements": [], '
+                                '"compatibility_checks": [], "conflicts": []}}'
+                            )
+                        )
+                    ]
+                }
+
+        delegator = RecordingDelegator()
+        with patch(
+            "caspian.agents.commitment.delegation.create_agent",
+            side_effect=fake_create_agent,
+        ):
+            await delegator._worker(
+                TaskEnvelope(
+                    stage=2,
+                    instruction="汇总要求",
+                    context={"human_feedback": "放弃离线"},
+                    acceptance_criteria=[],
+                ),
+                "",
+            )
+        self.assertIn("human_feedback", captured["system_prompt"])
+        self.assertIn("放弃", captured["system_prompt"])
+        self.assertIn("discarded_requirements", captured["system_prompt"])
+        self.assertIn("简称", captured["system_prompt"])
+
+    async def test_evaluator_prompt_rejects_unenforced_discard_instructions(self):
+        model = RecordingReviewModel()
+        await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(
+                stage=2,
+                instruction="汇总要求",
+                context={},
+                acceptance_criteria=[],
+            ),
+            WorkerOutput(
+                result={
+                    "requirements": ["X"],
+                    "discarded_requirements": [],
+                    "compatibility_checks": [],
+                    "conflicts": [],
+                }
+            ),
+            [HumanMessage(content="task")],
+        )
+        system_prompt = "\n".join(
+            str(message.content)
+            for message in model.recorded_messages
+            if message.type == "system"
+        )
+        self.assertIn("human_feedback", system_prompt)
+        self.assertIn("放弃", system_prompt)
+        self.assertIn("审核不通过", system_prompt)
+
     async def test_evaluator_receives_complete_worker_review_context(self):
         model = RecordingReviewModel()
         await ReviewedDelegator(model, [])._evaluator(
@@ -412,33 +515,275 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             3,
         )
 
-    def test_stage_three_normalizes_freeform_priorities_and_exact_text(self):
+    async def test_evaluator_uses_json_mode_without_structured_tool_call(self):
+        class JsonModeOnlyModel(PlainModel):
+            structured_kwargs: dict | None = None
+            bound_kwargs: dict | None = None
+
+            def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+                raise AssertionError("Evaluator must not use ToolStrategy")
+
+            def bind(self, **kwargs):
+                self.bound_kwargs = kwargs
+                return self
+
+            def with_structured_output(self, schema, **kwargs):
+                self.structured_kwargs = kwargs
+
+                class StructuredModel:
+                    async def ainvoke(self, messages):
+                        parsed = schema(
+                            approved=True,
+                            feedback="",
+                            reasoning_summary="JSON mode result",
+                        )
+                        return {
+                            "raw": AIMessage(
+                                content=parsed.model_dump_json(),
+                                response_metadata={"finish_reason": "stop"},
+                            ),
+                            "parsed": parsed,
+                            "parsing_error": None,
+                        }
+
+                return StructuredModel()
+
+        model = JsonModeOnlyModel()
+        review = await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(stage=4, instruction="汇总必要输入"),
+            WorkerOutput(result={"files": [], "urls": []}),
+        )
+
+        self.assertTrue(review.approved)
+        self.assertEqual(model.structured_kwargs["method"], "json_mode")
+        self.assertTrue(model.structured_kwargs["include_raw"])
+        self.assertEqual(
+            model.bound_kwargs,
+            {"max_tokens": 8192, "reasoning_effort": "low"},
+        )
+
+    async def test_evaluator_recovers_from_empty_json_mode_with_plain_json(self):
+        class EmptyThenPlainJsonModel(PlainModel):
+            structured_calls: int = 0
+            plain_calls: int = 0
+            plain_messages: list | None = None
+
+            def bind(self, **kwargs):
+                return self
+
+            def with_structured_output(self, schema, **kwargs):
+                owner = self
+
+                class EmptyStructuredModel:
+                    async def ainvoke(self, messages):
+                        owner.structured_calls += 1
+                        return {
+                            "raw": AIMessage(
+                                content="",
+                                response_metadata={"finish_reason": "stop"},
+                            ),
+                            "parsed": None,
+                            "parsing_error": None,
+                        }
+
+                return EmptyStructuredModel()
+
+            async def ainvoke(self, messages, config=None, **kwargs):
+                self.plain_calls += 1
+                self.plain_messages = messages
+                return AIMessage(
+                    content=ReviewOutput(
+                        approved=True,
+                        feedback="",
+                        reasoning_summary="plain JSON recovery result",
+                    ).model_dump_json(),
+                    response_metadata={"finish_reason": "stop"},
+                )
+
+        model = EmptyThenPlainJsonModel()
+        review = await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(stage=2, instruction="汇总要求与矛盾"),
+            WorkerOutput(result={"requirements": ["必须完成 A"]}),
+        )
+
+        self.assertTrue(review.approved)
+        self.assertEqual(model.structured_calls, 1)
+        self.assertEqual(model.plain_calls, 1)
+        recovery_prompt = "\n".join(
+            str(message.content) for message in model.plain_messages
+        )
+        self.assertIn("JSON", recovery_prompt)
+        self.assertIn('"approved": false', recovery_prompt)
+        self.assertIn("立即只返回最终 JSON", recovery_prompt)
+
+    def test_stage_three_joins_reordered_priority_assignments_by_stable_id(self):
         normalized = _normalize_stage_three_result(
             WorkerOutput(
                 result={
-                    "requirements": [
-                        {"text": "rewritten A", "priority": "high"},
-                        {"text": "rewritten B", "priority": "medium"},
-                    ],
-                    "notes": "extra",
+                    "priority_assignments": [
+                        {"requirement_id": "R2", "priority": 2},
+                        {"requirement_id": "R1", "priority": 3},
+                    ]
                 },
-                reasoning_summary="按第二步保留要求逐项定级。",
+                reasoning_summary="模型自由说明不作为关联依据。",
             ),
-            ["必须完成 A", "可以协商 B"],
+            ["必须完成 A", "  保留原文空格与标点；不得改写。  "],
         )
         self.assertEqual(
             normalized.result,
             {
                 "requirements": [
                     {"requirement": "必须完成 A", "priority": 3},
-                    {"requirement": "可以协商 B", "priority": 2},
+                    {
+                        "requirement": "  保留原文空格与标点；不得改写。  ",
+                        "priority": 2,
+                    },
                 ]
             },
         )
+        self.assertIn("R1=3", normalized.reasoning_summary)
+        self.assertIn("R2=2", normalized.reasoning_summary)
+
+    def test_stage_three_rejects_invalid_priority_assignments_without_inference(self):
+        requirements = ["必须完成 A", "代码尽量简单"]
+        messages = supervisor_stage_messages(2, {"requirements": requirements})
+        cases = [
+            ([{"requirement_id": "R1", "priority": 3}], "缺少"),
+            (
+                [
+                    {"requirement_id": "R1", "priority": 3},
+                    {"requirement_id": "R1", "priority": 2},
+                ],
+                "重复",
+            ),
+            (
+                [
+                    {"requirement_id": "R1", "priority": 3},
+                    {"requirement_id": "R3", "priority": 2},
+                ],
+                "未知",
+            ),
+            (
+                [
+                    {"requirement_id": "R1", "priority": 3},
+                    {"requirement_id": "R2", "priority": "medium"},
+                ],
+                "整数 1、2、3",
+            ),
+        ]
+        for assignments, expected_error in cases:
+            with self.subTest(assignments=assignments):
+                normalized = _normalize_stage_three_result(
+                    WorkerOutput(result={"priority_assignments": assignments}),
+                    requirements,
+                )
+                error = _validate_stage_result(3, normalized.result, messages)
+                self.assertIsNotNone(error)
+                self.assertIn(expected_error, error)
+
+    async def test_stage_three_worker_sends_stable_ids_and_only_accepts_assignments(self):
+        class RecordingDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+                self.prompt = None
+
+            async def _stream_agent(self, agent, messages, **kwargs):
+                self.prompt = json.loads(str(messages[-1].content))
+                final = AIMessage(
+                    content=json.dumps(
+                        {
+                            "result": {
+                                "priority_assignments": [
+                                    {"requirement_id": "R1", "priority": 3}
+                                ]
+                            }
+                        }
+                    )
+                )
+                return {"messages": [final]}
+
+        delegator = RecordingDelegator()
+        with patch(
+            "caspian.agents.commitment.delegation.create_agent",
+            return_value=object(),
+        ):
+            output = await delegator._worker(
+                TaskEnvelope(
+                    stage=3,
+                    instruction="分配优先级",
+                    context={
+                        "decision_table_rows": [
+                            {"requirement": "必须使用 Supabase", "priority": 3}
+                        ]
+                    },
+                ),
+                "",
+                supervisor_stage_messages(
+                    2,
+                    {
+                        "requirements": ["改用 SQLite 存储"],
+                        "table_conflicts": [
+                            {
+                                "requirement": "改用 SQLite 存储",
+                                "table_requirement": "必须使用 Supabase",
+                                "table_priority": 3,
+                                "explanation": "两种存储方案冲突",
+                            }
+                        ],
+                    },
+                ),
+            )
+
         self.assertEqual(
-            normalized.reasoning_summary,
-            "按第二步保留要求逐项定级。",
+            delegator.prompt["priority_requirements"],
+            [{"requirement_id": "R1", "requirement": "改用 SQLite 存储"}],
         )
+        self.assertEqual(
+            output.result["requirements"],
+            [{"requirement": "改用 SQLite 存储", "priority": 3}],
+        )
+        self.assertEqual(len(output.result["table_escalations"]), 1)
+
+    async def test_worker_binds_json_object_response_format_without_tool_choice(self):
+        from langchain_core.language_models.chat_models import _ChatModelBinding
+
+        captured = {}
+
+        class RecordingDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(PlainModel(), [])
+
+            async def _stream_agent(self, agent, messages, **kwargs):
+                return {
+                    "messages": [
+                        AIMessage(content='{"result": {"goal": "X"}}')
+                    ]
+                }
+
+        def fake_create_agent(**kwargs):
+            captured["model"] = kwargs["model"]
+            captured["response_format"] = kwargs.get("response_format", None)
+            return object()
+
+        delegator = RecordingDelegator()
+        with patch(
+            "caspian.agents.commitment.delegation.create_agent",
+            side_effect=fake_create_agent,
+        ):
+            output = await delegator._worker(
+                TaskEnvelope(stage=1, instruction="明确目标", context={}),
+                "",
+            )
+
+        self.assertIsNone(captured["response_format"])
+        binding = captured["model"]
+        self.assertIsInstance(binding, _ChatModelBinding)
+        self.assertEqual(
+            binding.kwargs.get("response_format"),
+            {"type": "json_object"},
+        )
+        self.assertNotIn("tool_choice", binding.kwargs)
+        self.assertEqual(output.result, {"goal": "X"})
 
     async def test_stage_five_calls_context7_once_per_selected_technology(self):
         resolve_calls = []
@@ -559,9 +904,106 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         technology = output.result["technologies"][0]
         self.assertEqual(technology["version"], "latest-stable")
         self.assertEqual(
+            technology["library_id"],
+            "/tailwindlabs/tailwindcss.com",
+        )
+        self.assertEqual(
             technology["version_basis"],
             "latest_stable_policy",
         )
+
+    async def test_stage_six_resolves_missing_library_id_before_query(self):
+        calls = []
+
+        @tool("resolve-library-id")
+        async def resolver(libraryName: str, query: str) -> str:
+            """Resolve one technology."""
+            calls.append(("resolve", libraryName))
+            return "Context7-compatible library ID: /reactjs/react.dev"
+
+        @tool("query-docs")
+        async def query_docs(libraryId: str, query: str) -> str:
+            """Return official implementation knowledge."""
+            calls.append(("query", libraryId))
+            return "Official React implementation documentation."
+
+        class StageSixDelegator(ReviewedDelegator):
+            async def _invoke_schema(self, *, schema, prompt, **_kwargs):
+                self.prompt = prompt
+                return schema.model_validate(
+                    {
+                        "result": {
+                            "knowledge": [
+                                {
+                                    "technology": "React",
+                                    "version": "latest-stable",
+                                    "source_url": "https://react.dev/",
+                                    "content": "Official docs.",
+                                }
+                            ]
+                        }
+                    }
+                )
+
+        delegator = StageSixDelegator(None, [resolver, query_docs])
+        await delegator._stage_six_worker(
+            TaskEnvelope(
+                stage=6,
+                instruction="提取知识",
+                context={},
+                acceptance_criteria=[],
+            ),
+            "",
+            supervisor_stage_messages(
+                5,
+                {
+                    "technologies": [
+                        {
+                            "name": "React",
+                            "version": "latest-stable",
+                            "library_id": None,
+                        }
+                    ]
+                },
+            ),
+        )
+        self.assertEqual(
+            calls,
+            [
+                ("resolve", "React"),
+                ("query", "/reactjs/react.dev"),
+            ],
+        )
+        self.assertEqual(
+            delegator.prompt["context7_evidence"][0]["library_id"],
+            "/reactjs/react.dev",
+        )
+
+    async def test_stage_seven_evaluator_requires_controlled_revision_provenance(self):
+        model = RecordingReviewModel()
+        await ReviewedDelegator(model, [])._evaluator(
+            TaskEnvelope(
+                stage=7,
+                instruction="生成任务合同",
+                context={},
+                acceptance_criteria=["只丢弃人工授权放弃的要求"],
+            ),
+            WorkerOutput(result={"contract_markdown": "# Contract"}),
+            supervisor_stage_messages(
+                2,
+                {
+                    "requirements": ["保留实时同步"],
+                    "discarded_requirements": ["放弃纯静态前端"],
+                },
+            ),
+        )
+        system_prompt = "\n".join(
+            str(message.content)
+            for message in model.recorded_messages
+            if message.type == "system"
+        )
+        self.assertIn("revision_provenance", system_prompt)
+        self.assertIn("没有对应授权", system_prompt)
 
     def test_stage_three_must_copy_stage_two_requirements_exactly(self):
         messages = supervisor_stage_messages(
@@ -725,6 +1167,9 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 super().__init__(PlainModel(), [])
                 self.worker_feedback = []
 
+            async def _stream_agent(self, agent, messages, **kwargs):
+                return {"messages": [AIMessage(content="not valid json")]}
+
             async def _worker(
                 self,
                 envelope,
@@ -767,6 +1212,222 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(raw_text, log_args[-1])
         self.assertIn("evaluator", log_args)
         self.assertIn("ReviewOutput", log_args)
+
+    async def test_stream_agent_retries_http_transport_error_within_one_attempt(self):
+        from httpx import RemoteProtocolError
+
+        final = AIMessage(
+            content='{"result":{"goal":"X"}}',
+            response_metadata={"finish_reason": "stop"},
+        )
+        agent = ScriptedStreamAgent(
+            [
+                [RemoteProtocolError("incomplete chunked read")],
+                [("messages", (final, {})), ("values", {"messages": [final]})],
+            ]
+        )
+
+        result = await ReviewedDelegator(PlainModel(), [])._stream_agent(
+            agent,
+            [HumanMessage(content="input")],
+            actor="worker",
+            stage=1,
+            stream_id="worker-1",
+            attempt=2,
+        )
+
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(result["messages"][-1].content, final.content)
+
+    async def test_stream_agent_retries_reasoning_only_without_publishing_reasoning(self):
+        empty = AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "不得公开"},
+            response_metadata={"finish_reason": "stop"},
+        )
+        final = AIMessage(
+            content='{"result":{"goal":"X"}}',
+            response_metadata={"finish_reason": "stop"},
+        )
+        agent = ScriptedStreamAgent(
+            [
+                [("messages", (empty, {})), ("values", {"messages": [empty]})],
+                [("messages", (final, {})), ("values", {"messages": [final]})],
+            ]
+        )
+        published = []
+
+        with patch(
+            "caspian.agents.commitment.delegation.emit_commitment_messages",
+            side_effect=lambda **kwargs: published.extend(kwargs["messages"]),
+        ):
+            result = await ReviewedDelegator(PlainModel(), [])._stream_agent(
+                agent,
+                [HumanMessage(content="input")],
+                actor="worker",
+                stage=1,
+                stream_id="worker-1",
+            )
+
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(result["messages"][-1].content, final.content)
+        self.assertNotIn("不得公开", [str(message.content) for message in published])
+
+    async def test_stream_agent_accepts_structured_response_with_empty_public_content(self):
+        from caspian.agents.commitment.delegation import _extract_structured_logged
+
+        empty = AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "私密推理"},
+            response_metadata={"finish_reason": "stop"},
+        )
+        structured = WorkerOutput(result={"goal": "X"})
+        agent = ScriptedStreamAgent(
+            [[
+                ("messages", (empty, {})),
+                (
+                    "values",
+                    {"messages": [empty], "structured_response": structured},
+                ),
+            ]]
+        )
+
+        result = await ReviewedDelegator(PlainModel(), [])._stream_agent(
+            agent,
+            [HumanMessage(content="input")],
+            actor="worker",
+            stage=1,
+            stream_id="worker-1",
+        )
+        parsed = _extract_structured_logged(
+            result,
+            WorkerOutput,
+            actor="worker",
+            stage=1,
+            attempt=1,
+        )
+
+        self.assertEqual(agent.calls, 1)
+        self.assertEqual(parsed, structured)
+
+    async def test_stream_agent_retries_insufficient_system_resource(self):
+        partial = AIMessage(
+            content='{"result":',
+            response_metadata={"finish_reason": "insufficient_system_resource"},
+        )
+        final = AIMessage(
+            content='{"result":{"goal":"X"}}',
+            response_metadata={"finish_reason": "stop"},
+        )
+        agent = ScriptedStreamAgent(
+            [
+                [("values", {"messages": [partial]})],
+                [("values", {"messages": [final]})],
+            ]
+        )
+
+        result = await ReviewedDelegator(PlainModel(), [])._stream_agent(
+            agent,
+            [HumanMessage(content="input")],
+            actor="worker",
+            stage=1,
+            stream_id="worker-1",
+        )
+
+        self.assertEqual(agent.calls, 2)
+        self.assertEqual(result["messages"][-1].content, final.content)
+
+    async def test_stream_agent_reports_length_and_transport_exhaustion(self):
+        from caspian.agents.commitment.delegation import _ModelOutputError
+
+        truncated = AIMessage(
+            content='{"result":',
+            response_metadata={"finish_reason": "length"},
+        )
+        delegator = ReviewedDelegator(PlainModel(), [])
+        with self.assertRaisesRegex(_ModelOutputError, "length|截断"):
+            await delegator._stream_agent(
+                ScriptedStreamAgent([[("values", {"messages": [truncated]})]]),
+                [HumanMessage(content="input")],
+                actor="worker",
+                stage=1,
+                stream_id="worker-1",
+            )
+
+        empty = AIMessage(content="", response_metadata={"finish_reason": "stop"})
+        exhausted = ScriptedStreamAgent(
+            [
+                [("values", {"messages": [empty]})],
+                [("values", {"messages": [empty]})],
+                [("values", {"messages": [empty]})],
+            ]
+        )
+        with self.assertRaisesRegex(_ModelOutputError, "重试耗尽"):
+            await delegator._stream_agent(
+                exhausted,
+                [HumanMessage(content="input")],
+                actor="evaluator",
+                stage=1,
+                stream_id="evaluator-1",
+            )
+        self.assertEqual(exhausted.calls, 3)
+
+    async def test_stream_agent_applies_timeout_to_each_model_request(self):
+        from caspian.agents.commitment.delegation import _ModelOutputError
+
+        class HangingStreamAgent:
+            def __init__(self):
+                self.calls = 0
+
+            async def astream(self, _input, stream_mode):
+                self.calls += 1
+                await asyncio.Event().wait()
+                if False:
+                    yield None
+
+        agent = HangingStreamAgent()
+        with patch(
+            "caspian.agents.commitment.delegation._MODEL_REQUEST_TIMEOUT_SECONDS",
+            0.01,
+        ):
+            with self.assertRaisesRegex(_ModelOutputError, "TimeoutError"):
+                await ReviewedDelegator(PlainModel(), [])._stream_agent(
+                    agent,
+                    [HumanMessage(content="input")],
+                    actor="evaluator",
+                    stage=2,
+                    stream_id="evaluator-2",
+                )
+
+        self.assertEqual(agent.calls, 3)
+
+    async def test_stream_agent_does_not_transport_retry_invalid_public_json(self):
+        from caspian.agents.commitment.delegation import _extract_structured_logged
+
+        invalid = AIMessage(
+            content="not json",
+            response_metadata={"finish_reason": "stop"},
+        )
+        agent = ScriptedStreamAgent(
+            [[("messages", (invalid, {})), ("values", {"messages": [invalid]})]]
+        )
+        result = await ReviewedDelegator(PlainModel(), [])._stream_agent(
+            agent,
+            [HumanMessage(content="input")],
+            actor="worker",
+            stage=1,
+            stream_id="worker-1",
+        )
+
+        self.assertEqual(agent.calls, 1)
+        with self.assertRaises(ValueError):
+            _extract_structured_logged(
+                result,
+                WorkerOutput,
+                actor="worker",
+                stage=1,
+                attempt=1,
+            )
 
     def test_stage_two_dimension_semantics_in_prompt(self):
         import inspect
@@ -812,23 +1473,37 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("缺少有效的 priority", rejection_logs[0][-2])
 
     async def test_evaluator_empty_output_readable_feedback(self):
-        class EmptyEvaluatorDelegator(ReviewedDelegator):
-            def __init__(self):
-                super().__init__(PlainModel(), [])
+        from caspian.agents.commitment.delegation import _ModelOutputError
 
-            async def _stream_agent(self, agent, messages, **kwargs):
-                # 模拟模型空输出：最后一条 AIMessage 内容为空
-                return {"messages": [AIMessage(content="")]}
+        class EmptyJsonModel(PlainModel):
+            async def ainvoke(self, messages, config=None, **kwargs):
+                return AIMessage(
+                    content="",
+                    response_metadata={"finish_reason": "stop"},
+                )
 
-        delegator = EmptyEvaluatorDelegator()
-        review = await delegator._evaluator(
-            TaskEnvelope(stage=1, instruction="goal"),
-            WorkerOutput(result={"goal": "x"}),
-            [],
-            1,
-        )
-        self.assertFalse(review.approved)
-        self.assertIn("输出为空", review.feedback)
+            def with_structured_output(self, schema, **kwargs):
+                class EmptyStructuredModel:
+                    async def ainvoke(self, messages):
+                        return {
+                            "raw": AIMessage(
+                                content="",
+                                response_metadata={"finish_reason": "stop"},
+                            ),
+                            "parsed": None,
+                            "parsing_error": None,
+                        }
+
+                return EmptyStructuredModel()
+
+        delegator = ReviewedDelegator(EmptyJsonModel(), [])
+        with self.assertRaisesRegex(_ModelOutputError, "JSON mode|业务结果"):
+            await delegator._evaluator(
+                TaskEnvelope(stage=1, instruction="goal"),
+                WorkerOutput(result={"goal": "x"}),
+                [],
+                1,
+            )
 
     async def test_worker_empty_output_readable_feedback(self):
         class EmptyWorkerDelegator(ReviewedDelegator):
@@ -853,6 +1528,36 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(output)
         self.assertIn("输出为空", error)
         self.assertNotIn("validation error", error)
+
+    async def test_model_output_failure_does_not_start_next_semantic_attempt(self):
+        from caspian.agents.commitment.delegation import _ModelOutputError
+
+        class OutputFailureDelegator(ReviewedDelegator):
+            def __init__(self):
+                super().__init__(None, [])
+                self.worker_calls = 0
+
+            async def _worker(
+                self,
+                envelope,
+                feedback,
+                supervisor_messages=None,
+                attempt=1,
+            ):
+                self.worker_calls += 1
+                return WorkerOutput(result={"goal": "valid worker output"})
+
+            async def _evaluator(self, *args, **kwargs):
+                raise _ModelOutputError("模型传输重试耗尽")
+
+        delegator = OutputFailureDelegator()
+        output, error = await delegator.run(
+            TaskEnvelope(stage=1, instruction="goal")
+        )
+
+        self.assertIsNone(output)
+        self.assertEqual(delegator.worker_calls, 1)
+        self.assertIn("Evaluator 模型输出错误", error)
 
     async def test_unexpected_tool_error_is_not_wrapped_as_tool_message(self):
         class ExplodingDelegator(ReviewedDelegator):
@@ -955,7 +1660,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(payload["allowed_decisions"], ["revise"])
         self.assertIn("超时", payload["error"])
 
-    async def test_human_feedback_does_not_append_supervisor_messages(self):
+    async def test_human_feedback_replaces_message_with_revision_provenance(self):
         class FeedbackDelegator(ReviewedDelegator):
             def __init__(self):
                 super().__init__(None, [])
@@ -1003,16 +1708,20 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             first_ids,
         )
         self.assertEqual(delegator.feedbacks[-1], "human-only-feedback")
-        self.assertNotIn(
-            "human-only-feedback",
-            json.dumps(
-                [
-                    message.model_dump()
-                    for message in resumed["messages"]
-                ],
-                ensure_ascii=False,
-                default=str,
-            ),
+        stage_payload = json.loads(
+            next(
+                message.content
+                for message in resumed["messages"]
+                if isinstance(message, ToolMessage)
+            )
+        )
+        self.assertEqual(
+            stage_payload["revision_provenance"],
+            {
+                "stage": 3,
+                "decision": "revise",
+                "feedback": "human-only-feedback",
+            },
         )
 
     async def test_stage_seven_writes_only_the_approved_edited_contract(self):
