@@ -1,5 +1,5 @@
 """
-本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路的 SSE 流式接口 `POST /api/threads/{thread_id}/runs/stream`。
+本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路的 SSE 流式接口 `POST /api/threads/{thread_id}/runs/stream` 与打断接口 `POST /api/threads/{thread_id}/runs/{run_id}/interrupt`。
 
 对外提供:
     router: APIRouter — 已注册 thread runs 相关路由的 FastAPI Router，供 app 挂载
@@ -13,6 +13,11 @@
         body: RunCreateRequest — 请求体
         request: Request — FastAPI Request 对象
 
+    interrupt_run:
+        thread_id: str — 路径参数，run 所属线程
+        run_id: str — 路径参数，要打断的 run
+        request: Request — FastAPI Request 对象（用于获取 RunManager）
+
     sse_consumer:
         bridge: StreamBridge — 进程内事件总线
         record: RunRecord — 当前 run 的运行时档案
@@ -21,12 +26,20 @@
 
 输出:
     stream_run → StreamingResponse(sse_consumer(...))
+    interrupt_run → dict — {"run_id", "status"}；404 / 409 时抛 HTTPException
 
 具体工作流:
     stream_run:
     (1) 调用 start_run(body, thread_id, request) 获取 RunRecord
     (2) 从 request.app.state 获取 StreamBridge 和 RunManager
     (3) 返回 StreamingResponse(sse_consumer(bridge, record, request, run_mgr))
+
+    interrupt_run:
+    (1) 从 request.app.state 获取 RunManager
+    (2) 按 run_id 查询 RunRecord；不存在或 thread_id 不匹配 → 404
+    (3) 已达终态（success/error/timeout）→ 409
+    (4) 调用 run_manager.cancel(run_id, action="interrupt") 保留 checkpoint 现场
+    (5) 返回 {"run_id", "status": "interrupted"}
 
     sse_consumer:
     (1) 读取请求头 Last-Event-ID 作为断线重连起点
@@ -46,11 +59,12 @@ import json
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
 from caspian.runtime.runs.manager import RunManager, RunRecord
+from caspian.runtime.runs.schemas import RunStatus
 from caspian.runtime.stream_bridge.base import StreamBridge
 from caspian.runtime.stream_bridge.schemas import (
     END_SENTINEL,
@@ -189,6 +203,37 @@ async def sse_consumer(
     except Exception:
         logger.error("sse_consumer 致命异常: run_id='%s'", run_id, exc_info=True)
         yield format_sse("error", {"error": "internal stream error"}, "error")
+
+
+@router.post("/{thread_id}/runs/{run_id}/interrupt")
+async def interrupt_run(
+    thread_id: str,
+    run_id: str,
+    request: Request,
+) -> dict[str, str]:
+    """POST /api/threads/{thread_id}/runs/{run_id}/interrupt — 打断指定 run，保留 checkpoint 现场。
+
+    输入:
+        thread_id: str — 路径参数，run 所属线程
+        run_id: str — 路径参数，要打断的 run
+        request: Request — FastAPI Request 对象（用于获取 RunManager）
+
+    输出:
+        dict — {"run_id": <run_id>, "status": "interrupted"}
+        404 — run 不存在或不属于该 thread
+        409 — run 已达终态，无法打断
+    """
+    run_mgr: RunManager = request.app.state.run_manager
+    record = run_mgr.get(run_id)
+    if record is None or record.thread_id != thread_id:
+        raise HTTPException(status_code=404, detail="run 不存在或不属于该 thread")
+    if record.status in (RunStatus.success, RunStatus.error, RunStatus.timeout):
+        raise HTTPException(
+            status_code=409,
+            detail=f"run 已达终态: {record.status.value}",
+        )
+    run_mgr.cancel(run_id, action="interrupt")
+    return {"run_id": run_id, "status": "interrupted"}
 
 
 @router.post("/{thread_id}/runs/stream")

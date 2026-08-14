@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=decision-table-1">
-  <link rel="stylesheet" href="/assets/skills.css?v=decision-table-1">
-  <link rel="stylesheet" href="/assets/markdown.css?v=md-1">
+  <link rel="stylesheet" href="/assets/app.css?v=merge-45">
+  <link rel="stylesheet" href="/assets/skills.css?v=merge-45">
+  <link rel="stylesheet" href="/assets/markdown.css?v=merge-45">
 </head>
 <body>
   <section id="login-view" class="login-view">
@@ -92,6 +92,9 @@
           <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"
             role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
             aria-expanded="false"></textarea>
+          <button id="interrupt-button" class="icon-button composer-icon interrupt-icon" type="button" title="打断" aria-label="打断" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg>
+          </button>
           <button id="send-button" class="send-button" type="submit" aria-label="发送" title="发送">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
           </button>
@@ -130,6 +133,23 @@
     </article>
   </template>
 
+  <template id="interrupt-template">
+    <article class="review-panel interrupt-panel">
+      <header>
+        <div>
+          <span class="review-kicker">已暂停</span>
+          <h3>Agent 已打断</h3>
+        </div>
+        <span class="review-badge">已暂停</span>
+      </header>
+      <p class="interrupt-note">执行现场已保留，可继续执行或放弃本次任务。</p>
+      <div class="review-actions">
+        <button class="button button-primary continue-button" type="button">继续执行</button>
+        <button class="button button-secondary abandon-button" type="button">放弃</button>
+      </div>
+    </article>
+  </template>
+
   <template id="trace-template">
     <details class="trace-panel is-live" open>
       <summary>
@@ -160,6 +180,6 @@
   <script src="/assets/vendor/marked.min.js" defer></script>
   <script src="/assets/vendor/purify.min.js" defer></script>
   <script src="/assets/skills.js?v=slash-commit-3" defer></script>
-  <script src="/assets/app.js?v=md-1" defer></script>
+  <script src="/assets/app.js?v=merge-45" defer></script>
 </body>
 </html>

@@ -382,6 +382,16 @@ textarea:focus-visible {
   background: #d58418;
 }
 
+.status-interrupt {
+  border-color: #c3cdd4;
+  color: #485a66;
+  background: #eef2f4;
+}
+
+.status-interrupt span {
+  background: #7d858a;
+}
+
 .status-error span {
   background: var(--danger);
 }
@@ -970,6 +980,27 @@ textarea:focus-visible {
   font-size: 10px;
 }
 
+.interrupt-panel {
+  border-color: #c3cdd4;
+}
+
+.interrupt-panel > header {
+  border-bottom-color: #d6dde2;
+  background: #eef2f4;
+}
+
+.interrupt-panel .review-badge {
+  border-color: #b6c2ca;
+  color: #485a66;
+}
+
+.interrupt-note {
+  margin: 0;
+  padding: 14px 17px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .review-draft {
   max-height: 340px;
   margin: 0;
@@ -1098,6 +1129,14 @@ textarea:focus-visible {
 
 .composer-icon:hover {
   background: #f0f2f3;
+}
+
+.interrupt-icon {
+  color: var(--danger);
+}
+
+.interrupt-icon:hover {
+  background: #f9e9e9;
 }
 
 .composer textarea {
