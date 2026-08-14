@@ -113,6 +113,39 @@ function selectThread(id) {
   renderAttachments();
   renderThreads();
   setProgress(0, false);
+  loadThreadHistory();
+}
+
+async function loadThreadHistory() {
+  const threadId = state.threadId;
+  if (!threadId) return;
+  try {
+    const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/messages`, {
+      credentials: "same-origin",
+    });
+    if (response.status === 401) {
+      showLogin();
+      return;
+    }
+    if (!response.ok) return;
+    const data = await response.json();
+    if (state.threadId !== threadId) return;
+    renderHistoryMessages(Array.isArray(data.messages) ? data.messages : []);
+  } catch (error) {
+    console.warn("历史消息加载失败:", error);
+  }
+}
+
+function renderHistoryMessages(messages) {
+  if (!messages.length) return;
+  removeEmptyState();
+  messages.forEach((message) => {
+    const type = message.type || message.role;
+    if (type !== "human" && type !== "ai" && type !== "assistant") return;
+    const text = contentText(message.content);
+    if (!text) return;
+    addMessage(type === "human" ? "user" : "agent", text, message.id);
+  });
 }
 
 function emptyState() {

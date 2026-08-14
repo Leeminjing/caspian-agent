@@ -78,7 +78,7 @@ stream_bridge:
   queue_maxsize: 512
 
 checkpointer:
-  type: memory
+  type: postgres
 
 langgraph_store:
   backend: memory
