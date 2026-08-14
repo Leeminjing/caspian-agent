@@ -45,8 +45,6 @@ from caspian.runtime.stream_bridge.base import StreamBridge
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_RECURSION_LIMIT = 25
-
 
 def _validated_selected_skills(body: Any, user_id: str) -> list[str]:
     from caspian.agents.lead.agent import (
@@ -131,10 +129,10 @@ async def start_run(
 
     graph_input = _build_graph_input(body)
 
-    # RunnableConfig
+    # RunnableConfig（recursion_limit 来自 config.yaml agent 段）
     runnable_config: RunnableConfig = {
         "max_concurrency": None,
-        "recursion_limit": _DEFAULT_RECURSION_LIMIT,
+        "recursion_limit": app_config.agent.recursion_limit,
         "configurable": {
             "thread_id": thread_id,
             "run_id": record.run_id,

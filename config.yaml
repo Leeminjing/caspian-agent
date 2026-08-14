@@ -6,6 +6,9 @@ models:
     api_key: $OPENAI_API_KEY
     base_url: https://api.deepseek.com
 
+agent:
+  recursion_limit: 50
+
 tool_groups:
   - name: web
   - name: file:read
@@ -31,6 +34,12 @@ tools:
   - name: sh
     group: shell
     use: caspian.sandbox.tools:sh_tool
+  - name: web_search
+    group: web
+    use: caspian.web.tools:web_search_tool
+  - name: web_fetch
+    group: web
+    use: caspian.web.tools:web_fetch_tool
 
 skills:
   container_path: /mnt/skills

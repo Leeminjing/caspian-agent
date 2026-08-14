@@ -17,6 +17,7 @@ from pathlib import Path
 import yaml
 from pydantic import BaseModel, ConfigDict
 
+from caspian.config.agent_config import AgentConfig
 from caspian.config.checkpointer_config import CheckpointerConfig
 from caspian.config.commitment_config import CommitmentConfig
 from caspian.config.database_config import DatabaseConfig
@@ -46,6 +47,7 @@ class AppConfig(BaseModel):
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
     commitment: CommitmentConfig = CommitmentConfig()
     subagents: SubagentsAppConfig = SubagentsAppConfig()
+    agent: AgentConfig = AgentConfig()
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

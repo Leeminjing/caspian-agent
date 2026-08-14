@@ -28,6 +28,14 @@ python run_dev.py
 
 聊天记录持久化：`config.yaml` 的 `checkpointer.type: postgres`（PostgresSaver，消息随 run 写入 `checkpoints` 表，跨重启存活）。前端刷新/切会话后通过 `GET /api/threads/{thread_id}/messages` 恢复历史消息。
 
+## 联网功能环境前置
+
+- web_search（DuckDuckGo）/ web_fetch（Jina Reader）无需 API key，随 harness 依赖安装即可用。
+- Playwright MCP（浏览器自动化）走 `extensions_config.json` 的 stdio MCP 通道，宿主机需：
+  1. Node.js / npx 可用
+  2. 首次运行前执行 `npx playwright install chromium` 下载浏览器
+- Playwright MCP 连接失败时按 MCP fail-soft 策略跳过，不影响 lead agent 启动。
+
 ## 本地网页登录账户
 
 - 邮箱：`2656226581@qq.com`
