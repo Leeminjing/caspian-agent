@@ -171,6 +171,11 @@ function removeEmptyState() {
   $("#empty-state")?.remove();
 }
 
+function renderMarkdown(text) {
+  if (!window.marked || !window.DOMPurify) return null;
+  return window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true }));
+}
+
 function addMessage(role, content, id = "") {
   const text = String(content || "").trim();
   if (!text) return;
@@ -182,7 +187,16 @@ function addMessage(role, content, id = "") {
   message.className = `message message-${role}`;
   const body = document.createElement("div");
   body.className = "message-content";
-  body.textContent = text;
+  if (role === "agent") {
+    const html = renderMarkdown(text);
+    if (html !== null) {
+      body.innerHTML = html;
+    } else {
+      body.textContent = text;
+    }
+  } else {
+    body.textContent = text;
+  }
   message.append(body);
   $("#messages").append(message);
   scrollMessages();
