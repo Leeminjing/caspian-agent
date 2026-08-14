@@ -18,7 +18,9 @@
     uvicorn backend.app.gateway.app:app --host 0.0.0.0 --port 8000
 """
 
+import asyncio
 import os
+import sys
 from pathlib import Path
 
 import yaml
@@ -40,6 +42,11 @@ import backend.app.gateway.models  # noqa: F401
 
 # 在所有配置加载之前注入 .env 环境变量
 load_dotenv()
+
+# psycopg 异步驱动要求 SelectorEventLoop（Windows 默认 ProactorEventLoop 不兼容）
+# 必须在 uvicorn 创建事件循环之前设置
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 logger = logging.getLogger(__name__)
 
@@ -123,10 +130,12 @@ from backend.app.gateway.routers.auth import router as auth_router
 from backend.app.gateway.routers.uploads import router as uploads_router
 from backend.app.gateway.routers.skills import router as skills_router
 from backend.app.gateway.routers.decision_table import router as decision_table_router
+from backend.app.gateway.routers.chat_records import router as chat_records_router
 
 app.include_router(thread_runs_router, prefix="/api/threads")
 app.include_router(uploads_router, prefix="/api/threads")
 app.include_router(decision_table_router, prefix="/api/threads")
+app.include_router(chat_records_router, prefix="/api/threads")
 app.include_router(skills_router)
 app.include_router(auth_router)
-logger.info("路由已注册: thread_runs, uploads, decision_table, skills, auth")
+logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, skills, auth")

@@ -18,6 +18,16 @@ cd backend/packages/harness/caspian/persistence/migrations
 ../../../.venv/Scripts/python.exe -m alembic -c alembic.ini upgrade head
 ```
 
+## 本地启动
+
+Windows 上 psycopg 异步驱动要求 SelectorEventLoop，不能直接用 `uvicorn` 命令（会挂起），用入口脚本启动：
+
+```powershell
+python run_dev.py
+```
+
+聊天记录持久化：`config.yaml` 的 `checkpointer.type: postgres`（PostgresSaver，消息随 run 写入 `checkpoints` 表，跨重启存活）。前端刷新/切会话后通过 `GET /api/threads/{thread_id}/messages` 恢复历史消息。
+
 ## 本地网页登录账户
 
 - 邮箱：`2656226581@qq.com`
