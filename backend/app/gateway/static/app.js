@@ -28,6 +28,10 @@ const state = {
   threadId: null,
   running: false,
   pendingInterrupt: null,
+  currentRunId: null,
+  interruptedByUser: false,
+  streamSeq: 0,
+  activeStreamId: 0,
   uploads: [],
   renderedMessageIds: new Set(),
   commitmentMessageIds: new Set(),
@@ -93,6 +97,8 @@ function selectThread(id) {
   finishTracePanel("已停止");
   state.threadId = id;
   state.pendingInterrupt = null;
+  state.currentRunId = null;
+  state.interruptedByUser = false;
   state.uploads = [];
   state.renderedMessageIds.clear();
   state.commitmentMessageIds.clear();
@@ -164,6 +170,8 @@ function setBusy(value) {
   $("#message-input").disabled = value || Boolean(state.pendingInterrupt);
   $("#send-button").disabled = value || Boolean(state.pendingInterrupt);
   $("#attach-button").disabled = value || Boolean(state.pendingInterrupt);
+  // 打断按钮仅在 run 执行中且非承诺审查等待时可用
+  $("#interrupt-button").hidden = !(value && !state.pendingInterrupt);
   if (value) setStatus("running", "处理中");
 }
 
@@ -701,6 +709,11 @@ function disableReview(panel) {
 
 async function streamRun(body) {
   ensureThread();
+  removeInterruptPanel();
+  state.interruptedByUser = false;
+  state.currentRunId = null;
+  const streamId = ++state.streamSeq;
+  state.activeStreamId = streamId;
   finishTracePanel();
   if (state.tracePanel?.isConnected) state.tracePanel.open = false;
   state.tracePanel = null;
@@ -734,12 +747,12 @@ async function streamRun(body) {
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
     const frames = buffer.split(/\r?\n\r?\n/);
     buffer = frames.pop() || "";
-    frames.forEach(handleSseFrame);
+    frames.forEach((frame) => handleSseFrame(frame, streamId));
     if (done) break;
   }
 }
 
-function handleSseFrame(frame) {
+function handleSseFrame(frame, streamId = state.activeStreamId) {
   if (!frame || frame.startsWith(":")) return;
   let event = "message";
   const dataLines = [];
@@ -753,9 +766,13 @@ function handleSseFrame(frame) {
   } catch {
     // Keep plain-text SSE payloads readable.
   }
+  if (event === "metadata" && data?.run_id) state.currentRunId = data.run_id;
   if (event === "events") consumeGraphEvent(data);
   if (event === "interrupt") showReview(data);
-  if (event === "end" && !state.pendingInterrupt) finishTracePanel("已完成");
+  // 仅当前流的结束帧操作全局面板；被打断的旧流结束帧不覆盖新状态
+  if (event === "end" && streamId === state.activeStreamId) {
+    if (!state.pendingInterrupt && !state.interruptedByUser) finishTracePanel("已完成");
+  }
   if (event === "error") {
     finishTracePanel("执行失败");
     throw new Error(data?.error || "运行失败");
@@ -803,6 +820,62 @@ async function resumeRun(payload) {
       state.activeSelectedSkills = [];
     }
   }
+}
+
+async function interruptRun() {
+  if (!state.currentRunId) return;
+  const url = `/api/threads/${encodeURIComponent(state.threadId)}/runs/${encodeURIComponent(state.currentRunId)}/interrupt`;
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "X-CSRF-Token": csrfToken() },
+    });
+  } catch (error) {
+    handleError(error);
+    return;
+  }
+  if (response.status === 409) {
+    handleError(new Error("run 已结束，无法打断"));
+    return;
+  }
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    handleError(new Error(detail.detail || `打断失败 (${response.status})`));
+    return;
+  }
+  state.interruptedByUser = true;
+  setBusy(false);
+  showInterruptPanel();
+}
+
+function showInterruptPanel() {
+  removeThinking();
+  finishTracePanel("已暂停");
+  setStatus("interrupt", "已暂停");
+  const fragment = $("#interrupt-template").content.cloneNode(true);
+  const panel = $(".interrupt-panel", fragment);
+  $(".continue-button", panel).addEventListener("click", continueRun);
+  $(".abandon-button", panel).addEventListener("click", abandonRun);
+  $("#messages").append(panel);
+  scrollMessages();
+}
+
+function removeInterruptPanel() {
+  $(".interrupt-panel")?.remove();
+}
+
+function continueRun() {
+  streamRun({ input: {} });
+}
+
+function abandonRun() {
+  removeInterruptPanel();
+  state.interruptedByUser = false;
+  state.currentRunId = null;
+  setBusy(false);
+  setStatus("ready", "就绪");
 }
 
 async function uploadFiles(files) {
@@ -916,6 +989,10 @@ $("#login-form").addEventListener("submit", async (event) => {
 $("#logout").addEventListener("click", async () => {
   await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
   showLogin();
+});
+
+$("#interrupt-button").addEventListener("click", () => {
+  interruptRun();
 });
 
 $("#new-thread").addEventListener("click", () => {
