@@ -41,6 +41,19 @@
       ],
       "env": {},
       "description": "PostgreSQL database access"
+    },
+    "playwright": {
+      "enabled": true,
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--caps",
+        "core,network"
+      ],
+      "env": {},
+      "description": "Playwright MCP browser automation (navigate/click/fill/snapshot/screenshot + network)"
     }
   }
 }
