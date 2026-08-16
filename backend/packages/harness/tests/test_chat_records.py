@@ -44,9 +44,19 @@ async def _seed_checkpointer(checkpointer, thread_id, messages):
 class ChatRecordsTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.checkpointer = InMemorySaver()
+        # DB 未初始化时路由降级为原始读取（definition=None），context_service 不会被调用
         self.request = SimpleNamespace(
-            app=SimpleNamespace(state=SimpleNamespace(checkpointer=self.checkpointer))
+            app=SimpleNamespace(
+                state=SimpleNamespace(
+                    checkpointer=self.checkpointer,
+                    context_service=SimpleNamespace(snapshot=self._snapshot_unreachable),
+                )
+            ),
+            state=SimpleNamespace(current_user=SimpleNamespace(id="u-test")),
         )
+
+    async def _snapshot_unreachable(self, *_args, **_kwargs):
+        raise AssertionError("无 definition 的线程不应调用 context_service.snapshot")
 
     async def test_有历史thread返回序列化消息数组(self):
         await _seed_checkpointer(

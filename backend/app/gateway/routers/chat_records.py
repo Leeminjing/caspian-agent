@@ -44,7 +44,32 @@ async def get_thread_messages(thread_id: str, request: Request) -> dict:
 
     输出:
         dict — {"messages": [...]}，空线程返回 {"messages": []}
+
+    具体工作流:
+        (1) 无 Context definition → 直接返回 checkpoint 消息（与 f46 行为一致）
+        (2) 有 definition → 经 ContextService.snapshot 返回展示投影
+            （authored 定义替换初始执行消息、过滤 curation_synthetic、追加后续真实消息）
     """
+    user_id = str(request.state.current_user.id)
+    context_service = request.app.state.context_service
+
+    definition = None
+    try:
+        from backend.app.gateway.context.models import WebContextDefinition
+
+        from caspian.persistence.engine import get_session
+
+        async with get_session() as session:
+            definition = await session.get(WebContextDefinition, thread_id)
+    except Exception:
+        # ponytail: DB 未初始化（如单测环境）时降级为原始读取；
+        # 生产环境 checkpointer 与 web_threads 同为 postgres，DB 故障时原始读取同样不可用
+        definition = None
+
+    if definition is not None:
+        snapshot = await context_service.snapshot(user_id, thread_id)
+        return {"messages": snapshot["messages"]}
+
     checkpointer = request.app.state.checkpointer
     latest = await checkpointer.aget_tuple(
         {"configurable": {"thread_id": thread_id}}

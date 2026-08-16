@@ -96,6 +96,32 @@ def _build_graph_input(body: Any) -> dict | Command:
     return graph_input
 
 
+async def _persist_run_usage(
+    record: RunRecord, context_service: Any, thread_id: str
+) -> None:
+    """run 终态前把累计 usage 聚合写入 web_threads（best-effort，失败仅日志）。
+
+    作为 run_agent 的 before_end 钩子在关流前执行：订阅者收到 end 帧时 usage 已落库，
+    rail 刷新不会与落库竞态。
+
+    输入:
+        record: RunRecord — 终态 run 档案（worker 已累计 input/cache-hit token）
+        context_service: ContextService — 网关层 Context 服务
+        thread_id: str — 所属线程
+
+    输出:
+        None
+    """
+    try:
+        await context_service.accumulate_usage(
+            thread_id,
+            record.prompt_input_tokens,
+            record.prompt_cache_hit_tokens,
+        )
+    except Exception:
+        logger.error("usage 聚合落库失败 (thread_id=%s)", thread_id, exc_info=True)
+
+
 async def start_run(
     body: Any,
     thread_id: str,
@@ -112,6 +138,11 @@ async def start_run(
 
     user_id = str(request.state.current_user.id)
     selected_skills = _validated_selected_skills(body, user_id)
+
+    # (2.5) Context 投影闸门：受阻派生 Context 禁止启动主运行（Recursive Context Forking）
+    context_service = request.app.state.context_service
+    await context_service.ensure_runnable(user_id, thread_id)
+    await context_service.register_main_run(user_id, thread_id)
 
     # (3) 创建 RunRecord
     model_name = None
@@ -167,6 +198,7 @@ async def start_run(
             langgraph_context=langgraph_context,
             checkpointer=checkpointer,
             store=store,
+            before_end=lambda _r: _persist_run_usage(_r, context_service, thread_id),
         )
     )
 

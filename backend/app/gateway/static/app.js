@@ -72,12 +72,16 @@ function ensureThread() {
   state.threadId = thread.id;
   saveThreads();
   renderThreads();
+  window.CaspianContextUi?.onThreadSelected();
 }
 
 function renderThreads() {
   const list = $("#thread-list");
   list.replaceChildren();
-  state.threads.forEach((thread) => {
+  const threads = window.CaspianContextUi
+    ? window.CaspianContextUi.orderThreads(state.threads)
+    : state.threads;
+  threads.forEach((thread) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `thread-item${thread.id === state.threadId ? " active" : ""}`;
@@ -114,6 +118,7 @@ function selectThread(id) {
   renderThreads();
   setProgress(0, false);
   loadThreadHistory();
+  window.CaspianContextUi?.onThreadSelected();
 }
 
 async function loadThreadHistory() {
@@ -783,7 +788,10 @@ async function streamRun(body) {
   }
   if (!response.ok || !response.body) {
     const detail = await response.json().catch(() => ({}));
-    throw new Error(detail.detail || `请求失败 (${response.status})`);
+    if (detail?.code === "context_projection_blocked") {
+      window.CaspianContextUi?.openDecisionFromBlock(detail);
+    }
+    throw new Error(detail.message || detail.detail || `请求失败 (${response.status})`);
   }
 
   const reader = response.body.getReader();
@@ -819,9 +827,11 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
   // 仅当前流的结束帧操作全局面板；被打断的旧流结束帧不覆盖新状态
   if (event === "end" && streamId === state.activeStreamId) {
     if (!state.pendingInterrupt && !state.interruptedByUser) finishTracePanel("已完成");
+    window.CaspianContextUi?.onRunEnded();
   }
   if (event === "error") {
     finishTracePanel("执行失败");
+    window.CaspianContextUi?.onRunEnded();
     throw new Error(data?.error || "运行失败");
   }
 }
@@ -1099,6 +1109,17 @@ window.CaspianSkills?.attach({
   input: $("#message-input"),
   host: $("#skill-picker"),
   chips: $("#selected-skills"),
+});
+
+window.CaspianContextUi?.init({
+  getThreadId: () => state.threadId,
+  getThreads: () => state.threads,
+  getCurrentThread: currentThread,
+  addThread: (thread) => {
+    state.threads.unshift(thread);
+    saveThreads();
+  },
+  selectThread,
 });
 
 // --- 决策等级表查看 ---
