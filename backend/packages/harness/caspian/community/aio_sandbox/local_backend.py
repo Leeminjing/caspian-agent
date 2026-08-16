@@ -3,7 +3,7 @@
 
 对外提供:
     pull_image(image: str) -> None     — 拉取 Docker 镜像
-    create_container(...) -> str       — 创建容器并返回 container_id
+    create_container(...) -> tuple[str, int] — 创建容器并返回 (container_id, host_port)
     start_container(container_id: str) -> None — 启动容器主进程
     health_check(host: str, port: int) -> bool  — HTTP 探测 AIO 服务可用性
 
@@ -15,25 +15,26 @@
 
 输出:
     pull_image → None
-    create_container → container_id: str
+    create_container → (container_id: str, host_port: int)
+        host_port 为 _find_free_port 实际分配的宿主机端口（可能大于起始 port）
     start_container → None
     health_check → bool
 
 具体工作流:
     pull_image: (1) client.images.get() 检查 (2) 不存在则 pull
-    create_container: (1) 端口搜索 (2) 组装 bind mount (3) 创建容器
+    create_container: (1) 端口搜索 (2) 组装 bind mount (3) 创建容器 (4) 返回容器 id 与实际端口
     health_check: (1) GET http://{host}:{port}/ (2) 重试至 200 或超时
 
 示例:
     from caspian.community.aio_sandbox.local_backend import pull_image, create_container, start_container, health_check
 
     pull_image("ghcr.io/agent-infra/sandbox:latest")
-    cid = create_container(image="...", port=8080, mounts=[], environment={},
-                           container_name="caspian-sandbox-...",
-                           user_data_root=".caspian/users/.../user-data",
-                           skills_path="/mnt/skills")
+    cid, host_port = create_container(image="...", port=8080, mounts=[], environment={},
+                                      container_name="caspian-sandbox-...",
+                                      user_data_root=".caspian/users/.../user-data",
+                                      skills_path="/mnt/skills")
     start_container(cid)
-    assert health_check("localhost", 8080)
+    assert health_check("localhost", host_port)
 """
 
 import logging
@@ -85,7 +86,7 @@ def create_container(
     container_name: str,
     user_data_root: str,
     skills_path: str,
-) -> str:
+) -> tuple[str, int]:
     host_port = _find_free_port(port)
     logger.info("容器 '%s' 端口映射: host %d → container %d", container_name, host_port, _CONTAINER_AIO_PORT)
 
@@ -108,7 +109,7 @@ def create_container(
             security_opt=["seccomp=unconfined"],
         )
         logger.info("容器已创建: id=%s name=%s", container.id, container_name)
-        return container.id
+        return container.id, host_port
     finally:
         client.close()
 

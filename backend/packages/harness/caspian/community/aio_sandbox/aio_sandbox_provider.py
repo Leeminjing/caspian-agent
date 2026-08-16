@@ -16,6 +16,11 @@
     (2) 否则 active < replicas → 创建新容器
     (3) 返回 sandbox_id（格式 local:{user_id}:{thread_id}）
 
+    _create_container:
+    (1) 预建宿主 user-data 的 workspace/uploads/outputs 子目录（run_shell 的
+        cd 前缀依赖 workspace 存在）
+    (2) 拉取镜像 → 创建容器（返回实际分配端口）→ 启动 → 健康检查 → SDK 连接
+
     get(sandbox_id) → AioSandbox:
     (1) 从内部字典取回 AioSandbox 实例，不存在抛 KeyError
 
@@ -109,8 +114,12 @@ class AioSandboxProvider:
         container_name = self._container_name(sandbox_id)
         user_data_root = REAL_ROOT.format(user_id=user_id, thread_id=thread_id)
         user_data_root = os.path.abspath(user_data_root)
+        # 镜像 LocalSandbox.__init__ 的行为：预建子目录。容器内 run_shell 固定
+        # 以 cd /mnt/user-data/workspace 前缀执行，目录缺失会导致每条命令失败
+        for sub in ("workspace", "uploads", "outputs"):
+            os.makedirs(os.path.join(user_data_root, sub), exist_ok=True)
 
-        cid = create_container(
+        cid, host_port = create_container(
             image=self._app_config.sandbox.image,
             port=self._app_config.sandbox.port,
             mounts=[{"host_path": m.host_path, "container_path": m.container_path, "read_only": m.read_only}
@@ -121,13 +130,14 @@ class AioSandboxProvider:
             skills_path=os.path.abspath(".caspian/skills"),
         )
         record.container_id = cid
+        record.host_port = host_port
 
         start_container(cid)
-        if not health_check("localhost", self._app_config.sandbox.port):
+        if not health_check("localhost", host_port):
             raise RuntimeError(f"AIO 服务健康检查失败: container_id={cid}")
 
-        record.sdk_client = self._sdk_connect("localhost", self._app_config.sandbox.port)
-        logger.info("AioSandbox 容器就绪: sandbox_id='%s' container_id=%s", sandbox_id, cid)
+        record.sdk_client = self._sdk_connect("localhost", host_port)
+        logger.info("AioSandbox 容器就绪: sandbox_id='%s' container_id=%s host_port=%d", sandbox_id, cid, host_port)
 
     def get(self, sandbox_id: str) -> Sandbox:
         record = self._active.get(sandbox_id)

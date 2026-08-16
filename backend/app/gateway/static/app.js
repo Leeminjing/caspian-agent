@@ -22,6 +22,14 @@ const TRACE_ACTORS = {
   system: "系统",
 };
 
+const KNOWLEDGE_STATUS = {
+  retained: "保留",
+  retained_partial: "部分压制",
+  suppressed: "已压制",
+  conflict_same_level: "同等级冲突",
+  potential_conflict: "潜在分歧",
+};
+
 const state = {
   user: null,
   threads: JSON.parse(localStorage.getItem("caspian.threads") || "[]"),
@@ -301,6 +309,51 @@ function consumeTaskEvent(value) {
   return Object.values(value).some(consumeTaskEvent);
 }
 
+function consumeKnowledgeEvent(value) {
+  if (!value || typeof value !== "object") return false;
+  if (value.type === "knowledge_governance") {
+    renderKnowledgePanel(value);
+    return true;
+  }
+  return Object.values(value).some(consumeKnowledgeEvent);
+}
+
+function renderKnowledgePanel(event) {
+  removeEmptyState();
+  const fragment = $("#knowledge-template").content.cloneNode(true);
+  const panel = $(".knowledge-panel", fragment);
+  $(".knowledge-query", panel).textContent = String(event.query || "");
+  const ledger = $(".knowledge-ledger", panel);
+  (event.ledger || []).forEach((item) => {
+    const row = document.createElement("li");
+    row.className = "knowledge-row";
+    const badge = document.createElement("span");
+    badge.className = `level-badge level-${item.level_display}`;
+    badge.textContent = item.level_display;
+    const status = document.createElement("span");
+    status.className = `knowledge-status status-${item.status}`;
+    status.textContent = KNOWLEDGE_STATUS[item.status] || item.status;
+    const text = document.createElement("span");
+    text.className = "knowledge-row-text";
+    text.textContent = item.reason || "参与最终回答";
+    if (item.suppressed_claims?.length) {
+      const claims = document.createElement("span");
+      claims.className = "knowledge-claims";
+      claims.textContent = `被压命题：${item.suppressed_claims.join("；")}`;
+      text.append(document.createElement("br"), claims);
+    }
+    row.append(badge, status, text);
+    ledger.append(row);
+  });
+  const notes = $(".knowledge-notes", panel);
+  if (event.notes?.length) {
+    notes.hidden = false;
+    notes.textContent = event.notes.join(" ");
+  }
+  $("#messages").append(panel);
+  scrollMessages();
+}
+
 function subtaskCard(taskId) {
   if (subtaskEvents.has(taskId)) return subtaskEvents.get(taskId);
   removeEmptyState();
@@ -364,6 +417,7 @@ function handleSubtaskEvent(event) {
 
 function consumeGraphEvent(data) {
   if (consumeTaskEvent(data)) return;
+  if (consumeKnowledgeEvent(data)) return;
   const batches = collectCommitmentMessages(data);
   if (batches.length) {
     batches.forEach(appendCommitmentMessages);

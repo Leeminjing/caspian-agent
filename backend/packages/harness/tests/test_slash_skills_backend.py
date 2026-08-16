@@ -98,6 +98,16 @@ class SlashSkillsBackendTests(unittest.TestCase):
 
         self.assertEqual(f"{base}\n\n{selected}" if selected else base, base)
 
+    def test_知识系统提示词内化(self):
+        base = apply_prompt_template(skill_names="", container_base_path="")
+        self.assertIn("<knowledge_system>", base)
+        self.assertIn("add_knowledge", base)
+        self.assertIn("knowledge_query", base)
+        self.assertIn("official documentation", base)
+        self.assertIn("ordinary blogs", base)
+        self.assertIn("omit level", base)
+        self.assertIn("never use suppressed evidence", base)
+
     def test_selected_skill_read_failure_raises(self):
         catalog = SkillCatalog([
             Skill(

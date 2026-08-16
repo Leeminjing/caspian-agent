@@ -71,6 +71,16 @@ class FrontendTests(unittest.TestCase):
             script,
         )
 
+    def test_frontend_contains_knowledge_governance_panel(self):
+        parser = IdCollector()
+        parser.feed((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
+        self.assertIn("knowledge-template", parser.ids)
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        self.assertIn('"knowledge_governance"', script)
+        self.assertIn("renderKnowledgePanel", script)
+        self.assertIn("KNOWLEDGE_STATUS", script)
+        self.assertIn("knowledge-ledger", script)
+
     def test_frontend_assets_are_public(self):
         self.assertIn("/", _AUTH_WHITELIST_PATHS)
         self.assertIn("/assets/", _AUTH_WHITELIST_PREFIXES)
