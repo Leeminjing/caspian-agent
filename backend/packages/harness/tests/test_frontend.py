@@ -128,6 +128,19 @@ class FrontendTests(unittest.TestCase):
         self.assertIn(".subtask-steps {", css)
         self.assertTrue((STATIC_DIR / "skills.js").exists())
 
+    def test_context_ui_assets_are_registered(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn("/assets/context.css", html)
+        self.assertIn("/assets/context-editor.js", html)
+        self.assertIn("/assets/context-ui.js", html)
+        self.assertTrue((STATIC_DIR / "context.css").exists())
+        self.assertTrue((STATIC_DIR / "context-editor.js").exists())
+        self.assertTrue((STATIC_DIR / "context-ui.js").exists())
+        css = (STATIC_DIR / "context.css").read_text(encoding="utf-8")
+        self.assertIn(".context-rail {", css)
+        self.assertIn(".context-drag-preview {", css)
+        self.assertIn("prefers-reduced-motion", css)
+
 
 if __name__ == "__main__":
     unittest.main()

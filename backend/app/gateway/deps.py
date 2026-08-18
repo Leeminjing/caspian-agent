@@ -86,6 +86,12 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         stack.push_async_callback(dispose_store, store)
         logger.info("Store 已挂载到 app.state.store (backend=%s)", app_config.langgraph_store.backend)
 
+        # (3.7) ContextService 初始化（Recursive Context Forking，依赖 checkpointer）
+        from backend.app.gateway.context.service import ContextService
+
+        app.state.context_service = ContextService(checkpointer)
+        logger.info("ContextService 已挂载到 app.state.context_service")
+
         # (4) 创建 RunManager 实例，每进程唯一
         run_manager = RunManager()
         app.state.run_manager = run_manager

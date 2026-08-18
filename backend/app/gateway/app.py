@@ -39,6 +39,7 @@ from backend.app.gateway.deps import langgraph_runtime
 
 # 导入 gateway models 以注册到 Base.metadata（供 Alembic autogenerate 发现）
 import backend.app.gateway.models  # noqa: F401
+import backend.app.gateway.context.models  # noqa: F401
 
 # 在所有配置加载之前注入 .env 环境变量
 load_dotenv()
@@ -132,6 +133,7 @@ from backend.app.gateway.routers.skills import router as skills_router
 from backend.app.gateway.routers.decision_table import router as decision_table_router
 from backend.app.gateway.routers.chat_records import router as chat_records_router
 from backend.app.gateway.routers.knowledge import router as knowledge_router
+from backend.app.gateway.routers.contexts import router as contexts_router
 
 app.include_router(thread_runs_router, prefix="/api/threads")
 app.include_router(uploads_router, prefix="/api/threads")
@@ -139,5 +141,6 @@ app.include_router(decision_table_router, prefix="/api/threads")
 app.include_router(chat_records_router, prefix="/api/threads")
 app.include_router(skills_router)
 app.include_router(knowledge_router)
+app.include_router(contexts_router)
 app.include_router(auth_router)
-logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, skills, knowledge, auth")
+logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, skills, knowledge, contexts, auth")

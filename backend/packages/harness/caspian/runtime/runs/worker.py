@@ -50,6 +50,7 @@
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from langchain_core.messages import BaseMessage
@@ -184,6 +185,53 @@ def _extract_interrupts(data: Any) -> list[dict[str, Any]]:
     return []
 
 
+def _accumulate_usage(record: RunRecord, mode: str, chunk: Any) -> None:
+    """从 stream chunk 累计标准 input / cache-read usage 到 RunRecord。
+
+    输入:
+        record: RunRecord — 当前 run 档案
+        mode: str — stream mode
+        chunk: Any — astream 产出的 chunk
+
+    输出:
+        None — 原地累计 record.prompt_input_tokens / prompt_cache_hit_tokens
+
+    具体工作流:
+        (1) messages 模式: 模型流终块携带 usage_metadata
+        (2) values 模式: 状态快照中新追加的 AI 消息携带 usage_metadata
+            （LangChain 组装消息时跨 chunk 求和 usage），按消息 id 去重每条计一次
+        (3) ponytail: 若同时启用 messages 与 values 模式会双重累计；当前装配只流 values+custom
+    """
+    if mode == "messages":
+        try:
+            message, _metadata = chunk
+        except (TypeError, ValueError):
+            return
+        _add_usage(record, getattr(message, "usage_metadata", None))
+        return
+    if mode != "values" or not isinstance(chunk, dict):
+        return
+    for message in chunk.get("messages", []) or []:
+        message_id = getattr(message, "id", None)
+        if message_id is not None:
+            if message_id in record._usage_seen_ids:
+                continue
+            record._usage_seen_ids.add(message_id)
+        _add_usage(record, getattr(message, "usage_metadata", None))
+
+
+def _add_usage(record: RunRecord, usage: Any) -> None:
+    """把单条消息的 usage_metadata 累计进 RunRecord（受保护 helper）。"""
+    if not usage:
+        return
+    input_tokens = usage.get("input_tokens")
+    cache_read = (usage.get("input_token_details") or {}).get("cache_read")
+    if isinstance(input_tokens, int):
+        record.prompt_input_tokens += input_tokens
+    if isinstance(cache_read, int):
+        record.prompt_cache_hit_tokens += cache_read
+
+
 async def run_agent(
     *,
     record: RunRecord,
@@ -198,6 +246,7 @@ async def run_agent(
     langgraph_context: dict | None = None,
     checkpointer: BaseCheckpointSaver | None = None,
     store: BaseStore | None = None,
+    before_end: Callable[[RunRecord], Awaitable[None]] | None = None,
 ) -> None:
     try:
         # (1) 置 running，发 metadata 事件
@@ -259,12 +308,13 @@ async def run_agent(
 
         # (4) agent.astream 主循环
         graph_interrupted = False
-        async for chunk in agent.astream(
+        async for mode, chunk in agent.astream(
             graph_input,
             config=runnable_config,
             context=langgraph_context,
             stream_mode=mapped_stream_modes,
         ):
+            _accumulate_usage(record, mode, chunk)
             # (5) abort 中断检查
             if record.abort_event.is_set():
                 logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
@@ -350,6 +400,12 @@ async def run_agent(
             logger.error("发布 error 事件失败", exc_info=True)
 
     finally:
+        # (6.5) 终态钩子（如 usage 落库）先于关流，保证订阅者收到 end 帧时数据已就绪
+        if before_end is not None:
+            try:
+                await before_end(record)
+            except Exception:
+                logger.error("run '%s' before_end 钩子失败", record.run_id, exc_info=True)
         # (7) 关流 + 延迟清理
         bridge.publish_end(record.run_id)
         bridge.cleanup(record.run_id, delay=300)

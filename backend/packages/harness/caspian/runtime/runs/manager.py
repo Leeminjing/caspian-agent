@@ -77,10 +77,14 @@ class RunRecord:
     task: asyncio.Task | None = field(default=None, repr=False)
     abort_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
     abort_action: str = "interrupt"
+    # values 模式 usage 累计的消息 id 去重集合（runtime-only）
+    _usage_seen_ids: set = field(default_factory=set, repr=False)
 
     # === 结果信息 ===
     error: str | None = None
     model_name: str | None = None
+    prompt_input_tokens: int = 0
+    prompt_cache_hit_tokens: int = 0
 
     # === 特殊标志 ===
     store_only: bool = False
