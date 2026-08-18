@@ -36,20 +36,37 @@ router = APIRouter()
 
 @router.get("/{thread_id}/messages")
 async def get_thread_messages(thread_id: str, request: Request) -> dict:
-    """读取指定 thread 的最新聊天消息列表。
+    """读取指定 thread 的最新聊天消息列表与压缩存档。
 
     输入:
         thread_id: str — 会话线程 ID
         request: Request — FastAPI Request 对象
 
     输出:
-        dict — {"messages": [...]}，空线程返回 {"messages": []}
+        dict — {"messages": [...], "archived": [...]}；空线程返回两个空列表。
+        archived 为压缩存档中被替换的原始消息 dict 列表(按压缩先后追加序),
+        供前端折叠条还原完整历史。
     """
+    from caspian.agents.middlewares.context_compression import (
+        archive_path_for,
+        read_archive,
+    )
+
     checkpointer = request.app.state.checkpointer
     latest = await checkpointer.aget_tuple(
         {"configurable": {"thread_id": thread_id}}
     )
     if latest is None:
-        return {"messages": []}
+        return {"messages": [], "archived": []}
     messages = latest.checkpoint.get("channel_values", {}).get("messages", [])
-    return {"messages": [message.model_dump() for message in messages]}
+
+    request_state = getattr(request, "state", None)
+    current_user = getattr(request_state, "current_user", None) if request_state is not None else None
+    user_id = str(current_user.id) if current_user is not None else None
+    archive_file = archive_path_for(user_id, thread_id)
+    archived = read_archive(archive_file) if archive_file is not None else []
+
+    return {
+        "messages": [message.model_dump() for message in messages],
+        "archived": archived,
+    }

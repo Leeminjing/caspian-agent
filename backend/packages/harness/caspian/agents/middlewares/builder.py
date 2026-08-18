@@ -43,10 +43,15 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from typing import TYPE_CHECKING
+
 from caspian.agents.commitment import CommitmentMiddleware
 from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
+
+if TYPE_CHECKING:
+    from caspian.config.context_compression_config import ContextCompressionConfig
 
 
 def build_general_middlewares(
@@ -55,16 +60,30 @@ def build_general_middlewares(
     model: BaseChatModel | None = None,
     context7_tools: list[BaseTool] | None = None,
     skill_names: frozenset[str] | None = None,
+    context_compression: "ContextCompressionConfig | None" = None,
 ) -> list[AgentMiddleware]:
     """组装 lead agent 通用中间件链。
 
     输出:
-        list[AgentMiddleware] — [UploadsMiddleware, DecisionTableMiddleware(, CommitmentMiddleware), SandboxAuditMiddleware]
+        list[AgentMiddleware] — [(ContextCompressionMiddleware), UploadsMiddleware,
+        DecisionTableMiddleware(, CommitmentMiddleware), SandboxAuditMiddleware]
+
+    工作流:
+        (1) context_compression.enabled 时在链首装配 ContextCompressionMiddleware
+            (wrap_model_call 最外层可捕获内层溢出;before_model 链首先对完整历史压缩)
+        (2) 其余按既有顺序装配
     """
-    middlewares: list[AgentMiddleware] = [
+    from caspian.agents.middlewares.context_compression import (
+        ContextCompressionMiddleware,
+    )
+
+    middlewares: list[AgentMiddleware] = []
+    if context_compression is not None and context_compression.enabled:
+        middlewares.append(ContextCompressionMiddleware(context_compression))
+    middlewares.extend([
         UploadsMiddleware(),
         DecisionTableMiddleware(),
-    ]
+    ])
     if commitment_enabled:
         if model is None:
             raise ValueError("启用 CommitmentMiddleware 时必须提供 model")

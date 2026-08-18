@@ -64,7 +64,7 @@ class ChatRecordsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_空线程返回空消息数组(self):
         result = await get_thread_messages("never-ran", self.request)
-        self.assertEqual(result, {"messages": []})
+        self.assertEqual(result, {"messages": [], "archived": []})
 
     def test_messages接口不在认证白名单(self):
         self.assertNotIn("/api/threads/{thread_id}/messages", _AUTH_WHITELIST_PATHS)
