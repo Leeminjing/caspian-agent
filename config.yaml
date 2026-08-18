@@ -45,13 +45,11 @@ skills:
   container_path: /mnt/skills
 
 sandbox:
-  use: caspian.sandbox.local:LocalSandbox
-  # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
-  # use: caspian.community.aio_sandbox:AioSandbox
-  # image: ghcr.io/agent-infra/sandbox:latest
-  # port: 8080
-  # replicas: 3
-  # container_prefix: caspian-sandbox
+  use: caspian.community.aio_sandbox:AioSandbox
+  image: ghcr.io/agent-infra/sandbox:latest
+  port: 8080
+  replicas: 3
+  container_prefix: caspian-sandbox
   # mounts:
   #   - host_path: /path/to/extra
   #     container_path: /mnt/extra
@@ -90,11 +88,13 @@ checkpointer:
   type: postgres
 
 langgraph_store:
-  backend: memory
-  vector_enabled: false
-  embed: text-embedding-v4
+  backend: async_postgres
+  vector_enabled: true
+  embed: qwen3.7-text-embedding
   dims: 1024
   fields: ["$"]
+  embed_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embed_api_key: $DASHSCOPE_API_KEY
 
 database:
   backend: postgres

@@ -49,6 +49,8 @@ def _load_config_tools(app_config: AppConfig) -> list[BaseTool]:
 
 def _load_builtin_tools(subagent_enabled: bool = True) -> list[BaseTool]:
     from caspian.tools.builtins import (
+        add_knowledge,
+        knowledge_query,
         list_uploaded_files,
         present_file_tool,
         task_tool,
@@ -61,6 +63,8 @@ def _load_builtin_tools(subagent_enabled: bool = True) -> list[BaseTool]:
         view_image_tool,
         list_uploaded_files,
         update_decision_table,
+        add_knowledge,
+        knowledge_query,
     ]
     if subagent_enabled:
         tools.append(task_tool)

@@ -230,6 +230,23 @@ You have access to skills that provide optimized workflows for specific tasks.
 Skills are located at: {container_base_path}
 </skill_system>
 
+<knowledge_system>
+You have access to a governed knowledge base with discrete authority levels.
+
+**Ingesting (add_knowledge):**
+- When you verify important facts during research (e.g., after web_search/web_fetch), save a concise summary via add_knowledge.
+- content: 1-3 sentences summarizing the core conclusion — do NOT paste raw source text.
+- level reflects the SOURCE's authority, not your confidence:
+  - 3 = official documentation / official announcements
+  - 2 = official engineering blogs / arXiv papers / authoritative institutions
+  - 1 = ordinary blogs / community content
+  - uncertain source authority → omit level (stored as 未评级, treated as the lowest tier)
+- source: source name; source_url: the link.
+
+**Querying (knowledge_query):**
+- Prefer knowledge_query before answering questions about previously ingested knowledge. The evidence it returns has already passed level governance: never use suppressed evidence or suppressed claims as a basis for conclusions, and report same-level conflicts and potential divergences to the user honestly.
+</knowledge_system>
+
 <uploads>
 
 Current run uploads are listed in <current_uploads>.

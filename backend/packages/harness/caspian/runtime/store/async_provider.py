@@ -20,14 +20,18 @@
 具体工作流:
     create_store:
     (1) 读取 config.langgraph_store.backend 选择实现类型
-    (2) async_postgres → 从 config.database.url 提取原始 DSN，创建 AsyncPostgresStore
-    (3) postgres → 同上，创建 PostgresStore
-    (4) memory → 创建 InMemoryStore
-    (5) 若 vector_enabled 为 true，构造 index 配置并传入
+    (2) 若 vector_enabled 为 true，用 OpenAIEmbeddings（OpenAI-compatible 端点）构造
+        index 配置；构造失败直接抛出（无 index 时 store.search(query=...) 会静默退化
+        为按时间排序，违反"绝不静默降级"约束）
+    (3) async_postgres → 从 config.database.url 提取原始 DSN，直连 AsyncConnection 构造
+        AsyncPostgresStore（from_conn_string 是 async generator，不适用于 lifespan
+        长持有）并调用 setup()（官方迁移幂等，与 Alembic 已建表兼容）
+    (4) postgres → 同上，创建 PostgresStore
+    (5) memory → 创建 InMemoryStore
     (6) 返回 Store 实例
 
     dispose_store:
-    (1) Postgres 后端 → 关闭连接池
+    (1) Postgres 后端 → 关闭 store.conn 连接
     (2) Memory 后端 → 无操作
 
 示例:
@@ -78,26 +82,39 @@ async def create_store(config: AppConfig) -> BaseStore:
 
     index = None
     if vector_enabled:
-        try:
-            from langchain.embeddings import init_embeddings
+        # OpenAI-compatible 嵌入端点（langchain-openai 的 OpenAIEmbeddings）。
+        # 构造失败直接抛出：无 index 时 store.search(query=...) 会静默退化为按
+        # updated_at 排序的伪召回，与"绝不静默降级"的治理约束冲突。
+        from langchain_openai import OpenAIEmbeddings
 
-            embed_model = init_embeddings(config.langgraph_store.embed)
-            index = {
-                "embed": embed_model,
-                "dims": config.langgraph_store.dims,
-                "fields": list(config.langgraph_store.fields),
-            }
-            logger.info("向量搜索已启用 (embed=%s, dims=%d, fields=%s)",
-                        config.langgraph_store.embed, config.langgraph_store.dims, config.langgraph_store.fields)
-        except Exception:
-            logger.warning("嵌入模型 '%s' 初始化失败，向量搜索已关闭", config.langgraph_store.embed, exc_info=True)
+        embed_model = OpenAIEmbeddings(
+            model=config.langgraph_store.embed,
+            base_url=config.langgraph_store.embed_base_url,
+            api_key=config.langgraph_store.embed_api_key,
+            check_embedding_ctx_length=False,
+        )
+        index = {
+            "embed": embed_model,
+            "dims": config.langgraph_store.dims,
+            "fields": list(config.langgraph_store.fields),
+        }
+        logger.info("向量搜索已启用 (embed=%s, dims=%d, fields=%s)",
+                    config.langgraph_store.embed, config.langgraph_store.dims, config.langgraph_store.fields)
 
     if backend == "async_postgres":
         dsn = _dsn_from_sqlalchemy_url(config.database.url)
-        from langgraph.store.postgres import AsyncPostgresStore
+        from langgraph.store.postgres.aio import AsyncPostgresStore
+        from psycopg import AsyncConnection
+        from psycopg.rows import dict_row
 
-        store = AsyncPostgresStore.from_conn_string(dsn, index=index)
-        logger.info("AsyncPostgresStore 已创建 (dsn=%s)", dsn)
+        # from_conn_string 是 async generator（async with 语义），不适用于 lifespan
+        # 长持有；改为直连构造，连接生命周期由 create_store/dispose_store 管理。
+        conn = await AsyncConnection.connect(
+            dsn, autocommit=True, prepare_threshold=0, row_factory=dict_row
+        )
+        store = AsyncPostgresStore(conn=conn, index=index)
+        await store.setup()  # 官方迁移幂等（IF NOT EXISTS），与 Alembic 已建表兼容
+        logger.info("AsyncPostgresStore 已创建 (dsn=%s, vector=%s)", dsn, vector_enabled)
         return store
 
     if backend == "postgres":
@@ -122,22 +139,17 @@ async def create_store(config: AppConfig) -> BaseStore:
 
 
 async def dispose_store(store: BaseStore) -> None:
+    from langgraph.store.memory import InMemoryStore
     from langgraph.store.postgres import AsyncPostgresStore, PostgresStore
 
+    if isinstance(store, InMemoryStore):
+        return
+
     if isinstance(store, (AsyncPostgresStore, PostgresStore)):
-        try:
-            # 关闭底层连接池或连接
-            pool = getattr(store, "_pool", None)
-            if pool is not None and hasattr(pool, "close"):
-                await pool.close()
-                logger.info("PostgresStore 连接池已关闭")
-            else:
-                conn = getattr(store, "_conn", None)
-                if conn is not None and hasattr(conn, "close"):
-                    await conn.close()
-                    logger.info("PostgresStore 连接已关闭")
-        except Exception:
-            logger.error("关闭 PostgresStore 资源时出错", exc_info=True)
-    else:
-        # InMemoryStore 无需释放
-        pass
+        conn = getattr(store, "conn", None)
+        if conn is not None and hasattr(conn, "close"):
+            try:
+                await conn.close()
+                logger.info("PostgresStore 连接已关闭")
+            except Exception:
+                logger.error("关闭 PostgresStore 连接时出错", exc_info=True)

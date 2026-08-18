@@ -1354,3 +1354,105 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 13px;
 }
+
+.knowledge-panel {
+  margin: 8px 0 24px 38px;
+  border: 1px solid #d9dfde;
+  border-radius: 8px;
+  background: #fff;
+  padding: 10px 14px;
+}
+
+.knowledge-panel > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  list-style: none;
+  color: #27312f;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.knowledge-panel > summary::-webkit-details-marker {
+  display: none;
+}
+
+.knowledge-query {
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.knowledge-ledger {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.knowledge-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.level-badge {
+  flex: none;
+  min-width: 46px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #eef1f0;
+  color: #27312f;
+}
+
+.level-badge.level-L3 { background: #fde8e8; color: #b3261e; }
+.level-badge.level-L2 { background: #fdeedf; color: #a15c07; }
+.level-badge.level-L1 { background: #e7f0fd; color: #1a56a0; }
+.level-badge.level-L0 { background: #eef1f0; color: #5b6663; }
+.level-badge.level-未评级 { background: #f3f0fd; color: #5f4b8b; }
+
+.knowledge-status {
+  flex: none;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #eef1f0;
+  color: #5b6663;
+}
+
+.knowledge-status.status-retained { background: #e5f4e8; color: #1d6b33; }
+.knowledge-status.status-suppressed { background: #fde8e8; color: #b3261e; }
+.knowledge-status.status-retained_partial { background: #fdeedf; color: #a15c07; }
+.knowledge-status.status-conflict_same_level { background: #f3f0fd; color: #5f4b8b; }
+.knowledge-status.status-potential_conflict { background: #eef1f0; color: #5b6663; }
+
+.knowledge-row-text {
+  color: #5b6663;
+  line-height: 1.5;
+}
+
+.knowledge-claims {
+  color: #b3261e;
+  font-size: 12px;
+}
+
+.knowledge-notes {
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: #f3f0fd;
+  color: #5f4b8b;
+  font-size: 12px;
+  line-height: 1.5;
+}
