@@ -7,7 +7,7 @@ models:
     base_url: https://api.deepseek.com
 
 agent:
-  recursion_limit: 50
+  recursion_limit: 300
 
 tool_groups:
   - name: web
@@ -45,21 +45,37 @@ skills:
   container_path: /mnt/skills
 
 sandbox:
-  use: caspian.community.aio_sandbox:AioSandbox
-  image: ghcr.io/agent-infra/sandbox:latest
-  port: 8080
-  replicas: 3
-  container_prefix: caspian-sandbox
+  # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
+  # use: caspian.community.aio_sandbox:AioSandbox
+  # image: ghcr.io/agent-infra/sandbox:latest
+  # port: 8080
+  # replicas: 3
+  # container_prefix: caspian-sandbox
   # mounts:
   #   - host_path: /path/to/extra
   #     container_path: /mnt/extra
   #     read_only: false
   # environment:
   #   MY_KEY: value
+  use: caspian.community.aio_sandbox:AioSandbox
+  image: ghcr.io/agent-infra/sandbox:latest
+  port: 8080
+  replicas: 3
+  container_prefix: caspian-sandbox
 
 commitment:
   enabled: true
   context7_url: https://mcp.context7.com/mcp
+
+context_compression:
+  enabled: true
+  trigger_tokens: 100000
+  keep_messages: 20
+  max_tokens_to_summarize: 4000
+  summary_model: null
+  summary_timeout_seconds: 120
+  prune_max_chars: 800
+  recovery_max_attempts: 1
 
 subagents:
   # 内置 subagent 的默认超时秒数（自定义类型用自身值）

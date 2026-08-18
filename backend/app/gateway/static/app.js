@@ -42,6 +42,7 @@ const state = {
   activeStreamId: 0,
   uploads: [],
   renderedMessageIds: new Set(),
+  renderedToolIds: new Set(),
   commitmentMessageIds: new Set(),
   commitmentTraceItems: new Map(),
   tracePanel: null,
@@ -50,6 +51,7 @@ const state = {
   traceStreams: new Map(),
   traceScrollScheduled: false,
   activeSelectedSkills: [],
+  compactionNoticeTimer: null,
 };
 
 function csrfToken() {
@@ -113,6 +115,7 @@ function selectThread(id) {
   state.interruptedByUser = false;
   state.uploads = [];
   state.renderedMessageIds.clear();
+  state.renderedToolIds.clear();
   state.commitmentMessageIds.clear();
   state.commitmentTraceItems.clear();
   state.tracePanel = null;
@@ -143,22 +146,116 @@ async function loadThreadHistory() {
     if (!response.ok) return;
     const data = await response.json();
     if (state.threadId !== threadId) return;
-    renderHistoryMessages(Array.isArray(data.messages) ? data.messages : []);
+    renderHistoryMessages(
+      Array.isArray(data.messages) ? data.messages : [],
+      Array.isArray(data.archived) ? data.archived : [],
+    );
   } catch (error) {
     console.warn("历史消息加载失败:", error);
   }
 }
 
-function renderHistoryMessages(messages) {
+function renderHistoryMessages(messages, archived = []) {
   if (!messages.length) return;
   removeEmptyState();
   messages.forEach((message) => {
+    if (message.additional_kwargs?.caspian_summary) {
+      renderCompactionSummary(message, archived);
+      return;
+    }
     const type = message.type || message.role;
+    if (type === "tool") {
+      renderToolResultItem(message);
+      return;
+    }
     if (type !== "human" && type !== "ai" && type !== "assistant") return;
     const text = contentText(message.content);
     if (!text) return;
-    addMessage(type === "human" ? "user" : "agent", text, message.id);
+    if (type === "human") {
+      addMessage("user", text, message.id);
+      return;
+    }
+    addMessage("agent", text, message.id);
+    (Array.isArray(message.tool_calls) ? message.tool_calls : []).forEach(
+      (call) => renderToolCallItem(call, message.id),
+    );
   });
+}
+
+function renderCompactionSummary(message, archived = []) {
+  const text = contentText(message.content);
+  if (!text) return;
+  const details = document.createElement("details");
+  details.className = "compaction-summary";
+  details.innerHTML = "<summary>历史已压缩</summary><pre></pre>";
+  let body = text;
+  if (archived.length) {
+    const parts = archived.map((record) => {
+      const role = record.type === "human" ? "用户" : record.type === "tool" ? "工具" : "AI";
+      const toolLabel = record.type === "tool" && record.name ? `(${record.name})` : "";
+      let part = `[${role}${toolLabel}] ${contentText(record.content)}`;
+      if (Array.isArray(record.tool_calls) && record.tool_calls.length) {
+        const calls = record.tool_calls.map((call) => {
+          const args = JSON.stringify(call.args ?? {});
+          return `  调用工具 ${call.name}(${args})`;
+        });
+        part += "\n" + calls.join("\n");
+      }
+      return part;
+    });
+    body += "\n\n--- 已压缩的原始消息 ---\n\n" + parts.join("\n\n");
+  }
+  $("pre", details).textContent = body;
+  $("#messages").append(details);
+  scrollMessages();
+}
+
+function consumeCompactionStatus(value) {
+  if (!value || typeof value !== "object") return false;
+  if (value.type === "compaction_status" && typeof value.status === "string") {
+    handleCompactionStatus(value.status);
+    return true;
+  }
+  if (Array.isArray(value) && value.length === 2
+      && value[0] === "custom" && value[1] && value[1].type === "compaction_status") {
+    handleCompactionStatus(value[1].status);
+    return true;
+  }
+  return Object.values(value).some(consumeCompactionStatus);
+}
+
+function handleCompactionStatus(status) {
+  if (status === "started") {
+    removeCompactionNotice();
+    const notice = document.createElement("div");
+    notice.id = "compaction-status";
+    notice.className = "compaction-status";
+    notice.textContent = "上下文正在压缩中…";
+    const thinking = $("#thinking");
+    thinking ? thinking.before(notice) : $("#messages").append(notice);
+    scrollMessages();
+    return;
+  }
+  if (status === "done") {
+    // 压缩完成:提示保持为完成态数秒,保证用户看到完整生命周期(开始→完成)
+    const notice = $("#compaction-status");
+    if (notice) {
+      notice.textContent = "历史已压缩";
+      notice.classList.add("is-done");
+      clearTimeout(state.compactionNoticeTimer);
+      state.compactionNoticeTimer = setTimeout(removeCompactionNotice, 3000);
+    }
+    return;
+  }
+  if (["failed", "skipped"].includes(status)) {
+    removeCompactionNotice();
+  }
+}
+
+function removeCompactionNotice() {
+  clearTimeout(state.compactionNoticeTimer);
+  state.compactionNoticeTimer = null;
+  $("#compaction-status")?.remove();
 }
 
 function emptyState() {
@@ -288,6 +385,58 @@ function contentText(content) {
     .map((item) => typeof item === "string" ? item : item?.text || "")
     .filter(Boolean)
     .join("\n");
+}
+
+function toolCallsText(message) {
+  const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+  if (!calls.length) return "";
+  return calls.map((call) => {
+    let args = "";
+    try {
+      args = JSON.stringify(call.args ?? {});
+    } catch {
+      args = String(call.args ?? "");
+    }
+    if (args.length > 200) args = `${args.slice(0, 200)}…`;
+    return `调用工具 \`${call.name}\`(${args})`;
+  }).join("\n");
+}
+
+function renderToolCallItem(call, messageId) {
+  if (!call || !call.name) return;
+  const key = `toolcall:${messageId || ""}:${call.id || ""}:${call.name}`;
+  if (state.renderedToolIds.has(key)) return;
+  state.renderedToolIds.add(key);
+  removeEmptyState();
+  const details = document.createElement("details");
+  details.className = "tool-item tool-call-item";
+  details.innerHTML = "<summary><strong></strong></summary><pre></pre>";
+  $("summary strong", details).textContent = `调用工具 ${call.name}`;
+  let argsText = "";
+  try {
+    argsText = JSON.stringify(call.args ?? {}, null, 2);
+  } catch {
+    argsText = String(call.args ?? "");
+  }
+  $("pre", details).textContent = argsText;
+  $("#messages").append(details);
+  scrollMessages();
+}
+
+function renderToolResultItem(message) {
+  const key = `toolresult:${message.id || ""}:${message.name || ""}`;
+  if (state.renderedToolIds.has(key)) return;
+  state.renderedToolIds.add(key);
+  removeEmptyState();
+  const brief = contentText(message.content).replace(/\s+/g, " ").slice(0, 80);
+  const details = document.createElement("details");
+  details.className = "tool-item tool-result-item";
+  details.innerHTML = "<summary><strong></strong><span></span></summary><pre></pre>";
+  $("summary strong", details).textContent = message.name ? `工具结果 ${message.name}` : "工具结果";
+  $("summary span", details).textContent = brief ? ` — ${brief}` : "";
+  $("pre", details).textContent = contentText(message.content);
+  $("#messages").append(details);
+  scrollMessages();
 }
 
 function collectMessages(value, found = []) {
@@ -423,6 +572,7 @@ function handleSubtaskEvent(event) {
 function consumeGraphEvent(data) {
   if (consumeTaskEvent(data)) return;
   if (consumeKnowledgeEvent(data)) return;
+  if (consumeCompactionStatus(data)) return;
   const batches = collectCommitmentMessages(data);
   if (batches.length) {
     batches.forEach(appendCommitmentMessages);
@@ -430,9 +580,16 @@ function consumeGraphEvent(data) {
   }
   collectMessages(data).forEach((message) => {
     const type = message.type || message.role;
+    if (type === "tool") {
+      renderToolResultItem(message);
+      return;
+    }
     if (type !== "ai" && type !== "assistant") return;
     const text = contentText(message.content);
     if (text) addMessage("agent", text, message.id);
+    (Array.isArray(message.tool_calls) ? message.tool_calls : []).forEach(
+      (call) => renderToolCallItem(call, message.id),
+    );
   });
 }
 

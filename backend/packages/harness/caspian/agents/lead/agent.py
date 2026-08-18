@@ -93,6 +93,7 @@ def _build_middlewares(
         model=model,
         context7_tools=context7_tools,
         skill_names=skill_names,
+        context_compression=app_config.context_compression,
     )
     if subagent_enabled:
         from caspian.agents.middlewares.delegation_ledger_middleware import (

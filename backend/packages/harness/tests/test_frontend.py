@@ -141,6 +141,30 @@ class FrontendTests(unittest.TestCase):
         self.assertIn(".context-drag-preview {", css)
         self.assertIn("prefers-reduced-motion", css)
 
+    def test_compaction_summary_rendered_as_fold(self):
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+
+        self.assertIn("caspian_summary", script)
+        self.assertIn("renderCompactionSummary", script)
+        self.assertIn("历史已压缩", script)
+        self.assertIn("已压缩的原始消息", script)
+        self.assertIn('data.archived', script)
+        self.assertIn("compaction_status", script)
+        self.assertIn("上下文正在压缩中", script)
+        self.assertIn("handleCompactionStatus", script)
+        self.assertIn("toolCallsText", script)
+        self.assertIn("renderToolCallItem", script)
+        self.assertIn("renderToolResultItem", script)
+        self.assertIn("renderedToolIds", script)
+        self.assertIn("调用工具", script)
+        self.assertIn("工具结果", script)
+        self.assertIn(".compaction-summary {", css)
+        self.assertIn(".compaction-summary summary {", css)
+        self.assertIn(".compaction-status {", css)
+        self.assertIn(".tool-item {", css)
+        self.assertIn(".tool-item summary {", css)
+
 
 if __name__ == "__main__":
     unittest.main()

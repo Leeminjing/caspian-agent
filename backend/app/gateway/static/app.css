@@ -1456,3 +1456,86 @@ textarea:focus-visible {
   font-size: 12px;
   line-height: 1.5;
 }
+.compaction-summary {
+  margin: 12px 0;
+  padding: 8px 12px;
+  border-left: 3px solid var(--line);
+  border-radius: 6px;
+  background: var(--soft);
+  font-size: 13px;
+}
+
+.compaction-summary summary {
+  cursor: pointer;
+  color: var(--muted);
+  user-select: none;
+}
+
+.compaction-summary summary:hover {
+  color: var(--ink);
+}
+
+.compaction-summary pre {
+  margin: 8px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.compaction-status {
+  margin: 12px 0;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: var(--amber-soft);
+  color: var(--amber);
+  font-size: 13px;
+}
+
+.compaction-status.is-done {
+  background: #e8f5f0;
+  color: var(--teal);
+}
+
+.tool-item {
+  margin: 4px 0 4px 48px;
+  padding: 6px 10px;
+  border-left: 2px solid var(--line);
+  border-radius: 4px;
+  background: var(--soft);
+  font-size: 13px;
+}
+
+.tool-item summary {
+  cursor: pointer;
+  color: var(--muted);
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.tool-item summary strong {
+  color: var(--ink);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.tool-item summary span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-item pre {
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 12px;
+  max-height: 300px;
+  overflow-y: auto;
+}

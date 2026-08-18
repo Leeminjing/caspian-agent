@@ -53,9 +53,52 @@ _HEALTH_CHECK_TIMEOUT = 60
 _HEALTH_CHECK_INTERVAL = 2
 
 
+def _docker_used_host_ports(client) -> set[int]:
+    """收集全部容器(含未启动)已映射的宿主机端口。
+
+    输入:
+        client — docker.from_env() 客户端
+
+    输出:
+        set[int] — 已分配宿主机端口集合
+
+    工作流:
+        (1) 遍历所有容器 attrs 的 NetworkSettings.Ports
+        (2) 收集每个绑定的 HostPort 为 int
+    """
+    used: set[int] = set()
+    for container in client.containers.list(all=True):
+        ports = container.attrs.get("NetworkSettings", {}).get("Ports") or {}
+        for bindings in ports.values():
+            if not bindings:
+                continue
+            for binding in bindings:
+                host_port = binding.get("HostPort")
+                if host_port:
+                    try:
+                        used.add(int(host_port))
+                    except ValueError:
+                        pass
+    return used
+
+
 def _find_free_port(start: int) -> int:
+    """从 start 起找空闲宿主机端口:先排除 Docker 已分配端口,再 socket bind 兜底。
+
+    Docker Desktop (Windows) 下端口经转发代理,socket bind 探测不到已被容器占用的
+    端口,因此必须先查 Docker 端口映射,否则会出现容器 start 时端口冲突。
+    """
+    client = docker.from_env()
+    try:
+        used = _docker_used_host_ports(client)
+    finally:
+        client.close()
+
     port = start
     while True:
+        if port in used:
+            port += 1
+            continue
         with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
             try:
                 s.bind(("", port))

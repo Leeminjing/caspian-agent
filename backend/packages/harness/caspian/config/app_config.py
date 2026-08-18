@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict
 from caspian.config.agent_config import AgentConfig
 from caspian.config.checkpointer_config import CheckpointerConfig
 from caspian.config.commitment_config import CommitmentConfig
+from caspian.config.context_compression_config import ContextCompressionConfig
 from caspian.config.database_config import DatabaseConfig
 from caspian.config.extensions_config import ExtensionsConfig
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
@@ -46,6 +47,7 @@ class AppConfig(BaseModel):
     langgraph_store: LanggraphStoreConfig = LanggraphStoreConfig()
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
     commitment: CommitmentConfig = CommitmentConfig()
+    context_compression: ContextCompressionConfig = ContextCompressionConfig()
     subagents: SubagentsAppConfig = SubagentsAppConfig()
     agent: AgentConfig = AgentConfig()
 

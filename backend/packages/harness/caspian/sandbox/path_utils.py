@@ -103,6 +103,7 @@ _CD_IN_COMMAND_SUBSTITUTION_PATTERN: re.Pattern = re.compile(
 )
 
 _ABSOLUTE_PATH_WHITELIST: frozenset[str] = frozenset({
+    "/mnt/",
     "/mnt/user-data/",
     "/mnt/skills/",
     "/mnt/acp-workspace/",
@@ -114,6 +115,7 @@ _ABSOLUTE_PATH_WHITELIST: frozenset[str] = frozenset({
 })
 
 _CD_TARGET_WHITELIST: frozenset[str] = frozenset({
+    "/mnt/",
     "/mnt/user-data/",
     "/mnt/skills/",
     "/mnt/acp-workspace/",
@@ -185,7 +187,10 @@ def _check_absolute_paths(command: str, whitelist: frozenset[str]) -> None:
         if path in path_assignment_paths:
             continue
 
-        if not any(path.startswith(prefix) for prefix in whitelist):
+        # 归一化:补尾斜杠匹配前缀,使裸挂载根 "/mnt" 命中 "/mnt/" 前缀,
+        # 且 "/mntfoo" 之类仍不命中
+        normalized = path if path.endswith("/") else path + "/"
+        if not any(normalized.startswith(prefix) for prefix in whitelist):
             raise SecurityError(
                 f"绝对路径 '{path}' 不在白名单中，拒绝执行"
             )
