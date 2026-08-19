@@ -33,7 +33,7 @@ const KNOWLEDGE_STATUS = {
 const state = {
   user: null,
   threads: JSON.parse(localStorage.getItem("caspian.threads") || "[]"),
-  threadId: null,
+  threadId: localStorage.getItem("caspian.current_thread") || null,
   running: false,
   pendingInterrupt: null,
   currentRunId: null,
@@ -73,18 +73,36 @@ function saveThreads() {
   localStorage.setItem("caspian.threads", JSON.stringify(state.threads.slice(0, 20)));
 }
 
+function saveCurrentThread() {
+  if (state.threadId) localStorage.setItem("caspian.current_thread", state.threadId);
+  else localStorage.removeItem("caspian.current_thread");
+}
+
 function currentThread() {
   return state.threads.find((item) => item.id === state.threadId);
 }
 
-function ensureThread() {
-  if (state.threadId) return;
+function createThread() {
   const thread = { id: threadId(), title: "新会话", updatedAt: Date.now() };
   state.threads.unshift(thread);
   state.threadId = thread.id;
   saveThreads();
+  saveCurrentThread();
   renderThreads();
   window.CaspianContextUi?.onThreadSelected();
+  return thread;
+}
+
+function ensureThread() {
+  if (state.threadId) return;
+  // 恢复记住的当前会话；记住的 id 失效时回退列表首位（最近会话）；列表为空才新建
+  const remembered = state.threads.find((item) => item.id === state.threadId) || state.threads[0];
+  if (remembered) {
+    state.threadId = remembered.id;
+    saveCurrentThread();
+    return;
+  }
+  createThread();
 }
 
 function renderThreads() {
@@ -112,6 +130,7 @@ function selectThread(id) {
   if (state.running) return;
   finishTracePanel("已停止");
   state.threadId = id;
+  saveCurrentThread();
   state.pendingInterrupt = null;
   state.currentRunId = null;
   state.interruptedByUser = false;
@@ -1271,7 +1290,7 @@ function showApp(user) {
   $("#user-name").textContent = name;
   $("#user-avatar").textContent = name.slice(0, 1).toUpperCase();
   ensureThread();
-  renderThreads();
+  selectThread(state.threadId);
 }
 
 async function restoreSession() {
@@ -1322,8 +1341,7 @@ $("#interrupt-button").addEventListener("click", () => {
 
 $("#new-thread").addEventListener("click", () => {
   if (state.running) return;
-  state.threadId = null;
-  ensureThread();
+  createThread();
   selectThread(state.threadId);
   $("#message-input").focus();
 });
