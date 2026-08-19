@@ -26,6 +26,7 @@
 """
 
 import re
+import uuid
 from functools import partial
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
@@ -52,7 +53,7 @@ def make_token_counter():
 
 
 def is_anchor(message) -> bool:
-    """判断消息是否为压缩锚点:决策等级表 SystemMessage 或任务合同 HumanMessage。
+    """判断消息是否为压缩锚点:决策等级表、任务合同或历史摘要消息。
 
     输入:
         message — BaseMessage 实例
@@ -63,10 +64,16 @@ def is_anchor(message) -> bool:
     工作流:
         (1) 决策等级表按固定 id 检测
         (2) 任务合同按内容检测 <task_contract> 标签(其 id 为触发 /commit 消息的 id,压缩侧不可预知)
+        (3) 历史摘要按 additional_kwargs 的 caspian_summary 标记检测(防止"摘要的摘要"退化)
     """
     if isinstance(message, SystemMessage) and message.id == DECISION_TABLE_MESSAGE_ID:
         return True
     if isinstance(message, HumanMessage) and CONTRACT_TAG in str(message.content):
+        return True
+    if (
+        isinstance(message, HumanMessage)
+        and (message.additional_kwargs or {}).get(SUMMARY_MARKER_KEY)
+    ):
         return True
     return False
 
@@ -152,17 +159,17 @@ def plan_compression(messages: list, *, keep_messages: int):
 
 
 def build_summary_message(summary_text: str) -> HumanMessage:
-    """构造固定 id + 标记的摘要消息。
+    """构造唯一 id + 标记的摘要消息(每条摘要对应一次压缩 epoch)。
 
     输入:
         summary_text: str — 摘要正文
 
     输出:
-        HumanMessage — id 固定为 SUMMARY_MESSAGE_ID,additional_kwargs 含 caspian_summary 标记
+        HumanMessage — id 为 SUMMARY_MESSAGE_ID 前缀 + 随机后缀,additional_kwargs 含 caspian_summary 标记
     """
     return HumanMessage(
         content=f"以下是对话摘要(由上下文压缩生成),用于替代已压缩的旧消息:\n\n{summary_text}",
-        id=SUMMARY_MESSAGE_ID,
+        id=f"{SUMMARY_MESSAGE_ID}-{uuid.uuid4().hex}",
         additional_kwargs={"lc_source": "summarization", SUMMARY_MARKER_KEY: True},
     )
 
@@ -337,11 +344,12 @@ if __name__ == "__main__":
     assert contract in preserved and table in preserved
     assert contract not in to_summarize and table not in to_summarize
 
-    # 摘要消息固定 id + 标记
+    # 摘要消息唯一 id + 标记
     summary = build_summary_message("摘要")
-    assert summary.id == SUMMARY_MESSAGE_ID
+    assert summary.id.startswith(SUMMARY_MESSAGE_ID + "-")
     assert summary.additional_kwargs.get(SUMMARY_MARKER_KEY) is True
     assert summary.additional_kwargs.get("lc_source") == "summarization"
+    assert build_summary_message("摘要").id != summary.id
 
     # 后置校验:更大 → False;更小 → True
     big_list = [HumanMessage(content="x" * 1000, id="big")]

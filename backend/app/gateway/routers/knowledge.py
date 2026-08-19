@@ -22,32 +22,25 @@
     (1) 全部端点从 request.state.current_user.id 取 user_id，
         request.app.state.store 取 LangGraph Store
     (2) 入库/改等级经 store_client（level ∈ {0,1,2,3,None}，content 1..8000）
-    (3) 查询按"向量召回 → judge 冲突判定 → govern 等级治理"三段执行；
-        judge 调用异常返回 502，绝不静默跳过治理
+    (3) 查询经共享管线 run_governed_query（向量召回 → judge 冲突判定 → govern
+        等级治理）执行；judge 调用异常返回 502，绝不静默跳过治理
 
 示例:
     POST /api/knowledge {"content": "功能 A 已废弃。", "level": 3}
     POST /api/knowledge/query {"query": "功能 A 是否可用"}
 """
 
-import logging
-
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from caspian.knowledge.governance import govern
-from caspian.knowledge.judge import judge_conflicts
+from caspian.knowledge.pipeline import run_governed_query
 from caspian.knowledge.schemas import level_display
 from caspian.knowledge.store_client import (
     list_knowledge,
     put_knowledge,
-    search_knowledge,
     update_level,
 )
-from caspian.models import create_chat_model
-
-logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/knowledge")
 
@@ -143,7 +136,14 @@ async def query_knowledge(body: QueryRequest, request: Request) -> dict:
     user_id = str(request.state.current_user.id)
     store = request.app.state.store
 
-    candidates = await search_knowledge(store, user_id, body.query, body.top_k)
+    result, candidates, error = await run_governed_query(
+        store,
+        user_id,
+        body.query,
+        body.top_k,
+    )
+    if error is not None:
+        raise HTTPException(status_code=502, detail="冲突判定失败，治理未执行")
     if not candidates:
         return {
             "query": body.query,
@@ -152,14 +152,6 @@ async def query_knowledge(body: QueryRequest, request: Request) -> dict:
             "ledger": [],
         }
 
-    model = create_chat_model(None)
-    try:
-        conflicts = await judge_conflicts(candidates, model, query=body.query)
-    except Exception as exc:
-        logger.error("知识检索治理 judge 失败: %s", exc, exc_info=True)
-        raise HTTPException(status_code=502, detail="冲突判定失败，治理未执行") from exc
-
-    result = govern(candidates, conflicts)
     return {
         "query": body.query,
         "candidates": [c.model_dump() for c in candidates],

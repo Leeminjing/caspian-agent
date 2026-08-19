@@ -3,7 +3,6 @@
 
 对外提供:
     put_knowledge — 入库一条知识（带离散权威等级），返回条目 key
-    get_knowledge — 按 key 读取条目
     list_knowledge — 列出当前用户全部条目（updated_at 倒序）
     update_level — 修改条目等级（put 同 key，内容不变）
     search_knowledge — 向量语义召回 top_k 条候选证据
@@ -17,7 +16,6 @@
 
 输出:
     put_knowledge → str（条目 key，uuid4().hex）
-    get_knowledge → Item | None（含 value/key/updated_at）
     list_knowledge → list[Item]
     update_level → bool（False 表示条目不存在）
     search_knowledge → list[EvidenceEntry]（携带 score）
@@ -86,10 +84,6 @@ async def put_knowledge(
     )
     logger.info("知识条目已入库 key=%s level=%s", key, level)
     return key
-
-
-async def get_knowledge(store: BaseStore, user_id: str, key: str) -> Item | None:
-    return await store.aget(_namespace(user_id), key)
 
 
 _LIST_LIMIT_MAX = 500

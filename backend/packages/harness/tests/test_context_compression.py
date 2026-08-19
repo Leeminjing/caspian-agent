@@ -129,7 +129,8 @@ class PlanFunctionTests(unittest.TestCase):
 
     def test_build_summary_message_marker_and_id(self):
         summary = build_summary_message("摘要正文")
-        self.assertEqual(summary.id, SUMMARY_MESSAGE_ID)
+        self.assertTrue(summary.id.startswith(SUMMARY_MESSAGE_ID + "-"))
+        self.assertNotEqual(summary.id, build_summary_message("摘要正文").id)
         self.assertTrue(summary.additional_kwargs.get(SUMMARY_MARKER_KEY))
         self.assertEqual(summary.additional_kwargs.get("lc_source"), "summarization")
         self.assertIn("摘要正文", str(summary.content))
@@ -193,6 +194,19 @@ class PlanFunctionTests(unittest.TestCase):
         self.assertFalse(
             is_anchor(SystemMessage(content="普通系统消息", id="other"))
         )
+
+    def test_is_anchor_positive_for_summary(self):
+        summary = build_summary_message("摘要")
+        self.assertTrue(is_anchor(summary))
+
+    def test_old_summary_preserved_on_second_compression(self):
+        old_summary = build_summary_message("旧摘要")
+        seq = [old_summary, _human(2), _ai(), _tool(), _human(3)]
+        plan = plan_compression(seq, keep_messages=2)
+        self.assertIsNotNone(plan)
+        to_summarize, preserved = plan
+        self.assertIn(old_summary, preserved)
+        self.assertNotIn(old_summary, to_summarize)
 
 
 class FakeOverflow(Exception):
@@ -305,7 +319,7 @@ class MiddlewareHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNotNone(update)
         rebuilt = [m for m in update["messages"] if not isinstance(m, RemoveMessage)]
         ids = [m.id for m in rebuilt]
-        self.assertIn(SUMMARY_MESSAGE_ID, ids)
+        self.assertTrue(any(i.startswith(SUMMARY_MESSAGE_ID + "-") for i in ids))
         self.assertIn("decision-table", ids)
         self.assertNotIn("h1", ids)
         self.assertIn("h3", ids)
@@ -419,7 +433,7 @@ class MiddlewareIntegrationTests(unittest.IsolatedAsyncioTestCase):
             {"messages": [HumanMessage(content="c", id="h3")]}, config=config
         )
         ids = [m.id for m in result["messages"]]
-        self.assertIn(SUMMARY_MESSAGE_ID, ids)
+        self.assertTrue(any(i.startswith(SUMMARY_MESSAGE_ID + "-") for i in ids))
         self.assertNotIn("h1", ids)
         self.assertIn("h2", ids)
         self.assertEqual(summary_stub.summary_calls, 1)
@@ -461,7 +475,7 @@ class MiddlewareIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(main_stub.main_calls, 2)
         self.assertEqual(summary_stub.summary_calls, 1)
         ids = [m.id for m in result["messages"]]
-        self.assertIn(SUMMARY_MESSAGE_ID, ids)
+        self.assertTrue(any(i.startswith(SUMMARY_MESSAGE_ID + "-") for i in ids))
         self.assertNotIn("h1", ids)
 
     async def test_integration_overflow_exhausted_raises(self):

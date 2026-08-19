@@ -52,6 +52,8 @@ const state = {
   traceScrollScheduled: false,
   activeSelectedSkills: [],
   compactionNoticeTimer: null,
+  compactionArchived: [],
+  compactionSummaryText: "",
 };
 
 function csrfToken() {
@@ -146,9 +148,10 @@ async function loadThreadHistory() {
     if (!response.ok) return;
     const data = await response.json();
     if (state.threadId !== threadId) return;
+    state.compactionArchived = Array.isArray(data.archived) ? data.archived : [];
     renderHistoryMessages(
       Array.isArray(data.messages) ? data.messages : [],
-      Array.isArray(data.archived) ? data.archived : [],
+      state.compactionArchived,
     );
   } catch (error) {
     console.warn("历史消息加载失败:", error);
@@ -158,9 +161,11 @@ async function loadThreadHistory() {
 function renderHistoryMessages(messages, archived = []) {
   if (!messages.length) return;
   removeEmptyState();
+  let showArchived = true;
   messages.forEach((message) => {
     if (message.additional_kwargs?.caspian_summary) {
-      renderCompactionSummary(message, archived);
+      renderCompactionSummary(message, showArchived ? archived : [], showArchived);
+      showArchived = false;
       return;
     }
     const type = message.type || message.role;
@@ -182,14 +187,9 @@ function renderHistoryMessages(messages, archived = []) {
   });
 }
 
-function renderCompactionSummary(message, archived = []) {
-  const text = contentText(message.content);
-  if (!text) return;
-  const details = document.createElement("details");
-  details.className = "compaction-summary";
-  details.innerHTML = "<summary>历史已压缩</summary><pre></pre>";
+function buildCompactionBody(text, archived = []) {
   let body = text;
-  if (archived.length) {
+  if (Array.isArray(archived) && archived.length) {
     const parts = archived.map((record) => {
       const role = record.type === "human" ? "用户" : record.type === "tool" ? "工具" : "AI";
       const toolLabel = record.type === "tool" && record.name ? `(${record.name})` : "";
@@ -205,9 +205,61 @@ function renderCompactionSummary(message, archived = []) {
     });
     body += "\n\n--- 已压缩的原始消息 ---\n\n" + parts.join("\n\n");
   }
-  $("pre", details).textContent = body;
+  return body;
+}
+
+function renderCompactionSummary(message, archived = [], showArchived = true) {
+  const text = contentText(message.content);
+  if (!text) return;
+  const details = document.createElement("details");
+  details.className = "compaction-summary";
+  details.innerHTML = "<summary>历史已压缩</summary><pre></pre>";
+  $("pre", details).textContent = buildCompactionBody(
+    text,
+    showArchived ? archived : [],
+  );
   $("#messages").append(details);
   scrollMessages();
+}
+
+function upsertCompactionSummary(message) {
+  const text = contentText(message.content);
+  if (!text) return;
+  state.compactionSummaryText = text;
+  const topStrip = $(".compaction-summary", $("#messages"));
+  if (topStrip) {
+    $("pre", topStrip).textContent = buildCompactionBody(text, state.compactionArchived);
+    scrollMessages();
+    return;
+  }
+  const details = document.createElement("details");
+  details.className = "compaction-summary";
+  details.innerHTML = "<summary>历史已压缩</summary><pre></pre>";
+  $("pre", details).textContent = buildCompactionBody(text, state.compactionArchived);
+  $("#messages").prepend(details);
+  scrollMessages();
+}
+
+async function refreshCompactionArchive() {
+  const threadId = state.threadId;
+  if (!threadId) return;
+  try {
+    const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/messages`, {
+      credentials: "same-origin",
+    });
+    if (!response.ok) return;
+    const data = await response.json();
+    state.compactionArchived = Array.isArray(data.archived) ? data.archived : [];
+    const topStrip = $(".compaction-summary", $("#messages"));
+    if (topStrip && state.compactionSummaryText) {
+      $("pre", topStrip).textContent = buildCompactionBody(
+        state.compactionSummaryText,
+        state.compactionArchived,
+      );
+    }
+  } catch (error) {
+    console.warn("压缩存档刷新失败:", error);
+  }
 }
 
 function consumeCompactionStatus(value) {
@@ -245,6 +297,7 @@ function handleCompactionStatus(status) {
       clearTimeout(state.compactionNoticeTimer);
       state.compactionNoticeTimer = setTimeout(removeCompactionNotice, 3000);
     }
+    refreshCompactionArchive();
     return;
   }
   if (["failed", "skipped"].includes(status)) {
@@ -579,6 +632,10 @@ function consumeGraphEvent(data) {
     return;
   }
   collectMessages(data).forEach((message) => {
+    if (message.additional_kwargs?.caspian_summary) {
+      upsertCompactionSummary(message);
+      return;
+    }
     const type = message.type || message.role;
     if (type === "tool") {
       renderToolResultItem(message);

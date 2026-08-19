@@ -251,13 +251,6 @@ class ContextService:
                 by_child.setdefault(source.context_id, []).append(source)
             memo: dict[str, int] = {}
 
-            def depth(context_id: str) -> int:
-                if context_id in memo:
-                    return memo[context_id]
-                sources = by_child.get(context_id, [])
-                memo[context_id] = 0 if not sources else depth(sources[0].parent_context_id) + 1
-                return memo[context_id]
-
             result = []
             for task in tasks:
                 input_tokens = task.prompt_input_tokens
@@ -267,7 +260,7 @@ class ContextService:
                     "task_id": task.thread_id,
                     "thread_id": task.thread_id,
                     "title": task.title,
-                    "depth": depth(task.thread_id),
+                    "depth": self._depth_from_sources(task.thread_id, by_child, memo),
                     "projection_status": (
                         definitions[task.thread_id].projection_status
                         if task.thread_id in definitions else "root"
@@ -433,14 +426,81 @@ class ContextService:
             raise HTTPException(404, "来源 checkpoint 不存在或不属于指定 Context")
 
     async def _depth(self, session, context_id: str, memo: dict[str, int]) -> int:
+        """沿第一个父来源计算父链深度（受保护 helper）。
+
+        输入:
+            session: AsyncSession — 数据库会话
+            context_id: str — 目标 Context
+            memo: dict[str, int] — 深度缓存
+
+        输出:
+            int — 父链深度，无来源为 0
+
+        具体工作流:
+            (1) 命中缓存直接返回
+            (2) 加载该 Context 所属用户的全部 WebContextSource 行构建 by_child
+                （与 tree() 同量级的两条查询，换取与 tree 共享同一计算实现）
+            (3) 调用 _depth_from_sources 纯函数计算并缓存
+        """
         if context_id in memo:
             return memo[context_id]
-        source = await session.scalar(
-            select(WebContextSource)
-            .where(WebContextSource.context_id == context_id)
-            .order_by(WebContextSource.position)
+        task = await session.get(WebThread, context_id)
+        if task is None:
+            memo[context_id] = 0
+            return 0
+        task_ids = [
+            item.thread_id
+            for item in (
+                await session.scalars(
+                    select(WebThread).where(WebThread.user_id == task.user_id)
+                )
+            ).all()
+        ]
+        source_rows = (
+            await session.scalars(
+                select(WebContextSource)
+                .where(WebContextSource.context_id.in_(task_ids))
+                .order_by(WebContextSource.context_id, WebContextSource.position)
+            )
+        ).all()
+        by_child: dict[str, list[WebContextSource]] = {}
+        for source in source_rows:
+            by_child.setdefault(source.context_id, []).append(source)
+        memo[context_id] = self._depth_from_sources(context_id, by_child, memo)
+        return memo[context_id]
+
+    @staticmethod
+    def _depth_from_sources(
+        context_id: str,
+        by_child: dict[str, list[WebContextSource]],
+        memo: dict[str, int],
+    ) -> int:
+        """按第一个父来源沿父链计算深度（受保护 helper，纯函数）。
+
+        输入:
+            context_id: str — 目标 Context
+            by_child: dict[str, list[WebContextSource]] — context_id → 其来源行列表
+            memo: dict[str, int] — 深度缓存
+
+        输出:
+            int — 父链深度，无来源为 0
+
+        具体工作流:
+            (1) 命中缓存直接返回
+            (2) 无来源 → 0
+            (3) 取第一个来源的父 Context 递归加一
+        """
+        if context_id in memo:
+            return memo[context_id]
+        sources = by_child.get(context_id, [])
+        memo[context_id] = (
+            0
+            if not sources
+            else ContextService._depth_from_sources(
+                sources[0].parent_context_id, by_child, memo
+            )
+            + 1
         )
-        memo[context_id] = 0 if not source else await self._depth(session, source.parent_context_id, memo) + 1
         return memo[context_id]
 
     @staticmethod

@@ -147,6 +147,10 @@ class FrontendTests(unittest.TestCase):
 
         self.assertIn("caspian_summary", script)
         self.assertIn("renderCompactionSummary", script)
+        self.assertIn("upsertCompactionSummary", script)
+        self.assertIn("refreshCompactionArchive", script)
+        self.assertIn("buildCompactionBody", script)
+        self.assertIn("compactionArchived", script)
         self.assertIn("历史已压缩", script)
         self.assertIn("已压缩的原始消息", script)
         self.assertIn('data.archived', script)

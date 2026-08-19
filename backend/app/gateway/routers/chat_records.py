@@ -75,7 +75,9 @@ async def get_thread_messages(thread_id: str, request: Request) -> dict:
 
     if definition is not None:
         snapshot = await context_service.snapshot(user_id, thread_id)
-        return {"messages": snapshot["messages"]}
+        archive_file = archive_path_for(user_id, thread_id)
+        archived = read_archive(archive_file) if archive_file is not None else []
+        return {"messages": snapshot["messages"], "archived": archived}
 
     checkpointer = request.app.state.checkpointer
     latest = await checkpointer.aget_tuple(
@@ -85,9 +87,6 @@ async def get_thread_messages(thread_id: str, request: Request) -> dict:
         return {"messages": [], "archived": []}
     messages = latest.checkpoint.get("channel_values", {}).get("messages", [])
 
-    request_state = getattr(request, "state", None)
-    current_user = getattr(request_state, "current_user", None) if request_state is not None else None
-    user_id = str(current_user.id) if current_user is not None else None
     archive_file = archive_path_for(user_id, thread_id)
     archived = read_archive(archive_file) if archive_file is not None else []
 

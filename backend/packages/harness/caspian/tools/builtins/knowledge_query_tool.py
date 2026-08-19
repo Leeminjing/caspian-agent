@@ -2,7 +2,8 @@
 本文件对外提供 knowledge_query 内置工具：lead agent 查询知识库的唯一切口。
 
 对外提供:
-    knowledge_query_tool — 向量召回 + LLM 冲突判定 + 离散等级治理，产出最终证据集
+    knowledge_query_tool — 经共享管线 run_governed_query 执行向量召回 + LLM 冲突判定 +
+        离散等级治理，产出最终证据集
 
 输入:
     query: str — 自然语言查询
@@ -15,13 +16,11 @@
 
 具体工作流:
     (1) 从 runtime 取 store 与 user_id；缺失时返回说明性错误字符串
-    (2) search_knowledge 向量召回候选（等级不参与召回）
-    (3) judge_conflicts 单次批量冲突判定（模型取 runtime.context.model_name，
-        回退默认模型）；失败返回显式错误文本，不静默跳过治理
-    (4) govern 确定性等级治理
-    (5) 经 get_stream_writer 发射 {type: "knowledge_governance", ...} 自定义事件
+    (2) 调用共享管线 run_governed_query（search_knowledge 向量召回 → judge_conflicts
+        冲突判定 → govern 等级治理）；judge 失败返回显式错误文本，不静默跳过治理
+    (3) 经 get_stream_writer 发射 {type: "knowledge_governance", ...} 自定义事件
         （前端渲染证据/账本面板）
-    (6) 组装模型文本：最终证据集 + 部分压制注解 + 同等级冲突/潜在分歧提示
+    (4) 组装模型文本：最终证据集 + 部分压制注解 + 同等级冲突/潜在分歧提示
 
 示例:
     result = await knowledge_query_tool.ainvoke({
@@ -30,19 +29,11 @@
     })
 """
 
-import logging
-
 from langchain_core.tools import tool
 from langgraph.config import get_stream_writer
 from langgraph.prebuilt import ToolRuntime
 
-from caspian.knowledge.governance import govern
-from caspian.knowledge.judge import judge_conflicts
-from caspian.knowledge.schemas import level_display
-from caspian.knowledge.store_client import search_knowledge
-from caspian.models import create_chat_model
-
-logger = logging.getLogger(__name__)
+from caspian.knowledge.pipeline import run_governed_query
 
 
 def _runtime_context(runtime: ToolRuntime | None) -> dict:
@@ -102,22 +93,22 @@ async def knowledge_query(
     if store is None or user_id is None:
         return "知识库不可用：缺少 store 或 user_id 运行上下文。"
 
-    candidates = await search_knowledge(store, str(user_id), query, top_k)
-    if not candidates:
-        return "知识库中没有检索到相关内容。"
-
     model_name = _runtime_context(runtime).get("model_name")
-    model = create_chat_model(model_name or None)
-    try:
-        conflicts = await judge_conflicts(candidates, model, query=query)
-    except Exception as exc:
-        logger.error("knowledge_query 冲突判定失败: %s", exc, exc_info=True)
+    result, candidates, error = await run_governed_query(
+        store,
+        str(user_id),
+        query,
+        top_k,
+        model_name,
+    )
+    if error is not None:
         return (
             "知识检索治理失败：冲突判定出错，本次不采用知识库证据。"
-            f"（{type(exc).__name__}）"
+            f"（{error}）"
         )
+    if result is None:
+        return "知识库中没有检索到相关内容。"
 
-    result = govern(candidates, conflicts)
     _emit_governance_event(
         {
             "type": "knowledge_governance",
