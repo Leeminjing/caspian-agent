@@ -1,0 +1,9 @@
+{
+  "display_name": "hello-remote",
+  "version": "0.1.0",
+  "requires": [],
+  "entry": {
+    "command": "python",
+    "args": ["main.py"]
+  }
+}

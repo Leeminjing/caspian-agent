@@ -27,12 +27,14 @@
         (2d) 逐个 parse_skill_file() 解析 + _validate_skill_frontmatter 校验
         (2e) 过滤 enabled=true 的 Skill → 构建 SkillCatalog
         (2f) skill_names = catalog.names → 逗号分隔字符串
-    (3) await get_available_tools(tool_groups=tool_groups, subagent_enabled=subagent_enabled) 汇集全局工具
+    (3) await get_available_tools(tool_groups=tool_groups, subagent_enabled=subagent_enabled,
+        plugin_user_id=user_id) 汇集全局工具（含插件 Tool 层）
         (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
         (3b) 合并: [describe_skill_tool] + global_tools
     (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware 与 subagent 限制/账本
         (4a) 调用 build_general_middlewares() 获取通用中间件链
         (4b) subagent_enabled 时追加 SubagentLimitMiddleware 与 DelegationLedgerMiddleware
+        (4c) 链尾追加 PluginHookMiddleware（插件注入的有序 Hook 实现；无插件时零开销）
     (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt，
         追加委托纪律段与选中技能段
     (6) 调用 langchain.agents.create_agent(model, tools, middleware, system_prompt, state_schema=LeadAgentState)
@@ -275,6 +277,7 @@ async def make_lead_agent(
     tools = await get_available_tools(
         tool_groups=tool_groups,
         subagent_enabled=subagent_enabled,
+        plugin_user_id=user_id,
     )
 
     from caspian.tools.builtins.describe_skill_tool import build_describe_skill_tool
@@ -313,6 +316,12 @@ async def make_lead_agent(
         frozenset(catalog.names),
         subagent_enabled=subagent_enabled,
     )
+
+    # (4c) 链尾追加插件 Hook 中间件（无插件运行时或空链时为零开销中间件）
+    from caspian.plugins.hooks import PluginHookMiddleware
+    from caspian.plugins.runtime import get_plugin_runtime
+
+    middleware.append(PluginHookMiddleware(get_plugin_runtime(), user_id=user_id))
 
     # (6) create_agent
     return create_agent(

@@ -1,9 +1,10 @@
 """
-本文件定义 McpServerConfig 与 ExtensionsConfig 两个 Pydantic 配置模型，以及 get_extensions_config 加载函数。
+本文件定义 McpServerConfig、PluginConfig 与 ExtensionsConfig 三个 Pydantic 配置模型，以及 get_extensions_config 加载函数。
 
 对外提供:
     McpServerConfig(BaseModel): 单个 MCP Server 的配置对象
-    ExtensionsConfig(BaseModel): extensions_config.json 的顶层模型，聚合所有 MCP Server 配置
+    PluginConfig(BaseModel): 单个插件的系统侧声明（enabled 开关 + 插件专属配置）
+    ExtensionsConfig(BaseModel): extensions_config.json 的顶层模型，聚合 MCP Server 与插件配置
     get_extensions_config(json_path): 加载 extensions_config.json 并返回 ExtensionsConfig 实例
     get_enabled_mcp_servers(config): 从 ExtensionsConfig 中筛选 enabled=true 的 MCP Server
 
@@ -17,6 +18,10 @@
         env: dict[str, str] | None — 仅 stdio，注入子进程的环境变量
         url: str | None            — 仅 sse/http，远程端点地址
         headers: dict[str, str] | None — 仅 sse/http，HTTP 请求头
+
+    PluginConfig 字段:
+        enabled: bool              — 是否启用该插件
+        config: dict               — 插件专属配置（原样传给插件入口，系统不解析）
 
 输出:
     get_extensions_config → ExtensionsConfig 实例，含递归解析后的环境变量
@@ -59,15 +64,30 @@ class McpServerConfig(BaseModel):
     headers: dict[str, str] | None = None
 
 
+class PluginConfig(BaseModel):
+    """单个插件的系统侧声明：enabled 开关 + 插件专属配置（系统不解析业务含义）。"""
+
+    enabled: bool = True
+    config: dict = Field(default_factory=dict)
+
+
 class ExtensionsConfig(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
-    mcp_servers: dict[str, McpServerConfig] = Field(alias="mcpServers")
+    mcp_servers: dict[str, McpServerConfig] = Field(default_factory=dict, alias="mcpServers")
+    plugins: dict[str, PluginConfig] = Field(default_factory=dict, alias="plugins")
 
     def get_enabled_mcp_servers(self) -> dict[str, McpServerConfig]:
         return {
             name: cfg
             for name, cfg in self.mcp_servers.items()
+            if cfg.enabled
+        }
+
+    def get_enabled_plugins(self) -> dict[str, PluginConfig]:
+        return {
+            name: cfg
+            for name, cfg in self.plugins.items()
             if cfg.enabled
         }
 

@@ -5,6 +5,7 @@
     app_config: AppConfig | None  — 应用配置对象，None 时内部自动加载
     tool_groups: list[str] | None  — 需要加载的工具分组名列表，None 表示加载全部
     subagent_enabled: bool        — True 时包含 task 委托工具，False（subagent 场景）时排除防递归
+    plugin_user_id: str | None    — 提供时加载该用户 custom 插件并追加插件 Tool 层
 
 输出:
     list[BaseTool] — 经过去重和过滤的可用 LangChain Tool 列表
@@ -15,11 +16,14 @@
     (3) 若指定 tool_groups，仅保留 group 匹配的 config.yaml 工具，built-in 和 MCP 不受过滤
     (4) subagent_enabled=False 时从 built-in 排除 task 工具（防递归嵌套）
     (5) 三类工具按名称去重，优先级 config.yaml > built-in > MCP
-    (6) 返回完整工具列表
+    (6) plugin_user_id 提供且插件运行时可用时: 确保该用户 custom 插件已加载，
+        追加插件 Tool 层（第四层，去重优先级最低，同名冲突在注入期已拒绝）
+    (7) 返回完整工具列表
 
 示例:
     tools = await get_available_tools(tool_groups=["file:read", "bash"])
     subagent_tools = await get_available_tools(subagent_enabled=False)
+    tools = await get_available_tools(plugin_user_id="uuid-xxx")
     agent = create_agent(model, tools=tools)
 """
 
@@ -116,6 +120,7 @@ async def get_available_tools(
     app_config: AppConfig | None = None,
     tool_groups: list[str] | None = None,
     subagent_enabled: bool = True,
+    plugin_user_id: str | None = None,
 ) -> list[BaseTool]:
     if app_config is None:
         app_config = get_app_config("config.yaml")
@@ -128,4 +133,22 @@ async def get_available_tools(
     builtin_tools = _load_builtin_tools(subagent_enabled=subagent_enabled)
     mcp_tools = await _load_mcp_tools()
 
-    return _deduplicate_tools(config_tools, builtin_tools, mcp_tools)
+    tools = _deduplicate_tools(config_tools, builtin_tools, mcp_tools)
+
+    # (6) 插件 Tool 层（第四层，去重优先级最低）
+    if plugin_user_id is not None:
+        from caspian.plugins.runtime import get_plugin_runtime
+        from caspian.plugins.tools import plugin_tools
+
+        runtime = get_plugin_runtime()
+        if runtime is not None:
+            await runtime.ensure_user(plugin_user_id)
+            tools.extend(
+                plugin_tools(
+                    runtime=runtime,
+                    user_id=plugin_user_id,
+                    existing_names={t.name for t in tools},
+                )
+            )
+
+    return tools

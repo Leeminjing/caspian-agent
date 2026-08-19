@@ -645,6 +645,7 @@ function consumeGraphEvent(data) {
   if (consumeTaskEvent(data)) return;
   if (consumeKnowledgeEvent(data)) return;
   if (consumeCompactionStatus(data)) return;
+  if (window.CaspianPlugins && window.CaspianPlugins.consume(data)) return;
   const batches = collectCommitmentMessages(data);
   if (batches.length) {
     batches.forEach(appendCommitmentMessages);

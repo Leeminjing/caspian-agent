@@ -22,6 +22,9 @@
         → 通过 stack.push_async_callback 注册 dispose_checkpointer 以确保退出时释放连接
     (3.6) 通过 create_store(app_config) 创建 Store → 挂载到 app.state.store
         → 通过 stack.push_async_callback 注册 dispose_store 以确保退出时释放连接
+    (3.7) 创建 ContextService（Recursive Context Forking，依赖 checkpointer）
+    (3.8) 创建 PluginRuntime（插件系统，public 插件启动期加载）→ 挂载到
+        app.state.plugin_runtime 并设置进程单例
     (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
     (5) yield — 此时 FastAPI 开始接收请求
     (6) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
@@ -91,6 +94,26 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
 
         app.state.context_service = ContextService(checkpointer)
         logger.info("ContextService 已挂载到 app.state.context_service")
+
+        # (3.8) PluginRuntime 初始化（插件系统：public 插件在启动期加载，
+        #       custom 插件在用户首次 run 时惰性加载；加载失败不影响系统启动）
+        from caspian.plugins.runtime import PluginRuntime, set_plugin_runtime
+
+        try:
+            from caspian.config.extensions_config import get_extensions_config
+
+            plugin_runtime = PluginRuntime(
+                get_extensions_config("extensions_config.json")
+            )
+        except Exception:
+            from caspian.config.extensions_config import ExtensionsConfig
+
+            plugin_runtime = PluginRuntime(ExtensionsConfig(mcpServers={}, plugins={}))
+        await plugin_runtime.load_public()
+        set_plugin_runtime(plugin_runtime)
+        app.state.plugin_runtime = plugin_runtime
+        stack.push_async_callback(plugin_runtime.close)
+        logger.info("PluginRuntime 已挂载到 app.state.plugin_runtime")
 
         # (4) 创建 RunManager 实例，每进程唯一
         run_manager = RunManager()
