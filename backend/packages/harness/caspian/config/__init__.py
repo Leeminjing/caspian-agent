@@ -25,6 +25,7 @@ from caspian.config.extensions_config import (
     get_extensions_config,
 )
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
+from caspian.config.plan_mode_config import PlanModeConfig
 from caspian.config.stream_bridge_config import StreamBridgeConfig
 from caspian.config.subagents_config import (
     CustomSubagentConfig,
@@ -43,6 +44,7 @@ __all__ = [
     "ExtensionsConfig",
     "LanggraphStoreConfig",
     "McpServerConfig",
+    "PlanModeConfig",
     "StreamBridgeConfig",
     "SubagentOverrideConfig",
     "SubagentsAppConfig",

@@ -104,8 +104,10 @@ class FrontendTests(unittest.TestCase):
 
         self.assertIn('"commit".startsWith', picker)
         self.assertIn("COMMIT_ENTRY", picker)
-        self.assertIn('replaceToken(input.value, info, "commit")', picker)
+        self.assertIn("PLAN_ENTRY", picker)
+        self.assertIn('replaceToken(input.value, info, token)', picker)
         self.assertIn("commitVisible(info.query)", picker)
+        self.assertIn("planVisible(info.query)", picker)
 
     def test_skill_picker_assets_are_registered(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
@@ -227,6 +229,30 @@ class FrontendTests(unittest.TestCase):
         self.assertIn(".model-option {", css)
         self.assertIn('@router.get("/models")', router)
         self.assertIn('"models"', router)
+
+
+    def test_plan_review_surface_and_wiring(self):
+        markup = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+
+        # 计划审阅卡模板与三条操作路径
+        self.assertIn('id="plan-review-template"', markup)
+        self.assertIn("plan-approve-button", markup)
+        self.assertIn("plan-keep-toggle", markup)
+        self.assertIn("plan-discuss-button", markup)
+        self.assertIn("plan-feedback-input", markup)
+
+        # interrupt 按 plan_review 负载分发到专用渲染；复用既有 resumeRun 通道
+        self.assertIn('data?.value?.type === "plan_review"', script)
+        self.assertIn("showPlanReview", script)
+        self.assertIn("bindPlanReview", script)
+        self.assertIn('resumeRun({ decision: "approve" })', script)
+        self.assertIn('resumeRun({ decision: "keep", feedback: value })', script)
+        self.assertIn('resumeRun({ decision: "dismiss" })', script)
+
+        # 计划正文样式
+        self.assertIn(".plan-review-body {", css)
 
 
 if __name__ == "__main__":

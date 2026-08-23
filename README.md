@@ -40,3 +40,12 @@ python run_dev.py
 
 - 邮箱：`2656226581@qq.com`
 - 密码只以项目规定的 SHA-256 + bcrypt 哈希保存在 `users` 表中，不在仓库记录明文。
+
+## 计划模式（plan-mode）
+
+提供"先规划、后执行"的协作姿态：激活时模型每次请求都会带上部署方配置的策略段（`config.yaml` 的 `plan_mode.section`），并可通过 `exit_plan_mode` 工具把完整计划呈给用户评审，批准才退出计划模式。
+
+- **进入 / 退出**：用户输入 `/plan`（进入）、`/plan <消息>`（进入并携带任务描述）、`/plan off`（退出）。
+- **评审退出**：计划模式激活时，模型可调用 `exit_plan_mode`（参数 `plan` 为以 `#` 开头的 markdown 计划）。Web 端会弹出"计划审阅卡"，用户选择 **Approve**（批准并退出）/ **Keep planning**（继续，可带反馈）/ **Chat about it**（留在计划模式等待用户发言）。
+- **语义边界**：计划模式是**软引导**，只改变模型提示词与评审退出流程，不强制、不隔离；需要强制限制的部署应单独配置沙箱（`config.yaml` 的 `sandbox`）与承诺层（`commitment`）。
+- **配置**：`config.yaml` 的 `plan_mode` 段，`section` 必填非空；`enabled: false` 时中间件与 `exit_plan_mode` 工具均不装配，行为与未引入计划模式前一致。

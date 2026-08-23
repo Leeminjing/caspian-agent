@@ -1014,6 +1014,24 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.plan-review-body {
+  max-height: 340px;
+  margin: 0;
+  overflow: auto;
+  padding: 16px 17px;
+  color: #303438;
+  background: #fcfcfb;
+  font-size: 13px;
+  line-height: 1.65;
+}
+
+.plan-review-body h1,
+.plan-review-body h2,
+.plan-review-body h3 {
+  margin: 0 0 8px;
+  line-height: 1.3;
+}
+
 .review-contract-editor {
   display: block;
   width: 100%;

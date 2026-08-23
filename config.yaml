@@ -45,7 +45,10 @@ skills:
   container_path: /mnt/skills
 
 sandbox:
-  # 使用 AioSandbox (Docker all-in-one 沙箱) 时的配置:
+  # 临时切换：LocalSandbox（本机文件系统沙箱，无需 Docker），用于计划模式 CDP 验证。
+  # 原有 AioSandbox (Docker) 配置保留在下方注释，测完还原。
+  use: caspian.sandbox.local:LocalSandbox
+  # 以下为 AioSandbox 取值（use 指向 LocalSandbox 时不生效，保留备查）：
   # use: caspian.community.aio_sandbox:AioSandbox
   # image: ghcr.io/agent-infra/sandbox:latest
   # port: 8080
@@ -57,15 +60,18 @@ sandbox:
   #     read_only: false
   # environment:
   #   MY_KEY: value
-  use: caspian.community.aio_sandbox:AioSandbox
-  image: ghcr.io/agent-infra/sandbox:latest
-  port: 8080
-  replicas: 3
-  container_prefix: caspian-sandbox
 
 commitment:
   enabled: true
   context7_url: https://mcp.context7.com/mcp
+
+plan_mode:
+  enabled: true
+  section: |
+    You are in plan mode. Explore and design before presenting the complete
+    plan through exit_plan_mode. The user may approve (carry out the plan
+    from your next step) or keep planning — their feedback comes back in the
+    tool result; revise and present again.
 
 context_compression:
   enabled: true
@@ -114,7 +120,7 @@ langgraph_store:
 
 database:
   backend: postgres
-  url: postgresql+asyncpg://caspian:qweasdzxc123@localhost:7221/caspian
+  url: postgresql+asyncpg://caspian:qweasdzxc123@127.0.0.1:7221/caspian
   echo: false
   pool_size: 5
   max_overflow: 10

@@ -31,10 +31,12 @@
         plugin_user_id=user_id) 汇集全局工具（含插件 Tool 层）
         (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
         (3b) 合并: [describe_skill_tool] + global_tools
+        (3c) plan_mode.enabled 为真时追加 exit_plan_mode 评审退出工具
     (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware 与 subagent 限制/账本
         (4a) 调用 build_general_middlewares() 获取通用中间件链
         (4b) subagent_enabled 时追加 SubagentLimitMiddleware 与 DelegationLedgerMiddleware
         (4c) 链尾追加 PluginHookMiddleware（插件注入的有序 Hook 实现；无插件时零开销）
+        (4d) plan_mode.enabled 为真时链尾追加 PlanModeMiddleware（拦截 /plan、注入策略段）
     (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt，
         追加委托纪律段与选中技能段
     (6) 调用 langchain.agents.create_agent(model, tools, middleware, system_prompt, state_schema=LeadAgentState)
@@ -285,6 +287,12 @@ async def make_lead_agent(
     describe_skill_tool = build_describe_skill_tool(catalog)
     tools = [describe_skill_tool] + tools
 
+    # 计划模式：enabled 时追加 exit_plan_mode 评审退出工具（未启用零变化）
+    if app_config.plan_mode.enabled:
+        from caspian.agents.plan import build_exit_plan_mode_tool
+
+        tools.append(build_exit_plan_mode_tool())
+
     # (4) system prompt（委托纪律段 + 选中技能段）
     system_prompt = apply_prompt_template(
         agent_name=agent_name,
@@ -322,6 +330,14 @@ async def make_lead_agent(
     from caspian.plugins.runtime import get_plugin_runtime
 
     middleware.append(PluginHookMiddleware(get_plugin_runtime(), user_id=user_id))
+
+    # 计划模式：enabled 时链尾追加 PlanModeMiddleware（未启用零变化；与既有中间件顺序无关）
+    if app_config.plan_mode.enabled:
+        from caspian.agents.plan import PlanModeMiddleware
+
+        middleware.append(
+            PlanModeMiddleware(app_config.plan_mode, frozenset(catalog.names))
+        )
 
     # (6) create_agent
     return create_agent(

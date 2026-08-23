@@ -8,10 +8,22 @@
     name: "commit",
     description: "启动九阶段承诺流程",
     command: true,
+    token: "commit",
+  };
+
+  const PLAN_ENTRY = {
+    name: "plan",
+    description: "进入计划模式（先规划后执行，经 exit_plan_mode 评审）",
+    command: true,
+    token: "plan",
   };
 
   function commitVisible(query) {
     return "commit".startsWith(String(query || "").toLowerCase());
+  }
+
+  function planVisible(query) {
+    return "plan".startsWith(String(query || "").toLowerCase());
   }
 
   function normalizeSkill(raw) {
@@ -84,7 +96,7 @@
 
   function messageText(value) {
     const text = value.trim();
-    if (/^\/commit(?=\s|$)/.test(text)) return text;
+    if (/^\/commit(?=\s|$)/.test(text) || /^\/plan(?=\s|$)/.test(text)) return text;
     return [selected.map((name) => `/${name}`).join(" "), text].filter(Boolean).join(" ");
   }
 
@@ -192,8 +204,11 @@
       render();
       try {
         skills = await loadSkills();
-        status = skills.length || commitVisible(info.query) ? "" : "No enabled Skills";
+        status = skills.length || commitVisible(info.query) || planVisible(info.query)
+          ? ""
+          : "No enabled Skills";
         matches = filterSkills(skills, info.query);
+        if (planVisible(info.query)) matches = [PLAN_ENTRY, ...matches];
         if (commitVisible(info.query)) matches = [COMMIT_ENTRY, ...matches];
         active = Math.min(active, Math.max(0, matches.length - 1));
       } catch {
@@ -208,8 +223,9 @@
       const row = matches[index];
       let caret = info.start;
       if (row.command) {
-        input.value = replaceToken(input.value, info, "commit");
-        caret += "/commit ".length;
+        const token = row.token || "commit";
+        input.value = replaceToken(input.value, info, token);
+        caret += `/${token} `.length;
       } else {
         const name = row.name;
         if (!selected.includes(name)) selected.push(name);
@@ -259,6 +275,7 @@
     filterSkills,
     loadSkills,
     messageText,
+    planVisible,
     removeToken,
     replaceToken,
     selectedNames,

@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=change50">
+  <link rel="stylesheet" href="/assets/app.css?v=plan-mode-1">
   <link rel="stylesheet" href="/assets/skills.css?v=change50">
   <link rel="stylesheet" href="/assets/markdown.css?v=merge-45">
   <link rel="stylesheet" href="/assets/context.css?v=f49">
@@ -166,6 +166,32 @@
     </article>
   </template>
 
+  <template id="plan-review-template">
+    <article class="review-panel plan-review-panel">
+      <header>
+        <div>
+          <span class="review-kicker">Plan review</span>
+          <h3>Approve this plan and leave plan mode?</h3>
+        </div>
+        <span class="review-badge">等待确认</span>
+      </header>
+      <div class="plan-review-body"></div>
+      <p class="review-error" role="alert"></p>
+      <div class="review-actions">
+        <button class="button button-primary plan-approve-button" type="button">Approve</button>
+        <button class="button button-secondary plan-keep-toggle" type="button">Keep planning</button>
+        <button class="button button-quiet plan-discuss-button" type="button">Chat about it</button>
+      </div>
+      <form class="revision-form" hidden>
+        <textarea class="revision-input plan-feedback-input" rows="3" placeholder="输入需要调整的内容"></textarea>
+        <div class="revision-footer">
+          <button class="button button-quiet plan-cancel-keep" type="button">取消</button>
+          <button class="button button-primary" type="submit">提交反馈</button>
+        </div>
+      </form>
+    </article>
+  </template>
+
   <template id="interrupt-template">
     <article class="review-panel interrupt-panel">
       <header>
@@ -239,11 +265,11 @@
 
   <script src="/assets/vendor/marked.min.js" defer></script>
   <script src="/assets/vendor/purify.min.js" defer></script>
-  <script src="/assets/skills.js?v=slash-commit-3" defer></script>
+  <script src="/assets/skills.js?v=plan-mode-1" defer></script>
   <script src="/assets/context-editor.js?v=f49" defer></script>
   <script src="/assets/context-ui.js?v=polish-2" defer></script>
   <script src="/assets/plugins.js?v=polish-2" defer></script>
-  <script src="/assets/app.js?v=polish-5" defer></script>
+  <script src="/assets/app.js?v=plan-mode-1" defer></script>
   <script src="/assets/ui-polish.js?v=polish-5" defer></script>
 </body>
 </html>

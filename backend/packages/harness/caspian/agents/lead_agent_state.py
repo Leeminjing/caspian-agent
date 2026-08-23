@@ -2,6 +2,7 @@
 本文件对外提供 LeadAgentState 类及辅助 TypedDict 和自定义 reducer。
 
 LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展业务字段
+    plan_active — 计划模式激活标记（NotRequired[bool]，last-wins，空值折叠为未激活）
 SandboxState: 沙箱绑定状态
 ViewedImageData: 已查看图片数据
 DelegationEntry: task 委派账本条目
@@ -123,3 +124,4 @@ class LeadAgentState(AgentState):
     viewed_images: Annotated[dict[str, ViewedImageData], merge_viewed_images]
     task_contract: NotRequired[str]
     delegations: Annotated[list[DelegationEntry], merge_delegations]
+    plan_active: NotRequired[bool]

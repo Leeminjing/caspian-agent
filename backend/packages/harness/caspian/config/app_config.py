@@ -25,6 +25,7 @@ from caspian.config.database_config import DatabaseConfig
 from caspian.config.extensions_config import ExtensionsConfig
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
 from caspian.config.model_config import ModelConfig
+from caspian.config.plan_mode_config import PlanModeConfig
 from caspian.config.sandbox_config import SandboxConfig
 from caspian.config.skills_config import SkillsConfig
 from caspian.config.stream_bridge_config import StreamBridgeConfig
@@ -50,6 +51,7 @@ class AppConfig(BaseModel):
     context_compression: ContextCompressionConfig = ContextCompressionConfig()
     subagents: SubagentsAppConfig = SubagentsAppConfig()
     agent: AgentConfig = AgentConfig()
+    plan_mode: PlanModeConfig = PlanModeConfig()
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

@@ -1055,6 +1055,60 @@ function disableReview(panel) {
   panel.classList.add("review-submitted");
 }
 
+function showPlanReview(interrupt) {
+  removeThinking();
+  finishTracePanel("等待确认");
+  state.pendingInterrupt = interrupt;
+  if (state.tracePanel?.isConnected) state.tracePanel.open = true;
+  const payload = interrupt.value || {};
+  setBusy(false);
+  setStatus("review", "等待确认");
+  removeEmptyState();
+
+  const fragment = $("#plan-review-template").content.cloneNode(true);
+  const panel = $(".plan-review-panel", fragment);
+  const body = $(".plan-review-body", panel);
+  const plan = payload.plan || "";
+  const html = renderMarkdown(plan);
+  if (html) body.innerHTML = html;
+  else body.textContent = plan;
+  bindPlanReview(panel);
+  $("#messages").append(panel);
+  scrollMessages();
+}
+
+function bindPlanReview(panel) {
+  const form = $(".revision-form", panel);
+  const input = $(".plan-feedback-input", panel);
+  const approveButton = $(".plan-approve-button", panel);
+  const keepToggle = $(".plan-keep-toggle", panel);
+  const discussButton = $(".plan-discuss-button", panel);
+
+  approveButton.addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: "approve" });
+  });
+  keepToggle.addEventListener("click", () => {
+    $(".review-actions", panel).hidden = true;
+    form.hidden = false;
+    input.focus();
+  });
+  discussButton.addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: "dismiss" });
+  });
+  $(".plan-cancel-keep", panel).addEventListener("click", () => {
+    form.hidden = true;
+    $(".review-actions", panel).hidden = false;
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const value = input.value.trim();
+    disableReview(panel);
+    resumeRun({ decision: "keep", feedback: value });
+  });
+}
+
 async function streamRun(body) {
   ensureThread();
   removeInterruptPanel();
@@ -1119,7 +1173,10 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
   }
   if (event === "metadata" && data?.run_id) state.currentRunId = data.run_id;
   if (event === "events") consumeGraphEvent(data);
-  if (event === "interrupt") showReview(data);
+  if (event === "interrupt") {
+    if (data?.value?.type === "plan_review") showPlanReview(data);
+    else showReview(data);
+  }
   // 仅当前流的结束帧操作全局面板；被打断的旧流结束帧不覆盖新状态
   if (event === "end" && streamId === state.activeStreamId) {
     if (!state.pendingInterrupt && !state.interruptedByUser) finishTracePanel("已完成");
