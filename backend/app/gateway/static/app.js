@@ -35,6 +35,7 @@ const state = {
   threads: JSON.parse(localStorage.getItem("caspian.threads") || "[]"),
   threadId: localStorage.getItem("caspian.current_thread") || null,
   running: false,
+  followMessages: true,
   pendingInterrupt: null,
   currentRunId: null,
   interruptedByUser: false,
@@ -51,6 +52,8 @@ const state = {
   traceStreams: new Map(),
   traceScrollScheduled: false,
   activeSelectedSkills: [],
+  models: [],
+  modelName: null,
   compactionNoticeTimer: null,
   compactionArchived: [],
   compactionSummaryText: "",
@@ -130,6 +133,7 @@ function selectThread(id) {
   if (state.running) return;
   finishTracePanel("已停止");
   state.threadId = id;
+  state.followMessages = true;
   saveCurrentThread();
   state.pendingInterrupt = null;
   state.currentRunId = null;
@@ -363,6 +367,9 @@ function setStatus(kind, label) {
   element.className = `status status-${kind}`;
   element.innerHTML = "<span></span>";
   element.append(document.createTextNode(label));
+  document.dispatchEvent(new CustomEvent("ui:status", {
+    detail: { kind, message: label },
+  }));
 }
 
 function setProgress(stage, visible = true) {
@@ -439,7 +446,8 @@ function removeThinking() {
   $("#thinking")?.remove();
 }
 
-function scrollMessages() {
+function scrollMessages(force = false) {
+  if (!force && !state.followMessages) return;
   const messages = $("#messages");
   requestAnimationFrame(() => {
     messages.scrollTop = messages.scrollHeight;
@@ -1132,6 +1140,7 @@ async function submitTask(content, selectedSkills = []) {
     saveThreads();
     renderThreads();
   }
+  state.followMessages = true;
   addMessage("user", content);
   const files = state.uploads.map(({ filename, size }) => ({ filename, size }));
   state.uploads = [];
@@ -1145,6 +1154,7 @@ async function submitTask(content, selectedSkills = []) {
       }],
     },
     selected_skills: selectedSkills,
+    context: state.modelName ? { model_name: state.modelName } : undefined,
   });
 }
 
@@ -1267,6 +1277,64 @@ function handleError(error) {
   addMessage("error", error.message || String(error));
 }
 
+async function loadModels() {
+  try {
+    const res = await fetch("/api/models", { credentials: "same-origin" });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.models = Array.isArray(data.models) ? data.models : [];
+    state.modelName = state.modelName || (state.models[0]?.name || null);
+    renderModelToggle();
+  } catch {
+    // 模型列表加载失败不影响主流程
+  }
+}
+
+function renderModelToggle() {
+  const selected = state.models.find((m) => m.name === state.modelName);
+  const name = $("#model-name");
+  if (name) name.textContent = selected?.display_name || selected?.name || "";
+  renderModelPopover();
+}
+
+function renderModelPopover() {
+  const pop = $("#model-popover");
+  if (!pop) return;
+  pop.replaceChildren();
+  state.models.forEach((m) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = `model-option${m.name === state.modelName ? " is-selected" : ""}`;
+    btn.setAttribute("role", "option");
+    btn.dataset.model = m.name;
+    btn.innerHTML = `<span class="mo-name"></span><span class="mo-desc"></span>`;
+    $(".mo-name", btn).textContent = m.display_name || m.name;
+    $(".mo-desc", btn).textContent = m.name;
+    btn.addEventListener("click", () => selectModel(m.name));
+    pop.append(btn);
+  });
+}
+
+function selectModel(name) {
+  state.modelName = name;
+  renderModelToggle();
+  closeModelPopover();
+}
+
+function openModelPopover() {
+  const pop = $("#model-popover");
+  if (!pop || !state.models.length) return;
+  renderModelPopover();
+  pop.hidden = false;
+  $("#model-toggle")?.setAttribute("aria-expanded", "true");
+}
+
+function closeModelPopover() {
+  const pop = $("#model-popover");
+  if (pop) pop.hidden = true;
+  $("#model-toggle")?.setAttribute("aria-expanded", "false");
+}
+
 function resizeComposer() {
   const input = $("#message-input");
   input.style.height = "auto";
@@ -1292,6 +1360,7 @@ function showApp(user) {
   $("#user-avatar").textContent = name.slice(0, 1).toUpperCase();
   ensureThread();
   selectThread(state.threadId);
+  loadModels();
 }
 
 async function restoreSession() {
@@ -1359,6 +1428,9 @@ $("#file-input").addEventListener("change", async (event) => {
 });
 
 $("#message-input").addEventListener("input", resizeComposer);
+$("#messages").addEventListener("scroll", (event) => {
+  state.followMessages = isNearBottom(event.currentTarget);
+}, { passive: true });
 $("#message-input").addEventListener("keydown", (event) => {
   if (event.defaultPrevented) return;
   if (event.key === "Enter" && !event.shiftKey) {
@@ -1389,6 +1461,20 @@ $("#composer").addEventListener("submit", async (event) => {
       state.activeSelectedSkills = [];
     }
   }
+});
+
+$("#model-toggle")?.addEventListener("click", () => {
+  const pop = $("#model-popover");
+  if (pop?.hidden) openModelPopover();
+  else closeModelPopover();
+});
+
+document.addEventListener("click", (event) => {
+  if (!event.target.closest?.(".model-popover, .model-toggle")) closeModelPopover();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") closeModelPopover();
 });
 
 bindPrompts();
@@ -1464,15 +1550,34 @@ async function loadDecisionTable() {
 }
 
 const decisionTablePanel = $("#decision-table-panel");
+function setDecisionTableOpen(open) {
+  const wasOpen = !decisionTablePanel.hidden;
+  const trigger = document.activeElement;
+  decisionTablePanel.hidden = !open;
+  $("#decision-table-toggle").setAttribute("aria-expanded", String(open));
+  if (open && !wasOpen) {
+    document.dispatchEvent(new CustomEvent("ui:surface-open", {
+      detail: {
+        surface: decisionTablePanel,
+        trigger,
+        modal: false,
+        label: "决策等级表",
+      },
+    }));
+  } else if (!open && wasOpen) {
+    document.dispatchEvent(new CustomEvent("ui:surface-close", {
+      detail: { surface: decisionTablePanel, label: "决策等级表" },
+    }));
+  }
+}
+
 $("#decision-table-toggle")?.addEventListener("click", () => {
   const willOpen = decisionTablePanel.hidden;
-  decisionTablePanel.hidden = !willOpen;
-  $("#decision-table-toggle").setAttribute("aria-expanded", String(willOpen));
+  setDecisionTableOpen(willOpen);
   if (willOpen) loadDecisionTable();
 });
 $("#decision-table-close")?.addEventListener("click", () => {
-  decisionTablePanel.hidden = true;
-  $("#decision-table-toggle").setAttribute("aria-expanded", "false");
+  setDecisionTableOpen(false);
 });
 
 restoreSession().catch(handleError);

@@ -86,6 +86,11 @@
     const overlay = document.createElement("section");
     overlay.id = "context-editor-overlay";
     overlay.className = "context-editor-view";
+    overlay.dataset.uiSurface = "context-editor";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute("aria-label", "Context 编辑器");
+    overlay.tabIndex = -1;
     overlay.hidden = true;
     overlay.innerHTML = `<aside class="context-source-panel"></aside>
       <section class="context-definition-panel"></section>`;
@@ -104,6 +109,9 @@
     if (!tree.length) {
       rail.hidden = true;
       document.body.classList.remove("has-context-rail");
+      document.dispatchEvent(new CustomEvent("ui:context-rail-change", {
+        detail: { available: false },
+      }));
       return;
     }
     const family = currentId
@@ -132,6 +140,9 @@
       <button type="button" class="context-rail-add" data-action="derive-context">新增 Context</button>`;
     rail.hidden = false;
     document.body.classList.add("has-context-rail");
+    document.dispatchEvent(new CustomEvent("ui:context-rail-change", {
+      detail: { available: true },
+    }));
   }
 
   function updateBanner() {
@@ -245,26 +256,56 @@
   }
 
   function showEditor() {
+    const trigger = document.activeElement;
+    const opening = state.overlay.hidden;
     state.overlay.hidden = false;
     document.body.style.overflow = "hidden";
     renderContextEditor();
+    if (opening) {
+      document.dispatchEvent(new CustomEvent("ui:surface-open", {
+        detail: {
+          surface: state.overlay,
+          trigger,
+          modal: true,
+          label: "Context 编辑器",
+        },
+      }));
+    }
   }
 
   function closeContextEditor() {
+    const wasOpen = state.overlay && !state.overlay.hidden;
     cleanupContextPointerDrag();
     state.draft = null;
     state.overlay.hidden = true;
     document.body.style.overflow = "";
+    if (wasOpen) {
+      document.dispatchEvent(new CustomEvent("ui:surface-close", {
+        detail: { surface: state.overlay, label: "Context 编辑器" },
+      }));
+    }
     refreshTree().catch(() => {});
   }
 
   function showEditorError(message) {
+    const trigger = document.activeElement;
+    const opening = state.overlay.hidden;
     state.overlay.hidden = false;
     document.body.style.overflow = "hidden";
     state.overlay.querySelector(".context-source-panel").innerHTML =
       `<p class="context-empty-source muted">${escapeHtml(message)}</p>`;
     state.overlay.querySelector(".context-definition-panel").innerHTML =
       `<header><div><h1>无法打开编辑器</h1></div><button class="text-button" data-action="exit-context-editor">关闭</button></header>`;
+    if (opening) {
+      document.dispatchEvent(new CustomEvent("ui:surface-open", {
+        detail: {
+          surface: state.overlay,
+          trigger,
+          modal: true,
+          label: "Context 编辑器",
+        },
+      }));
+    }
   }
 
   function syncContextDraft() {

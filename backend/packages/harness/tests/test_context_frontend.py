@@ -16,7 +16,7 @@ class ContextFrontendTests(unittest.TestCase):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn('href="/assets/context.css?v=f49"', html)
         self.assertIn('src="/assets/context-editor.js?v=f49"', html)
-        self.assertIn('src="/assets/context-ui.js?v=f49"', html)
+        self.assertIn('src="/assets/context-ui.js?v=polish-2"', html)
         self.assertLess(
             html.index("context-ui.js"),
             html.index("app.js"),
@@ -42,6 +42,12 @@ class ContextFrontendTests(unittest.TestCase):
         self.assertIn(".animate([", script)
         self.assertIn('data-action="accept-context-projection"', script)
         self.assertIn('data-action="cancel-context-projection"', script)
+        self.assertIn('overlay.setAttribute("role", "dialog")', script)
+        self.assertIn('overlay.setAttribute("aria-modal", "true")', script)
+        self.assertIn('overlay.dataset.uiSurface = "context-editor"', script)
+        self.assertIn('new CustomEvent("ui:surface-open"', script)
+        self.assertIn('new CustomEvent("ui:surface-close"', script)
+        self.assertIn('new CustomEvent("ui:context-rail-change"', script)
 
     def test_context_css_editor_overlay_is_fixed_overlay_with_hidden_guard(self):
         css = (STATIC_DIR / "context.css").read_text(encoding="utf-8")

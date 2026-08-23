@@ -9,6 +9,7 @@ from backend.app.gateway.middleware.auth import (
 
 
 STATIC_DIR = Path(__file__).resolve().parents[3] / "app" / "gateway" / "static"
+ROUTERS_DIR = STATIC_DIR.parent / "routers"
 
 
 class IdCollector(HTMLParser):
@@ -141,6 +142,46 @@ class FrontendTests(unittest.TestCase):
         self.assertIn(".context-drag-preview {", css)
         self.assertIn("prefers-reduced-motion", css)
 
+    def test_ui_polish_assets_semantics_and_lifecycle_are_registered(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "ui-polish.css").read_text(encoding="utf-8")
+        polish = (STATIC_DIR / "ui-polish.js").read_text(encoding="utf-8")
+        app = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        plugins = (STATIC_DIR / "plugins.js").read_text(encoding="utf-8")
+
+        self.assertIn('/assets/ui-polish.css?v=polish-8', html)
+        self.assertIn('/assets/ui-polish.js?v=polish-5', html)
+        self.assertIn('id="model-toggle"', html)
+        self.assertIn('id="model-popover"', html)
+        self.assertIn('class="model-toggle"', html)
+        self.assertIn('id="ui-status-announcer"', html)
+        self.assertIn('role="status"', html)
+        self.assertIn('aria-atomic="true"', html)
+        self.assertIn('id="mobile-thread-toggle"', html)
+        self.assertIn('id="mobile-context-toggle"', html)
+        self.assertIn('id="mobile-drawer-backdrop"', html)
+        self.assertIn('aria-live="off"', html)
+        self.assertIn('data-ui-surface="decision-table"', html)
+        self.assertIn('data-ui-surface="plugins"', html)
+
+        self.assertIn("@media (max-width: 720px)", css)
+        self.assertIn("100dvh", css)
+        self.assertIn("body.mobile-threads-open .sidebar", css)
+        self.assertIn("body.mobile-context-open .context-rail", css)
+        self.assertIn("prefers-reduced-motion", css)
+
+        self.assertIn('document.addEventListener("ui:surface-open"', polish)
+        self.assertIn('document.addEventListener("ui:surface-close"', polish)
+        self.assertIn('document.addEventListener("ui:status"', polish)
+        self.assertIn("state.modalBackground", polish)
+        self.assertIn("element.inert = true", polish)
+        self.assertIn('event.target.closest?.(".thread-item, #new-thread")', polish)
+        self.assertIn("state.followMessages", app)
+        self.assertIn("if (!force && !state.followMessages) return", app)
+        self.assertIn('new CustomEvent("ui:status"', app)
+        self.assertIn('new CustomEvent("ui:surface-open"', app)
+        self.assertIn('new CustomEvent("ui:surface-open"', plugins)
+
     def test_compaction_summary_rendered_as_fold(self):
         script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
@@ -168,6 +209,24 @@ class FrontendTests(unittest.TestCase):
         self.assertIn(".compaction-status {", css)
         self.assertIn(".tool-item {", css)
         self.assertIn(".tool-item summary {", css)
+
+    def test_model_selector_wiring(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "ui-polish.css").read_text(encoding="utf-8")
+        router = (ROUTERS_DIR / "models.py").read_text(encoding="utf-8")
+
+        self.assertIn('id="model-toggle"', html)
+        self.assertIn('id="model-popover"', html)
+        self.assertIn('class="model-toggle"', html)
+        self.assertIn("loadModels", script)
+        self.assertIn("/api/models", script)
+        self.assertIn("context: state.modelName", script)
+        self.assertIn("model_name", script)
+        self.assertIn(".model-popover {", css)
+        self.assertIn(".model-option {", css)
+        self.assertIn('@router.get("/models")', router)
+        self.assertIn('"models"', router)
 
 
 if __name__ == "__main__":

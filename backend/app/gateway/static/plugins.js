@@ -108,20 +108,33 @@ window.CaspianPlugins = (() => {
   /* ---------- 面板开关与刷新 ---------- */
 
   function open() {
-    state.open = true;
     const panel = $("#plugin-panel");
+    const opening = !state.open;
+    const trigger = document.activeElement;
+    state.open = true;
     const toggle = $("#plugin-toggle");
     if (panel) panel.hidden = false;
     if (toggle) toggle.setAttribute("aria-expanded", "true");
+    if (panel && opening) {
+      document.dispatchEvent(new CustomEvent("ui:surface-open", {
+        detail: { surface: panel, trigger, modal: false, label: "插件调试视图" },
+      }));
+    }
     refresh();
   }
 
   function close() {
-    state.open = false;
     const panel = $("#plugin-panel");
+    const wasOpen = state.open;
+    state.open = false;
     const toggle = $("#plugin-toggle");
     if (panel) panel.hidden = true;
     if (toggle) toggle.setAttribute("aria-expanded", "false");
+    if (panel && wasOpen) {
+      document.dispatchEvent(new CustomEvent("ui:surface-close", {
+        detail: { surface: panel, label: "插件调试视图" },
+      }));
+    }
   }
 
   function toggle() {
@@ -141,9 +154,9 @@ window.CaspianPlugins = (() => {
   }
 
   function init() {
-    const toggle = $("#plugin-toggle");
+    const toggleButton = $("#plugin-toggle");
     const closeBtn = $("#plugin-close");
-    if (toggle) toggle.addEventListener("click", toggle);
+    if (toggleButton) toggleButton.addEventListener("click", toggle);
     if (closeBtn) closeBtn.addEventListener("click", close);
     renderChain();
   }

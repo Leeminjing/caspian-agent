@@ -10,8 +10,10 @@
   <link rel="stylesheet" href="/assets/markdown.css?v=merge-45">
   <link rel="stylesheet" href="/assets/context.css?v=f49">
   <link rel="stylesheet" href="/assets/plugins.css?v=plugin-1">
+  <link rel="stylesheet" href="/assets/ui-polish.css?v=polish-8">
 </head>
 <body>
+  <p id="ui-status-announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
   <section id="login-view" class="login-view">
     <main class="login-panel">
       <div class="brand brand-login">
@@ -53,14 +55,25 @@
 
     <main class="workspace">
       <header class="workspace-header">
-        <div>
+        <button id="mobile-thread-toggle" class="icon-button mobile-header-button" type="button"
+          title="打开会话列表" aria-label="打开会话列表" aria-controls="thread-list" aria-expanded="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <div class="workspace-heading">
           <h1 id="thread-title">新会话</h1>
           <p id="thread-id" class="thread-id"></p>
         </div>
-        <button id="decision-table-toggle" class="icon-button" type="button" title="查看等级表" aria-label="查看等级表" aria-expanded="false">
+        <button id="mobile-context-toggle" class="icon-button mobile-header-button" type="button"
+          title="打开 Context 列表" aria-label="打开 Context 列表" aria-controls="context-rail"
+          aria-expanded="false" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16M7 8h7a3 3 0 013 3v9M7 16h7"/></svg>
+        </button>
+        <button id="decision-table-toggle" class="icon-button" type="button" title="查看等级表" aria-label="查看等级表"
+          aria-controls="decision-table-panel" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zM3 9h18M3 13h18M3 17h18"/></svg>
         </button>
-        <button id="plugin-toggle" class="icon-button" type="button" title="插件调试视图" aria-label="插件调试视图" aria-expanded="false">
+        <button id="plugin-toggle" class="icon-button" type="button" title="插件调试视图" aria-label="插件调试视图"
+          aria-controls="plugin-panel" aria-expanded="false">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7z"/></svg>
         </button>
         <span id="run-status" class="status status-ready"><span></span>就绪</span>
@@ -74,7 +87,7 @@
         <ol id="progress-steps"></ol>
       </section>
 
-      <section id="messages" class="messages" aria-live="polite">
+      <section id="messages" class="messages" role="log" aria-label="对话消息" aria-live="off">
         <div id="empty-state" class="empty-state">
           <span class="empty-mark" aria-hidden="true">C</span>
           <h2>把目标交给 Caspian</h2>
@@ -89,23 +102,38 @@
         <div id="attachments" class="attachments" hidden></div>
         <div id="skill-picker" class="skill-picker" hidden></div>
         <form id="composer" class="composer">
-          <input id="file-input" type="file" multiple hidden>
-          <button id="attach-button" class="icon-button composer-icon" type="button" title="添加文件" aria-label="添加文件">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.6l-8.9 8.9a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.6-8.6"/></svg>
-          </button>
-          <div id="selected-skills" class="selected-skills" aria-label="Selected Skills" hidden></div>
-          <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"
-            role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
-            aria-expanded="false"></textarea>
-          <button id="interrupt-button" class="icon-button composer-icon interrupt-icon" type="button" title="打断" aria-label="打断" hidden>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg>
-          </button>
-          <button id="send-button" class="send-button" type="submit" aria-label="发送" title="发送">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
-          </button>
+          <div class="composer-row-main">
+            <div id="selected-skills" class="selected-skills" aria-label="Selected Skills" hidden></div>
+            <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"
+              role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
+              aria-expanded="false"></textarea>
+            <button id="interrupt-button" class="icon-button composer-icon interrupt-icon" type="button" title="打断" aria-label="打断" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10v10H7z"/></svg>
+            </button>
+            <button id="send-button" class="send-button" type="submit" aria-label="发送" title="发送">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </button>
+          </div>
+          <div class="composer-row-settings">
+            <input id="file-input" type="file" multiple hidden>
+            <button id="attach-button" class="icon-button composer-icon" type="button" title="添加文件" aria-label="添加文件">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21.4 11.6l-8.9 8.9a6 6 0 01-8.5-8.5l9.2-9.2a4 4 0 015.7 5.7l-9.2 9.2a2 2 0 01-2.8-2.8l8.6-8.6"/></svg>
+            </button>
+            <div class="composer-settings-right">
+              <button id="model-toggle" type="button" class="model-toggle" aria-haspopup="listbox" aria-expanded="false">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3l8 4v5c0 5-3.4 8.2-8 9-4.6-.8-8-4-8-9V7z"/></svg>
+                <span class="model-label">模型</span>
+                <span id="model-name" class="model-name"></span>
+                <svg class="model-caret" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+              <div id="model-popover" class="model-popover" role="listbox" aria-label="选择模型" hidden></div>
+            </div>
+          </div>
         </form>
       </section>
     </main>
+    <button id="mobile-drawer-backdrop" class="mobile-drawer-backdrop" type="button"
+      aria-label="关闭导航" hidden></button>
   </div>
 
   <template id="review-template">
@@ -182,9 +210,10 @@
     </details>
   </template>
 
-  <section id="decision-table-panel" class="decision-table-panel" hidden aria-label="决策等级表">
+  <section id="decision-table-panel" class="decision-table-panel" hidden role="dialog" aria-modal="false"
+    aria-labelledby="decision-table-title" tabindex="-1" data-ui-surface="decision-table">
     <header>
-      <strong>决策等级表</strong>
+      <strong id="decision-table-title">决策等级表</strong>
       <span id="decision-table-version" class="decision-table-version"></span>
       <button id="decision-table-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -193,9 +222,10 @@
     <div id="decision-table-body"></div>
   </section>
 
-  <section id="plugin-panel" class="plugin-panel" hidden aria-label="插件调试视图">
+  <section id="plugin-panel" class="plugin-panel" hidden role="dialog" aria-modal="false"
+    aria-labelledby="plugin-panel-title" tabindex="-1" data-ui-surface="plugins">
     <header>
-      <strong>插件</strong>
+      <strong id="plugin-panel-title">插件</strong>
       <span class="plugin-scope">调试视图</span>
       <button id="plugin-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
@@ -211,8 +241,9 @@
   <script src="/assets/vendor/purify.min.js" defer></script>
   <script src="/assets/skills.js?v=slash-commit-3" defer></script>
   <script src="/assets/context-editor.js?v=f49" defer></script>
-  <script src="/assets/context-ui.js?v=f49" defer></script>
-  <script src="/assets/plugins.js?v=plugin-1" defer></script>
-  <script src="/assets/app.js?v=plugin-1" defer></script>
+  <script src="/assets/context-ui.js?v=polish-2" defer></script>
+  <script src="/assets/plugins.js?v=polish-2" defer></script>
+  <script src="/assets/app.js?v=polish-5" defer></script>
+  <script src="/assets/ui-polish.js?v=polish-5" defer></script>
 </body>
 </html>
