@@ -312,6 +312,7 @@ textarea:focus-visible {
 .workspace {
   display: grid;
   min-width: 0;
+  grid-template-columns: minmax(0, 1fr);
   height: 100vh;
   grid-template-rows: auto auto minmax(0, 1fr) auto;
   background: var(--surface);
@@ -482,7 +483,10 @@ textarea:focus-visible {
 
 .messages {
   min-height: 0;
+  min-width: 0;
+  max-width: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 26px max(24px, calc((100% - 820px) / 2));
 }
 
@@ -1118,6 +1122,7 @@ textarea:focus-visible {
 }
 
 .composer-wrap {
+  min-width: 0;
   padding: 12px max(24px, calc((100% - 820px) / 2)) 20px;
   background: white;
 }
@@ -1296,8 +1301,7 @@ textarea:focus-visible {
 
 /* --- 决策等级表面板 --- */
 .decision-table-panel {
-  position: fixed;
-  top: 64px;
+  position: fixed;  top: 64px;
   right: 16px;
   z-index: 50;
   width: min(520px, calc(100vw - 32px));
@@ -1557,3 +1561,87 @@ textarea:focus-visible {
   max-height: 300px;
   overflow-y: auto;
 }
+
+/* --- Composer surface：goal dock + composer 统一宽度/右缘（根修窄屏拆盒） --- */
+.composer-surface {
+  width: 100%;
+  min-width: 0;
+}
+/* composer 两行保持同一边框盒；窄屏不拆成"输入框 + 右侧发送/模型"两簇 */
+#composer,
+.composer-row-main,
+.composer-row-settings {
+  min-width: 0;
+}
+.composer-row-main,
+.composer-row-settings {
+  box-sizing: border-box;
+}
+.model-toggle .model-name {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* --- Goal 目标栏（composer surface 的 dock 行） --- */
+.goal-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border, #d0d7de);
+  border-radius: 8px;
+  background: var(--panel, #f6f8fa);
+  font-size: 13px;
+  line-height: 1.2;
+  white-space: nowrap;
+  min-width: 0;
+}
+.goal-bar-icon {
+  flex-shrink: 0;
+  color: var(--accent, #0969da);
+  font-size: 14px;
+}
+.goal-bar-text {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.goal-bar-phase {
+  font-weight: 600;
+  color: var(--muted, #57606a);
+  margin-right: 6px;
+}
+.goal-bar-obj {
+  color: var(--muted, #57606a);
+}
+.goal-bar-actions {
+  flex-shrink: 0;
+  display: inline-flex;
+  gap: 4px;
+  margin-left: auto;
+}
+.goal-bar-action {
+  border: none;
+  background: transparent;
+  color: var(--muted, #57606a);
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  line-height: 1;
+}
+.goal-bar-action[data-cmd="resume"] {
+  color: var(--accent, #0969da);
+}
+.goal-bar-action[data-cmd="pause"]:hover,
+.goal-bar-action[data-cmd="edit"]:hover {
+  color: var(--accent, #0969da);
+}
+.goal-bar-action[data-cmd="clear"]:hover {
+  color: #cf222e;
+}
+
+

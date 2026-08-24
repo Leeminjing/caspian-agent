@@ -153,8 +153,32 @@ function selectThread(id) {
   renderAttachments();
   renderThreads();
   setProgress(0, false);
+  refreshGoalBadge(state.threadId);
   loadThreadHistory();
   window.CaspianContextUi?.onThreadSelected();
+}
+
+async function refreshGoalBadge(threadId) {
+  if (!threadId) { renderGoalBadge(null); return; }
+  try {
+    const res = await fetch(`/api/threads/${encodeURIComponent(threadId)}/goal`, { credentials: "same-origin" });
+    if (!res.ok) { renderGoalBadge(null); return; }
+    const data = await res.json();
+    renderGoalBadge(data?.goal);
+  } catch {
+    renderGoalBadge(null);
+  }
+}
+
+let goalPollTimer = null;
+async function startGoalPoll(threadId) {
+  stopGoalPoll();
+  if (!threadId) return;
+  refreshGoalBadge(threadId);
+  goalPollTimer = setInterval(() => { refreshGoalBadge(threadId); }, 1500);
+}
+function stopGoalPoll() {
+  if (goalPollTimer !== null) { clearInterval(goalPollTimer); goalPollTimer = null; }
 }
 
 async function loadThreadHistory() {
@@ -1122,6 +1146,7 @@ async function streamRun(body) {
   state.traceStreams = new Map();
   setBusy(true);
   showThinking();
+  startGoalPoll(state.threadId);
   const response = await fetch(`/api/threads/${encodeURIComponent(state.threadId)}/runs/stream`, {
     method: "POST",
     credentials: "same-origin",
@@ -1177,16 +1202,82 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
     if (data?.value?.type === "plan_review") showPlanReview(data);
     else showReview(data);
   }
+  if (event === "goal_state") renderGoalBadge(data?.goal);
   // 仅当前流的结束帧操作全局面板；被打断的旧流结束帧不覆盖新状态
   if (event === "end" && streamId === state.activeStreamId) {
+    stopGoalPoll();
     if (!state.pendingInterrupt && !state.interruptedByUser) finishTracePanel("已完成");
     window.CaspianContextUi?.onRunEnded();
   }
   if (event === "error") {
+    stopGoalPoll();
     finishTracePanel("执行失败");
     window.CaspianContextUi?.onRunEnded();
     throw new Error(data?.error || "运行失败");
   }
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
+  ));
+}
+
+function submitGoalCommand(command) {
+  if (state.running || state.pendingInterrupt) return;
+  submitTask(`/goal ${command}`);
+}
+
+function startGoalEdit() {
+  const input = $("#message-input");
+  if (!input) return;
+  input.value = "/goal edit ";
+  input.focus();
+}
+
+function renderGoalBadge(goal) {
+  const el = $("#goal-bar");
+  if (!el) return;
+  if (!goal || goal.phase === "complete" || goal.phase === "none") {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const phaseWord = ({
+    active: "进行中的目标",
+    paused: "已暂停的目标",
+    blocked: "受阻的目标",
+  })[goal.phase] || goal.phase;
+  const rounds = `${goal.rounds_started}/${goal.max_goal_rounds}`;
+  const objective = (goal.objective || "").slice(0, 80);
+  const title = goal.blocked_reason
+    ? `${goal.blocked_reason.code}: ${goal.blocked_reason.message}（${rounds} 轮）`
+    : `${objective}（${rounds} 轮）`;
+  // 对齐 deepseek-harness GoalBar：active→暂停；paused→续跑；blocked→仅编辑+清除（无续跑）
+  const showToggle = goal.phase === "active" || goal.phase === "paused";
+  const toggleCmd = goal.phase === "paused" ? "resume" : "pause";
+  const toggleLabel = goal.phase === "paused" ? "续跑" : "暂停";
+  const toggleIcon = goal.phase === "paused" ? "▶" : "⏸";
+  el.title = title;
+  el.innerHTML =
+    `<span class="goal-bar-icon" aria-hidden="true">🎯</span>` +
+    `<span class="goal-bar-text">` +
+      `<span class="goal-bar-phase">${escapeHtml(phaseWord)}</span>` +
+      `<span class="goal-bar-obj">${escapeHtml(objective)}</span>` +
+    `</span>` +
+    `<span class="goal-bar-actions">` +
+      (showToggle ? `<button type="button" class="goal-bar-action" data-cmd="${toggleCmd}" title="${toggleLabel}" aria-label="${toggleLabel}">${toggleIcon}</button>` : "") +
+      `<button type="button" class="goal-bar-action" data-cmd="edit" title="编辑目标" aria-label="编辑目标">✎</button>` +
+      `<button type="button" class="goal-bar-action" data-cmd="clear" title="清除目标" aria-label="清除目标">🗑</button>` +
+    `</span>`;
+  el.hidden = false;
+  el.querySelectorAll(".goal-bar-action").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const cmd = btn.dataset.cmd;
+      if (cmd === "edit") startGoalEdit();
+      else submitGoalCommand(cmd);
+    });
+  });
 }
 
 async function submitTask(content, selectedSkills = []) {

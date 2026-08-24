@@ -48,6 +48,7 @@ from typing import TYPE_CHECKING
 from caspian.agents.commitment import CommitmentMiddleware
 from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
+from caspian.agents.middlewares.tool_error_middleware import ToolErrorMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
 
 if TYPE_CHECKING:
@@ -80,6 +81,8 @@ def build_general_middlewares(
     middlewares: list[AgentMiddleware] = []
     if context_compression is not None and context_compression.enabled:
         middlewares.append(ContextCompressionMiddleware(context_compression))
+    # 工具失败统一收口：置于链首（wrap_tool_call 最外层），捕获任何工具异常并回传 LLM
+    middlewares.append(ToolErrorMiddleware())
     middlewares.extend([
         UploadsMiddleware(),
         DecisionTableMiddleware(),
@@ -108,5 +111,5 @@ def build_subagent_middlewares(
         (1) 只保留 SandboxAuditMiddleware（shell 高危命令审计不可丢）
         (2) 不含 UploadsMiddleware（子上下文只含任务输入）与 CommitmentMiddleware（防嵌套承诺流程）
     """
-    middlewares: list[AgentMiddleware] = [SandboxAuditMiddleware()]
+    middlewares: list[AgentMiddleware] = [ToolErrorMiddleware(), SandboxAuditMiddleware()]
     return middlewares

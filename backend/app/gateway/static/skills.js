@@ -18,12 +18,23 @@
     token: "plan",
   };
 
+  const GOAL_ENTRY = {
+    name: "goal",
+    description: "目标模式：建立/查看/暂停/续跑/清除长耗时目标，自动跨回合推进",
+    command: true,
+    token: "goal",
+  };
+
   function commitVisible(query) {
     return "commit".startsWith(String(query || "").toLowerCase());
   }
 
   function planVisible(query) {
     return "plan".startsWith(String(query || "").toLowerCase());
+  }
+
+  function goalVisible(query) {
+    return "goal".startsWith(String(query || "").toLowerCase());
   }
 
   function normalizeSkill(raw) {
@@ -96,7 +107,7 @@
 
   function messageText(value) {
     const text = value.trim();
-    if (/^\/commit(?=\s|$)/.test(text) || /^\/plan(?=\s|$)/.test(text)) return text;
+    if (/^\/commit(?=\s|$)/.test(text) || /^\/plan(?=\s|$)/.test(text) || /^\/goal(?=\s|$)/.test(text)) return text;
     return [selected.map((name) => `/${name}`).join(" "), text].filter(Boolean).join(" ");
   }
 
@@ -204,12 +215,13 @@
       render();
       try {
         skills = await loadSkills();
-        status = skills.length || commitVisible(info.query) || planVisible(info.query)
+        status = skills.length || commitVisible(info.query) || planVisible(info.query) || goalVisible(info.query)
           ? ""
           : "No enabled Skills";
         matches = filterSkills(skills, info.query);
         if (planVisible(info.query)) matches = [PLAN_ENTRY, ...matches];
         if (commitVisible(info.query)) matches = [COMMIT_ENTRY, ...matches];
+        if (goalVisible(info.query)) matches = [GOAL_ENTRY, ...matches];
         active = Math.min(active, Math.max(0, matches.length - 1));
       } catch {
         status = "Could not load Skills";
@@ -273,6 +285,7 @@
     clearSelection,
     commitVisible,
     filterSkills,
+    goalVisible,
     loadSkills,
     messageText,
     planVisible,

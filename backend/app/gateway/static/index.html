@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=plan-mode-1">
+  <link rel="stylesheet" href="/assets/app.css?v=goal-display-3">
   <link rel="stylesheet" href="/assets/skills.css?v=change50">
   <link rel="stylesheet" href="/assets/markdown.css?v=merge-45">
   <link rel="stylesheet" href="/assets/context.css?v=f49">
@@ -99,11 +99,13 @@
       </section>
 
       <section class="composer-wrap">
-        <div id="attachments" class="attachments" hidden></div>
-        <div id="skill-picker" class="skill-picker" hidden></div>
-        <form id="composer" class="composer">
-          <div class="composer-row-main">
-            <div id="selected-skills" class="selected-skills" aria-label="Selected Skills" hidden></div>
+        <div class="composer-surface">
+          <div id="goal-bar" class="goal-bar" hidden></div>
+          <div id="attachments" class="attachments" hidden></div>
+          <div id="skill-picker" class="skill-picker" hidden></div>
+          <form id="composer" class="composer">
+            <div class="composer-row-main">
+              <div id="selected-skills" class="selected-skills" aria-label="Selected Skills" hidden></div>
             <textarea id="message-input" rows="1" placeholder="输入任务…" aria-label="任务内容"
               role="combobox" aria-autocomplete="list" aria-haspopup="listbox"
               aria-expanded="false"></textarea>
@@ -130,6 +132,7 @@
             </div>
           </div>
         </form>
+        </div>
       </section>
     </main>
     <button id="mobile-drawer-backdrop" class="mobile-drawer-backdrop" type="button"
@@ -265,11 +268,11 @@
 
   <script src="/assets/vendor/marked.min.js" defer></script>
   <script src="/assets/vendor/purify.min.js" defer></script>
-  <script src="/assets/skills.js?v=plan-mode-1" defer></script>
+  <script src="/assets/skills.js?v=goal-mode-1" defer></script>
   <script src="/assets/context-editor.js?v=f49" defer></script>
   <script src="/assets/context-ui.js?v=polish-2" defer></script>
   <script src="/assets/plugins.js?v=polish-2" defer></script>
-  <script src="/assets/app.js?v=plan-mode-1" defer></script>
+  <script src="/assets/app.js?v=goal-display-4" defer></script>
   <script src="/assets/ui-polish.js?v=polish-5" defer></script>
 </body>
 </html>

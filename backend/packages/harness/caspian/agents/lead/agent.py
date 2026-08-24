@@ -269,6 +269,8 @@ async def make_lead_agent(
     from caspian.config import get_app_config
 
     app_config = get_app_config("config.yaml")
+    # goal_mode 是与 AppConfig 字段严格关联的可选能力；用 getattr 兼容未含该字段的配置/测试桩
+    goal_mode = getattr(app_config, "goal_mode", None)
     # container_base_path 用于 system prompt（沙箱内的 skill 路径），host 路径用 SKILLS_PUBLIC_REAL_ROOT
     container_base_path = app_config.skills.container_path if app_config.skills else None
 
@@ -293,6 +295,12 @@ async def make_lead_agent(
 
         tools.append(build_exit_plan_mode_tool())
 
+    # 目标模式：enabled 时追加 get_goal/create_goal/update_goal 目标工具（未启用零变化）
+    if goal_mode is not None and goal_mode.enabled:
+        from caspian.goal import build_goal_tools
+
+        tools.extend(build_goal_tools(goal_mode.blocked_after_consecutive_rounds))
+
     # (4) system prompt（委托纪律段 + 选中技能段）
     system_prompt = apply_prompt_template(
         agent_name=agent_name,
@@ -308,6 +316,10 @@ async def make_lead_agent(
     selected_prompt = _selected_skill_prompt(catalog, selected_skills or [])
     if selected_prompt:
         system_prompt = f"{system_prompt}\n\n{selected_prompt}"
+    if goal_mode is not None and goal_mode.enabled:
+        from caspian.goal import goal_guidance
+
+        system_prompt = f"{system_prompt}\n\n{goal_guidance(goal_mode.blocked_after_consecutive_rounds)}"
 
     # (5) middleware
     context7_tools: list[BaseTool] = []
@@ -338,6 +350,12 @@ async def make_lead_agent(
         middleware.append(
             PlanModeMiddleware(app_config.plan_mode, frozenset(catalog.names))
         )
+
+    # 目标模式：enabled 时链尾追加 GoalModeMiddleware（未启用零变化）
+    if goal_mode is not None and goal_mode.enabled:
+        from caspian.agents.goal import GoalModeMiddleware
+
+        middleware.append(GoalModeMiddleware(goal_mode, frozenset(catalog.names)))
 
     # (6) create_agent
     return create_agent(

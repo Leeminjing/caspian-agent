@@ -232,6 +232,86 @@ def _add_usage(record: RunRecord, usage: Any) -> None:
         record.prompt_cache_hit_tokens += cache_read
 
 
+async def _stream_one_round(
+    agent: Any,
+    graph_input: dict | Command,
+    runnable_config: RunnableConfig,
+    stream_mode: list[str] | str | None,
+    langgraph_context: dict | None,
+    record: RunRecord,
+    bridge: StreamBridge,
+) -> tuple[bool, bool]:
+    """执行一轮 agent.astream 并发布 SSE 事件。
+
+    输入:
+        agent / graph_input / runnable_config / stream_mode / langgraph_context — 同 run_agent 参数
+        record: RunRecord — 当前 run 档案
+        bridge: StreamBridge — 事件总线
+
+    输出:
+        tuple[bool, bool] — (graph_interrupted, aborted)；aborted 表示收到 abort 信号
+
+    工作流:
+        (1) 逐 chunk 累计 usage、检查 abort、提取 interrupt、序列化并 publish
+        (2) commitment_messages 自定义事件与既有 special-case 一致
+    """
+    graph_interrupted = False
+    aborted = False
+    async for mode, chunk in agent.astream(
+        graph_input,
+        config=runnable_config,
+        context=langgraph_context,
+        stream_mode=stream_mode,
+    ):
+        _accumulate_usage(record, mode, chunk)
+        if record.abort_event.is_set():
+            logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
+            aborted = True
+            break
+
+        interrupts = _extract_interrupts(chunk)
+        if interrupts:
+            graph_interrupted = True
+            for interrupt_data in interrupts:
+                bridge.publish(
+                    record.run_id,
+                    _build_chunk_event("interrupt", interrupt_data),
+                )
+            continue
+
+        serialized_chunk = _serialize_chunk(chunk)
+        if (
+            isinstance(serialized_chunk, (list, tuple))
+            and len(serialized_chunk) == 2
+            and serialized_chunk[0] == "custom"
+            and isinstance(serialized_chunk[1], dict)
+            and serialized_chunk[1].get("type") == "commitment_messages"
+        ):
+            if os.getenv("COMMITMENT_MESSAGES_MONITOR") == "1":
+                print(
+                    "COMMITMENT_MESSAGES "
+                    + json.dumps(
+                        {
+                            "run_id": record.run_id,
+                            **serialized_chunk[1],
+                        },
+                        ensure_ascii=True,
+                    ),
+                    flush=True,
+                )
+            bridge.publish(
+                record.run_id,
+                _build_chunk_event(
+                    "events",
+                    serialized_chunk[1],
+                ),
+            )
+            continue
+        chunk_event = _build_chunk_event("events", serialized_chunk)
+        bridge.publish(record.run_id, chunk_event)
+    return graph_interrupted, aborted
+
+
 async def run_agent(
     *,
     record: RunRecord,
@@ -306,61 +386,52 @@ async def run_agent(
         if store is not None:
             agent.store = store
 
-        # (4) agent.astream 主循环
+        # (4) agent.astream 主循环（目标模式下可由 GoalRoundDriver 驱动多轮）
         graph_interrupted = False
-        async for mode, chunk in agent.astream(
-            graph_input,
-            config=runnable_config,
-            context=langgraph_context,
-            stream_mode=mapped_stream_modes,
-        ):
-            _accumulate_usage(record, mode, chunk)
-            # (5) abort 中断检查
-            if record.abort_event.is_set():
-                logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
-                break
+        goal_driver = None
+        goal_mode_cfg = getattr(app_config, "goal_mode", None)
+        if goal_mode_cfg is not None and goal_mode_cfg.enabled:
+            from caspian.goal import GoalRoundDriver
 
-            interrupts = _extract_interrupts(chunk)
-            if interrupts:
-                graph_interrupted = True
-                for interrupt_data in interrupts:
-                    bridge.publish(
-                        record.run_id,
-                        _build_chunk_event("interrupt", interrupt_data),
-                    )
-                continue
-
-            # 每个 chunk 序列化后转换为 SSE 事件 publish 到 bridge
-            serialized_chunk = _serialize_chunk(chunk)
-            if (
-                isinstance(serialized_chunk, (list, tuple))
-                and len(serialized_chunk) == 2
-                and serialized_chunk[0] == "custom"
-                and isinstance(serialized_chunk[1], dict)
-                and serialized_chunk[1].get("type") == "commitment_messages"
-            ):
-                if os.getenv("COMMITMENT_MESSAGES_MONITOR") == "1":
-                    print(
-                        "COMMITMENT_MESSAGES "
-                        + json.dumps(
-                            {
-                                "run_id": record.run_id,
-                                **serialized_chunk[1],
-                            },
-                            ensure_ascii=True,
-                        ),
-                        flush=True,
-                    )
-                bridge.publish(
-                    record.run_id,
-                    _build_chunk_event(
-                        "events",
-                        serialized_chunk[1],
-                    ),
+            goal_thread_id = (
+                (runnable_config.get("configurable") or {}).get("thread_id")
+                if isinstance(runnable_config, dict)
+                else None
+            )
+            goal_user_id = (langgraph_context or {}).get("user_id")
+            if store is None:
+                raise RuntimeError("goal_mode.enabled 需要 LangGraph store；请配置 langgraph_store")
+            if goal_user_id and goal_thread_id:
+                goal_driver = GoalRoundDriver(
+                    store,
+                    str(goal_user_id),
+                    str(goal_thread_id),
+                    goal_mode_cfg.default_max_goal_rounds,
                 )
-                continue
-            chunk_event = _build_chunk_event("events", serialized_chunk)
-            bridge.publish(record.run_id, chunk_event)
+                await goal_driver.disarm_on_run_start()
+
+        round_input = graph_input
+        while True:
+            round_interrupted, aborted = await _stream_one_round(
+                agent,
+                round_input,
+                runnable_config,
+                mapped_stream_modes,
+                langgraph_context,
+                record,
+                bridge,
+            )
+            graph_interrupted = graph_interrupted or round_interrupted
+            if goal_driver is not None:
+                # 目标模式：每轮后发布 goal_state 事件，供前端渲染 Goal 徽章
+                goal_view = await goal_driver.current_view()
+                bridge.publish(record.run_id, _build_chunk_event("goal_state", {"goal": goal_view}))
+            if aborted or goal_driver is None:
+                break
+            action = await goal_driver.decide_after_round()
+            if action != "continue":
+                break
+            round_input = await goal_driver.build_next_round_input()
 
         # (6) 终态处理
         if record.abort_event.is_set():

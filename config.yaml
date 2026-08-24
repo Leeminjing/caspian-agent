@@ -73,6 +73,11 @@ plan_mode:
     from your next step) or keep planning — their feedback comes back in the
     tool result; revise and present again.
 
+goal_mode:
+  enabled: true
+  default_max_goal_rounds: 256
+  blocked_after_consecutive_rounds: 3
+
 context_compression:
   enabled: true
   trigger_tokens: 100000
