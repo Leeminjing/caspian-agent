@@ -234,6 +234,43 @@ textarea:focus-visible {
   padding: 12px 9px;
 }
 
+.thread-row {
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
+.thread-row .thread-item {
+  flex: 1;
+  min-width: 0;
+}
+
+.thread-rename {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 4px;
+  color: #8f979d;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.thread-row:hover .thread-rename,
+.thread-rename:focus-visible {
+  opacity: 1;
+}
+
+.thread-rename:hover {
+  color: white;
+  background: rgb(255 255 255 / 10%);
+}
+
 .thread-item {
   display: grid;
   width: 100%;

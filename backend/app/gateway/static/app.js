@@ -115,18 +115,115 @@ function renderThreads() {
     ? window.CaspianContextUi.orderThreads(state.threads)
     : state.threads;
   threads.forEach((thread) => {
+    const row = document.createElement("div");
+    row.className = `thread-row${thread.id === state.threadId ? " active" : ""}`;
+    row.dataset.threadId = thread.id;
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `thread-item${thread.id === state.threadId ? " active" : ""}`;
+    button.className = "thread-item";
     button.innerHTML = `<strong></strong><span></span>`;
     $("strong", button).textContent = thread.title;
     $("span", button).textContent = thread.id.slice(0, 13);
     button.addEventListener("click", () => selectThread(thread.id));
-    list.append(button);
+    const rename = document.createElement("button");
+    rename.type = "button";
+    rename.className = "thread-rename";
+    rename.textContent = "✎";
+    rename.title = "重命名";
+    rename.setAttribute("aria-label", "重命名");
+    rename.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const strong = $("strong", button);
+      startInlineRename(strong, {
+        getValue: () => thread.title,
+        onCommit: (value) => renameThread(thread.id, value),
+      });
+    });
+    row.append(button, rename);
+    list.append(row);
   });
   const thread = currentThread();
   $("#thread-title").textContent = thread?.title || "新会话";
   $("#thread-id").textContent = state.threadId || "";
+}
+
+function startInlineRename(textEl, { getValue, onCommit }) {
+  const container = textEl.parentNode;
+  const original = textEl.textContent;
+  const input = document.createElement("input");
+  input.type = "text";
+  input.maxLength = 200;
+  input.className = "inline-rename-input";
+  input.value = getValue ? String(getValue() ?? "") : original;
+  input.setAttribute("aria-label", "新名称");
+  textEl.replaceWith(input);
+  input.focus();
+  input.select();
+
+  let restored = false;
+  const restore = () => {
+    if (restored) return;
+    restored = true;
+    input.replaceWith(textEl);
+  };
+  const submit = () => {
+    if (restored) return;
+    const value = input.value.trim();
+    if (!value) {
+      input.focus();
+      return;
+    }
+    input.disabled = true;
+    onCommit(value)
+      .then(() => { restored = true; })
+      .catch((error) => {
+        alert(`重命名失败：${error.message}`);
+        input.disabled = false;
+        restore();
+      });
+  };
+
+  input.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      event.stopPropagation();
+      submit();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      restore();
+    }
+  });
+  input.addEventListener("blur", submit);
+}
+
+function renameThread(id, title) {
+  const url = `/api/contexts/${encodeURIComponent(id)}`;
+  return fetch(url, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
+    body: JSON.stringify({ title }),
+    credentials: "same-origin",
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        let detail;
+        try { detail = (await response.json()).detail; } catch { detail = await response.text(); }
+        throw new Error(typeof detail === "string" ? detail : (detail?.message || JSON.stringify(detail)));
+      }
+      return response.json();
+    })
+    .then((payload) => {
+      const target = state.threads.find((item) => item.id === id);
+      if (target) {
+        target.title = payload.title || title;
+        target.updatedAt = Date.now();
+        saveThreads();
+        renderThreads();
+      }
+      window.CaspianContextUi?.onRunEnded();
+      return payload;
+    });
 }
 
 function selectThread(id) {
@@ -1639,6 +1736,15 @@ window.CaspianContextUi?.init({
   addThread: (thread) => {
     state.threads.unshift(thread);
     saveThreads();
+  },
+  renameThread: (id, title) => {
+    const thread = state.threads.find((item) => item.id === id);
+    if (thread) {
+      thread.title = title;
+      thread.updatedAt = Date.now();
+      saveThreads();
+      renderThreads();
+    }
   },
   selectThread,
 });

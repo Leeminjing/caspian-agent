@@ -5,9 +5,10 @@
     WebThread(Base) — 线程注册表（thread_id 即 context_id，含主运行锁定与 usage 聚合字段）
     WebContextDefinition(Base) — 派生 Context 的用户定义与执行投影记录
     WebContextSource(Base) — 派生 Context 的有序父来源记录
-    ContextSourceRef / ContextDeriveCreate / ContextDefinitionUpdate / ContextProjectionDecision — 请求模型
+    ContextSourceRef / ContextDeriveCreate / ContextDefinitionUpdate / ContextProjectionDecision /
+    ContextRenameRequest — 请求模型
 
-输入: Context 派生、快照、决断请求的结构化数据
+输入: Context 派生、快照、决断、重命名请求的结构化数据
 输出: SQLAlchemy 表定义与 Pydantic 请求模型
 
 具体工作流:
@@ -15,6 +16,7 @@
     (2) WebContextDefinition 一对一保存 authored/execution messages、修补清单、问题、
         双哈希、投影状态与初始 checkpoint 信息
     (3) WebContextSource 保存有序父来源（parent_context_id + source_checkpoint_id + position）
+    (4) ContextRenameRequest 校验重命名标题（1–200 字符）
 
 示例:
     from backend.app.gateway.context.models import WebThread, ContextDeriveCreate
@@ -151,3 +153,7 @@ class ContextProjectionDecision(BaseModel):
     decision: Literal["accept", "reject"]
     definition_hash: str = Field(min_length=64, max_length=64)
     projection_hash: str = Field(min_length=64, max_length=64)
+
+
+class ContextRenameRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=200)

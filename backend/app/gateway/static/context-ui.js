@@ -132,6 +132,7 @@
           <span class="context-rail-meta">${node.depth ? "派生 Context" : "根 Context"} · ${escapeHtml(node.context_id.slice(0, 8))}${blocked ? ` · ${escapeHtml(node.projection_status)}` : ""} · 缓存 ${cacheRate}</span>
           ${otherParents ? `<span class="context-rail-parents">另含：${escapeHtml(otherParents)}</span>` : ""}
         </button>
+        <button type="button" class="context-rail-rename" data-action="rename-context" data-context-id="${escapeHtml(node.context_id)}" aria-label="重命名">✎</button>
         ${node.editable ? `<button type="button" class="context-rail-edit" data-action="edit-context-definition" data-context-id="${escapeHtml(node.context_id)}">编辑</button>` : ""}
       </div>`;
     }).join("");
@@ -306,6 +307,22 @@
         },
       }));
     }
+  }
+
+  function renameContext(contextId, titleEl) {
+    window.startInlineRename(titleEl, {
+      getValue: () => threadTitle(contextId),
+      onCommit: (title) => submitRenameContext(contextId, title),
+    });
+  }
+
+  async function submitRenameContext(contextId, title) {
+    const payload = await api(`/api/contexts/${encodeURIComponent(contextId)}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    });
+    state.hooks.renameThread?.(contextId, payload.title || title);
+    await refreshTree();
   }
 
   function syncContextDraft() {
@@ -737,6 +754,11 @@
       case "context-rail-card":
         state.hooks.selectThread(element.dataset.contextId);
         break;
+      case "rename-context": {
+        const titleEl = element.closest(".context-rail-item")?.querySelector(".context-rail-title");
+        if (titleEl) renameContext(element.dataset.contextId, titleEl);
+        break;
+      }
       case "derive-context":
         return openDeriveEditor();
       case "edit-context-definition":
@@ -811,7 +833,7 @@
       const actionElement = event.target.closest?.("[data-action]");
       if (!actionElement) return;
       const action = actionElement.dataset.action;
-      if (!action || !action.startsWith("context") && !["derive-context", "edit-context-definition", "resume-context-decision", "exit-context-editor", "submit-context", "accept-context-projection", "cancel-context-projection", "edit-context-projection", "open-derived-context", "add-context-source", "remove-context-source"].includes(action)) return;
+      if (!action || !action.startsWith("context") && !["derive-context", "edit-context-definition", "resume-context-decision", "exit-context-editor", "submit-context", "accept-context-projection", "cancel-context-projection", "edit-context-projection", "open-derived-context", "add-context-source", "remove-context-source", "rename-context"].includes(action)) return;
       event.preventDefault();
       handleAction(action, actionElement);
     });

@@ -1,5 +1,5 @@
 """
-本文件对外提供 `router`（APIRouter 实例），定义 Recursive Context Forking 的 6 个 HTTP 接口。
+本文件对外提供 `router`（APIRouter 实例），定义 Recursive Context Forking 的 7 个 HTTP 接口。
 
 对外提供:
     router: APIRouter — prefix=/api/contexts
@@ -8,7 +8,7 @@
     各端点通过 Request 获取 app.state.context_service 与 request.state.current_user.id
 
 输出:
-    snapshot / lineage / tree / derive / definition update / projection decision 的 JSON 结果
+    snapshot / lineage / tree / derive / definition update / projection decision / rename 的 JSON 结果
 
 具体工作流:
     (1) 每个端点先从 request.state.current_user.id 取 user_id
@@ -25,6 +25,7 @@ from backend.app.gateway.context.models import (
     ContextDefinitionUpdate,
     ContextDeriveCreate,
     ContextProjectionDecision,
+    ContextRenameRequest,
 )
 
 router = APIRouter(prefix="/api/contexts")
@@ -77,3 +78,10 @@ async def decide_context_projection(
     context_id: str, body: ContextProjectionDecision, request: Request
 ) -> dict:
     return await _service(request).decide(_user_id(request), context_id, body)
+
+
+@router.patch("/{context_id}")
+async def rename_context(
+    context_id: str, body: ContextRenameRequest, request: Request
+) -> dict:
+    return await _service(request).rename(_user_id(request), context_id, body.title)

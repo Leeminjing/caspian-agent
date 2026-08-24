@@ -762,6 +762,26 @@ summary:focus-visible,
   }
 }
 
+.inline-rename-input {
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid var(--teal, #13a899);
+  border-radius: var(--radius-sm);
+  background: #ffffff;
+  color: #22292b;
+  font-size: inherit;
+  line-height: inherit;
+  box-shadow: 0 0 0 3px rgb(8 127 115 / 12%);
+}
+
+.thread-row .inline-rename-input {
+  box-sizing: border-box;
+}
+
+.inline-rename-input:focus-visible {
+  outline: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

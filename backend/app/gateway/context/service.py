@@ -1,6 +1,6 @@
 """
 本文件对外提供 ContextService，负责 Web Context 的快照、派生、lineage、执行投影审批
-与独立 checkpoint 初始化，以及主运行闸门、线程注册与 usage 聚合。
+与独立 checkpoint 初始化，以及主运行闸门、线程注册、usage 聚合与重命名。
 
 输入为 LangGraph checkpointer 以及 Context 请求模型；输出为可直接返回给 Context API 的
 数据。具体工作流为校验同用户来源和已提交 checkpoint，保存用户 authored messages，
@@ -197,6 +197,48 @@ class ContextService:
         if body.decision == "accept":
             await self._initialize(context_id, "approved")
         return await self.get(user_id, context_id)
+
+    async def rename(self, user_id: str, context_id: str, title: str) -> dict[str, Any]:
+        """重命名任意 Context（根或派生），以 web_threads.title 为权威源。
+
+        输入:
+            user_id: str — 认证用户标识
+            context_id: str — 目标 Context（即 thread_id）
+            title: str — 新标题
+
+        输出:
+            dict — 与 get() 相同的 Context payload
+
+        工作流:
+            (1) 以行锁取出目标线程；不存在时懒创建（兼容从未运行的根线程）
+            (2) 已存在但属于其他用户 → 404
+            (3) 写入 title 并提交
+            (4) 在同一 session 内读取 definition 与 sources 后复用 _payload 构造返回结果
+        """
+        async with self.session_factory() as session:
+            task = await session.scalar(
+                select(WebThread).where(WebThread.thread_id == context_id).with_for_update()
+            )
+            if task is None:
+                created = WebThread(thread_id=context_id, user_id=user_id, title=title)
+                session.add(created)
+                await session.commit()
+                task = await session.get(WebThread, context_id)
+            else:
+                if task.user_id != user_id:
+                    raise HTTPException(404, "Context 不存在")
+                task.title = title
+                await session.commit()
+            definition = await session.get(WebContextDefinition, context_id)
+            sources = (
+                await session.scalars(
+                    select(WebContextSource)
+                    .where(WebContextSource.context_id == context_id)
+                    .order_by(WebContextSource.position)
+                )
+            ).all()
+            editable = bool(definition) and task.main_run_started_at is None
+            return self._payload(task, definition, [*sources], editable=editable)
 
     async def get(self, user_id: str, context_id: str) -> dict[str, Any]:
         async with self.session_factory() as session:
