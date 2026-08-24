@@ -43,6 +43,7 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
+from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from caspian.agents.commitment import CommitmentMiddleware
@@ -59,6 +60,7 @@ def build_general_middlewares(
     *,
     commitment_enabled: bool = False,
     model: BaseChatModel | None = None,
+    context7_loader: Callable[[], Awaitable[list[BaseTool]]] | None = None,
     context7_tools: list[BaseTool] | None = None,
     skill_names: frozenset[str] | None = None,
     context_compression: "ContextCompressionConfig | None" = None,
@@ -73,6 +75,8 @@ def build_general_middlewares(
         (1) context_compression.enabled 时在链首装配 ContextCompressionMiddleware
             (wrap_model_call 最外层可捕获内层溢出;before_model 链首先对完整历史压缩)
         (2) 其余按既有顺序装配
+        (3) commitment_enabled 时装配 CommitmentMiddleware：优先使用 context7_loader
+            （懒加载）；未提供 loader 时回退用 context7_tools 包装的兼容 loader
     """
     from caspian.agents.middlewares.context_compression import (
         ContextCompressionMiddleware,
@@ -90,8 +94,16 @@ def build_general_middlewares(
     if commitment_enabled:
         if model is None:
             raise ValueError("启用 CommitmentMiddleware 时必须提供 model")
+        effective_loader = context7_loader
+        if effective_loader is None and context7_tools is not None:
+            resolved_tools = list(context7_tools)
+
+            async def _compat_loader() -> list[BaseTool]:
+                return resolved_tools
+
+            effective_loader = _compat_loader
         middlewares.append(
-            CommitmentMiddleware(model, context7_tools or [], skill_names or frozenset())
+            CommitmentMiddleware(model, effective_loader, skill_names or frozenset())
         )
     middlewares.append(SandboxAuditMiddleware())
     return middlewares

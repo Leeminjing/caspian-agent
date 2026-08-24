@@ -2363,6 +2363,59 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             all(batch["type"] == "commitment_messages" for batch in batches)
         )
 
+    async def test_commit_with_unavailable_context7_returns_notice(self):
+        # /commit 触发但 loader 返回空：应返回说明 HumanMessage，不调用 supervisor、不抛异常
+        middleware = object.__new__(CommitmentMiddleware)
+        middleware._context7_loader = AsyncMock(return_value=[])
+        middleware._supervisor = None
+        runtime = SimpleNamespace(
+            execution_info=SimpleNamespace(thread_id="thread-c7")
+        )
+        update = await middleware._run(
+            {"messages": [HumanMessage(content="/commit 做X", id="commit-message")]},
+            runtime,
+        )
+        self.assertIsNotNone(update)
+        self.assertEqual(len(update["messages"]), 1)
+        self.assertIsInstance(update["messages"][0], HumanMessage)
+        self.assertEqual(update["messages"][0].id, "commit-message")
+        self.assertIn("Context7", update["messages"][0].content)
+        self.assertIsNone(middleware._supervisor)
+
+    async def test_commit_with_throwing_context7_loader_returns_notice(self):
+        # loader 抛异常：应降级为说明消息，不向外抛异常
+        middleware = object.__new__(CommitmentMiddleware)
+        middleware._context7_loader = AsyncMock(side_effect=RuntimeError("boom"))
+        middleware._supervisor = None
+        middleware._model = None
+        runtime = SimpleNamespace(
+            execution_info=SimpleNamespace(thread_id="thread-c7-2")
+        )
+        update = await middleware._run(
+            {"messages": [HumanMessage(content="/commit 做X", id="commit-message")]},
+            runtime,
+        )
+        self.assertIsNotNone(update)
+        self.assertIn("Context7", update["messages"][0].content)
+        self.assertIsNone(middleware._supervisor)
+
+    async def test_plain_conversation_does_not_call_context7_loader(self):
+        # 普通对话（非 /commit）：应返回 None 且不调用 loader
+        middleware = object.__new__(CommitmentMiddleware)
+        middleware._context7_loader = AsyncMock(return_value=[])
+        middleware._supervisor = None
+        middleware._model = None
+        runtime = SimpleNamespace(
+            execution_info=SimpleNamespace(thread_id="thread-plain")
+        )
+        update = await middleware._run(
+            {"messages": [HumanMessage(content="普通对话", id="plain-message")]},
+            runtime,
+        )
+        self.assertIsNone(update)
+        middleware._context7_loader.assert_not_called()
+        self.assertIsNone(middleware._supervisor)
+
     def test_uploads_tag_extracted_from_instruction(self):
         clean, tag = _extract_uploads_tag(
             "做X\n\n<current_uploads>\n- filename: a.md\n  size: 10\n"
@@ -2666,6 +2719,39 @@ class CommitInstructionSkillTokenTests(unittest.TestCase):
                 skill_names=frozenset({"docx"}),
             )
         self.assertEqual(middleware_cls.call_args[0][2], frozenset({"docx"}))
+
+    def test_enabled_builder_forwards_context7_loader(self):
+        async def fake_loader():
+            return []
+
+        with patch(
+            "caspian.agents.middlewares.builder.CommitmentMiddleware",
+            return_value=object(),
+        ) as middleware_cls:
+            build_general_middlewares(
+                commitment_enabled=True,
+                model=object(),
+                context7_loader=fake_loader,
+            )
+        self.assertIs(middleware_cls.call_args[0][1], fake_loader)
+
+    def test_enabled_builder_context7_tools_compat_wraps_loader(self):
+        sentinel = [object()]
+        with patch(
+            "caspian.agents.middlewares.builder.CommitmentMiddleware",
+            return_value=object(),
+        ) as middleware_cls:
+            build_general_middlewares(
+                commitment_enabled=True,
+                model=object(),
+                context7_tools=sentinel,
+            )
+        loader = middleware_cls.call_args[0][1]
+        self.assertTrue(callable(loader))
+        # 兼容路径：被包装的 loader 应返回 context7_tools 内容
+        import asyncio as _asyncio
+
+        self.assertEqual(_asyncio.run(loader()), sentinel)
 
 
 if __name__ == "__main__":

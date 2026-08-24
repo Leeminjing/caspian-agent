@@ -51,6 +51,7 @@
 
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 from langchain.agents import create_agent
@@ -71,7 +72,7 @@ logger = logging.getLogger(__name__)
 def _build_middlewares(
     app_config,
     model: BaseChatModel,
-    context7_tools: list[BaseTool],
+    context7_loader: Callable[[], Awaitable[list[BaseTool]]] | None,
     skill_names: frozenset[str] | None = None,
     subagent_enabled: bool = True,
 ) -> list[AgentMiddleware]:
@@ -80,7 +81,8 @@ def _build_middlewares(
     输入:
         app_config: AppConfig — 应用配置
         model: BaseChatModel — 承诺层内部依赖
-        context7_tools: list[BaseTool] — 承诺层内部依赖
+        context7_loader: Callable[[], Awaitable[list[BaseTool]]] | None — Context7 工具懒加载器，
+            仅在触发承诺层时被调用；None 表示承诺层未启用
         skill_names: frozenset[str] | None — enabled 技能名集合
         subagent_enabled: bool — 是否装配 subagent 限制与账本中间件
 
@@ -95,7 +97,7 @@ def _build_middlewares(
     middlewares = build_general_middlewares(
         commitment_enabled=app_config.commitment.enabled,
         model=model,
-        context7_tools=context7_tools,
+        context7_loader=context7_loader,
         skill_names=skill_names,
         context_compression=app_config.context_compression,
     )
@@ -322,17 +324,16 @@ async def make_lead_agent(
         system_prompt = f"{system_prompt}\n\n{goal_guidance(goal_mode.blocked_after_consecutive_rounds)}"
 
     # (5) middleware
-    context7_tools: list[BaseTool] = []
+    context7_loader: Callable[[], Awaitable[list[BaseTool]]] | None = None
     if app_config.commitment.enabled:
         from caspian.mcp import get_context7_tools
 
-        context7_tools = await get_context7_tools(app_config.commitment.context7_url)
-        if not context7_tools:
-            raise RuntimeError("CommitmentMiddleware 已启用，但 Context7 工具不可用")
+        # 懒加载：仅在承诺层触发时调用 get_context7_tools，避免普通对话也对外网连接
+        context7_loader = lambda: get_context7_tools(app_config.commitment.context7_url)
     middleware = _build_middlewares(
         app_config,
         model,
-        context7_tools,
+        context7_loader,
         frozenset(catalog.names),
         subagent_enabled=subagent_enabled,
     )
