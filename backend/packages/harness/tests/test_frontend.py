@@ -46,7 +46,7 @@ class FrontendTests(unittest.TestCase):
         self.assertIn("resume: payload", script)
         self.assertIn('allowed.includes("approve")', script)
         self.assertIn("/uploads", script)
-        self.assertIn('stream_mode: ["values"]', script)
+        self.assertIn('stream_mode: ["messages", "values"]', script)
         self.assertIn("renderedMessageIds: new Set()", script)
         self.assertIn("if (state.renderedMessageIds.has(key)) return", script)
         self.assertIn('type !== "ai" && type !== "assistant"', script)
@@ -151,7 +151,7 @@ class FrontendTests(unittest.TestCase):
         app = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
         plugins = (STATIC_DIR / "plugins.js").read_text(encoding="utf-8")
 
-        self.assertIn('/assets/ui-polish.css?v=polish-8', html)
+        self.assertIn('/assets/ui-polish.css?v=polish-10', html)
         self.assertIn('/assets/ui-polish.js?v=polish-5', html)
         self.assertIn('id="model-toggle"', html)
         self.assertIn('id="model-popover"', html)

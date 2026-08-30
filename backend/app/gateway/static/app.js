@@ -530,6 +530,36 @@ function renderMarkdown(text) {
   return window.DOMPurify.sanitize(window.marked.parse(text, { gfm: true }));
 }
 
+// 流式 Markdown 重渲染的最小间隔：同一窗口内多个正文分片只合并为一次渲染，
+// 避免长文逐 token 全量 marked.parse 造成的 O(n²) 卡顿与 DOM 频繁重建。
+const STREAM_MD_THROTTLE_MS = 60;
+
+// 权威渲染入口：把 h.contentAcc（正文 Markdown 源码）经 renderMarkdown 渲染成 HTML 写入
+// h.contentEl（缺失时创建 .message-content）。供流式（consumeTokenChunk）与整帧
+// （renderAgentMessage）共用，保证两路径结果一致。
+function renderContentNow(h) {
+  if (h.contentEl === null) {
+    const el = document.createElement("div");
+    el.className = "message-content";
+    h.body.append(el);
+    h.contentEl = el;
+  }
+  const text = h.contentAcc || "";
+  const html = renderMarkdown(text);
+  h.contentEl.innerHTML = html !== null ? html : text.replace(/</g, "&lt;");
+}
+
+// 节流调度：脏标记 + setTimeout，把节流窗口内的多个正文分片合并为一次渲染；
+// 定时器触发时读取最新 h.contentAcc，故最终值与整帧定型一致（幂等）。
+function scheduleContentRender(h) {
+  if (h.renderPending) return;
+  h.renderPending = true;
+  setTimeout(() => {
+    h.renderPending = false;
+    renderContentNow(h);
+  }, STREAM_MD_THROTTLE_MS);
+}
+
 function addMessage(role, content, id = "") {
   const text = String(content || "").trim();
   if (!text) return;
@@ -570,14 +600,8 @@ function renderAgentMessage(message) {
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
 
   if (text) {
-    if (h.contentEl === null) {
-      const el = document.createElement("div");
-      el.className = "message-content";
-      h.body.append(el);
-      h.contentEl = el;
-    }
-    const html = renderMarkdown(text);
-    h.contentEl.innerHTML = html !== null ? html : text.replace(/</g, "&lt;");
+    h.contentAcc = text;
+    renderContentNow(h);
   }
 
   if (reasoning) {
@@ -593,7 +617,14 @@ function ensureAgentHandle(id) {
   if (state.msgAcc[id]) return state.msgAcc[id];
   const article = agentArticle(id);
   const body = article.querySelector(".message-body") || agentBody(article);
-  state.msgAcc[id] = { article, body, contentEl: null, thinkLine: null };
+  state.msgAcc[id] = {
+    article,
+    body,
+    contentEl: null,
+    thinkLine: null,
+    contentAcc: "",
+    renderPending: false,
+  };
   return state.msgAcc[id];
 }
 
@@ -655,13 +686,8 @@ function consumeTokenChunk(data) {
   const h = ensureAgentHandle(id);
 
   if (contentDelta) {
-    if (h.contentEl === null) {
-      const el = document.createElement("div");
-      el.className = "message-content";
-      h.body.append(el);
-      h.contentEl = el;
-    }
-    h.contentEl.textContent = (h.contentEl.textContent || "") + contentDelta;
+    h.contentAcc = (h.contentAcc || "") + contentDelta;
+    scheduleContentRender(h);
   }
 
   if (reasoningDelta) {

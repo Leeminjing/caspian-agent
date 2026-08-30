@@ -64,6 +64,27 @@ class ContextFrontendTests(unittest.TestCase):
         self.assertIn(".think-line", css)
         self.assertIn(".think-badge", css)
 
+    def test_appjs_streaming_markdown_render(self):
+        # 回归守卫：正文在 messages 逐 token 流式期间即按 Markdown 实时渲染（节流），
+        # 而非纯文本平铺、等 values 整帧才一次成型。consumeTokenChunk 把正文分片累计到
+        # h.contentAcc 并触发 scheduleContentRender（节流），renderContentNow 用 renderMarkdown
+        # 渲染进 .message-content；renderAgentMessage（values 整帧）共用同一渲染入口做权威定型。
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        self.assertIn("const STREAM_MD_THROTTLE_MS = 60;", script)
+        self.assertIn("function renderContentNow(h)", script)
+        self.assertIn("function scheduleContentRender(h)", script)
+        self.assertIn("h.contentEl.innerHTML = html !== null ? html : text.replace(/</g, \"&lt;\");", script)
+        # 流式正文不再用 textContent 平铺，改为累计源码 + 节流渲染
+        self.assertIn("h.contentAcc = (h.contentAcc || \"\") + contentDelta;", script)
+        self.assertIn("scheduleContentRender(h);", script)
+        # 整帧权威定型与流式共用同一累计字段与渲染入口
+        self.assertIn("h.contentAcc = text;", script)
+        self.assertIn("renderContentNow(h);", script)
+        # 缓存指纹 bump（防旧前端缓存，曾导致"处理中几秒后突然完整渲染"）
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        self.assertIn('href="/assets/app.css?v=f62-streaming-md-1"', html)
+        self.assertIn('src="/assets/app.js?v=f62-streaming-md-1"', html)
+
     def test_context_ui包含rail编辑器与拖拽(self):
         script = (STATIC_DIR / "context-ui.js").read_text(encoding="utf-8")
         self.assertIn("/api/contexts/tree", script)
