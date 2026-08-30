@@ -603,6 +603,13 @@ textarea:focus-visible {
   align-items: flex-start;
 }
 
+/* agent 气泡内部纵向堆叠容器：avatar 在左，body 内推理/正文/工具调用依次排列 */
+.message-body {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: block;
+}
+
 .message-agent::before {
   display: grid;
   width: 28px;
@@ -621,6 +628,50 @@ textarea:focus-visible {
 .message-agent .message-content {
   padding-top: 3px;
   color: #292d30;
+}
+
+/* 推理内容（DeepSeek reasoning_content）内联「· Think」流式行，位于正文上方。
+   流式时仅追加 <pre> 文本并刷新摘要；完成态可点击展开/收起。 */
+.think-line {
+  margin: 0 0 8px;
+}
+.think-line > summary {
+  cursor: pointer;
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  color: #8b9195;
+  font-size: 12.5px;
+  user-select: none;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.think-line > summary:hover {
+  color: var(--teal);
+}
+.think-badge {
+  flex: 0 0 auto;
+  color: var(--teal);
+  font-weight: 700;
+}
+.think-excerpt {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #a2a9ad;
+}
+.think-line > pre {
+  margin: 6px 0 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-left: 3px solid #cdd6d9;
+  border-radius: 6px;
+  color: #5b6368;
+  background: #f4f7f7;
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .message-error .message-content {
@@ -1566,6 +1617,11 @@ textarea:focus-visible {
   border-radius: 4px;
   background: var(--soft);
   font-size: 13px;
+}
+
+/* 工具调用项挂进 agent 消息 body 时不再左缩进（body 已由 avatar 缩进） */
+.message-body .tool-item {
+  margin-left: 0;
 }
 
 .tool-item summary {

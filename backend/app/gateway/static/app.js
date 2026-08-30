@@ -325,16 +325,12 @@ function renderHistoryMessages(messages, archived = []) {
       return;
     }
     if (type !== "human" && type !== "ai" && type !== "assistant") return;
-    const text = contentText(message.content);
-    if (!text) return;
     if (type === "human") {
-      addMessage("user", text, message.id);
+      const text = contentText(message.content);
+      if (text) addMessage("user", text, message.id);
       return;
     }
-    addMessage("agent", text, message.id);
-    (Array.isArray(message.tool_calls) ? message.tool_calls : []).forEach(
-      (call) => renderToolCallItem(call, message.id),
-    );
+    renderAgentMessage(message);
   });
 }
 
@@ -543,6 +539,7 @@ function addMessage(role, content, id = "") {
   removeEmptyState();
   const message = document.createElement("article");
   message.className = `message message-${role}`;
+  if (id) message.dataset.messageId = id;
   const body = document.createElement("div");
   body.className = "message-content";
   if (role === "agent") {
@@ -557,6 +554,122 @@ function addMessage(role, content, id = "") {
   }
   message.append(body);
   $("#messages").append(message);
+  scrollMessages();
+}
+
+// 单一渲染入口：按消息 id 定位 agent 气泡，缺失则新建，正文/推理/工具调用都挂到该气泡。
+// 使用 ensureAgentHandle 提供的统一交互对象（article + body + 各部件），
+// 确保 messages 流式（consumeTokenChunk）与 values 整帧（renderAgentMessage）操作同一批元素，
+// 根除"流式期间无 think-line、结束时一次性出现"的双路径冲突。
+function renderAgentMessage(message) {
+  const id = message?.id || "";
+  if (!id) return;
+  const h = ensureAgentHandle(id);
+  const text = contentText(message.content);
+  const reasoning = reasoningText(message);
+  const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
+
+  if (text) {
+    if (h.contentEl === null) {
+      const el = document.createElement("div");
+      el.className = "message-content";
+      h.body.append(el);
+      h.contentEl = el;
+    }
+    const html = renderMarkdown(text);
+    h.contentEl.innerHTML = html !== null ? html : text.replace(/</g, "&lt;");
+  }
+
+  if (reasoning) {
+    const line = ensureThinkLine(h);
+    line.pre.textContent = reasoning;
+    line.excerpt.textContent = tailSummary(reasoning, 120);
+  }
+  toolCalls.forEach((call) => renderToolCallItem(call, id, h.body));
+}
+
+function ensureAgentHandle(id) {
+  if (!state.msgAcc) state.msgAcc = Object.create(null);
+  if (state.msgAcc[id]) return state.msgAcc[id];
+  const article = agentArticle(id);
+  const body = article.querySelector(".message-body") || agentBody(article);
+  state.msgAcc[id] = { article, body, contentEl: null, thinkLine: null };
+  return state.msgAcc[id];
+}
+
+function ensureThinkLine(h) {
+  if (h.thinkLine) return h.thinkLine;
+  let line = h.body.querySelector(".think-line");
+  if (!line) {
+    line = document.createElement("details");
+    line.className = "think-line";
+    // 默认收起（不自动弹出）；推理仍逐 token 追加到 <pre>，用户点开可见完整推理。
+    line.innerHTML = "<summary><span class=\"think-badge\">Think</span><span class=\"think-excerpt\"></span></summary><pre></pre>";
+    h.body.insertBefore(line, h.body.firstChild);
+  }
+  h.thinkLine = {
+    el: line,
+    pre: line.querySelector("pre"),
+    excerpt: line.querySelector(".think-excerpt"),
+  };
+  return h.thinkLine;
+}
+
+function agentArticle(id) {
+  if (id) {
+    const el = document.querySelector(`#messages .message.message-agent[data-message-id="${CSS.escape(id)}"]`);
+    if (el) return el;
+  }
+  const article = document.createElement("article");
+  article.className = "message message-agent";
+  if (id) article.dataset.messageId = id;
+  $("#messages").append(article);
+  scrollMessages();
+  return article;
+}
+
+function agentBody(article) {
+  const body = document.createElement("div");
+  body.className = "message-body";
+  article.append(body);
+  return body;
+}
+
+// messages 模式逐 token chunk 的就地增量累计：按消息 id 操作统一交互对象，
+// 把 reasoning/content 分片追加到 think-line 与正文，与 values 整帧渲染共享同一批元素。
+function consumeTokenChunk(data) {
+  const message = data?.message;
+  if (!message || typeof message !== "object") return;
+  const id = message.id || "";
+  if (!id) return;
+  // 流式 AIMessageChunk 的 type 可能是 "ai"/"assistant"/"AIMessageChunk"（大小写/形式不一），
+  // 这里只保留含 ai/assistant 语义的类型，避免把推理流式消息误跳过。
+  const tokenType = String(message.type || message.role || "");
+  if (!/ai|assistant/i.test(tokenType)) return;
+
+  const reasoningDelta = reasoningText(message);
+  const contentDelta = contentText(message.content);
+  if (!reasoningDelta && !contentDelta) return;
+
+  removeEmptyState();
+  const h = ensureAgentHandle(id);
+
+  if (contentDelta) {
+    if (h.contentEl === null) {
+      const el = document.createElement("div");
+      el.className = "message-content";
+      h.body.append(el);
+      h.contentEl = el;
+    }
+    h.contentEl.textContent = (h.contentEl.textContent || "") + contentDelta;
+  }
+
+  if (reasoningDelta) {
+    const line = ensureThinkLine(h);
+    const next = (line.pre.textContent || "") + reasoningDelta;
+    line.pre.textContent = next;
+    line.excerpt.textContent = tailSummary(next, 120);
+  }
   scrollMessages();
 }
 
@@ -595,6 +708,25 @@ function contentText(content) {
     .join("\n");
 }
 
+function reasoningText(message) {
+  const raw = message?.additional_kwargs?.reasoning_content;
+  if (typeof raw === "string") return raw;
+  if (!Array.isArray(raw)) return "";
+  return raw
+    .map((item) => typeof item === "string" ? item : item?.text || "")
+    .filter(Boolean)
+    .join("\n");
+}
+
+// 折叠态摘要：显示推理文本的**最新末尾窗口**（tail），流式时随 token 滑动，
+// 让用户看到"最新的 token 在实时出现"，而非固定开头。
+function tailSummary(text, max) {
+  const flat = String(text || "").replace(/\s+/g, " ").trim();
+  if (!flat) return "";
+  if (flat.length <= max) return flat;
+  return "…" + flat.slice(flat.length - max);
+}
+
 function toolCallsText(message) {
   const calls = Array.isArray(message.tool_calls) ? message.tool_calls : [];
   if (!calls.length) return "";
@@ -610,7 +742,7 @@ function toolCallsText(message) {
   }).join("\n");
 }
 
-function renderToolCallItem(call, messageId) {
+function renderToolCallItem(call, messageId, article) {
   if (!call || !call.name) return;
   const key = `toolcall:${messageId || ""}:${call.id || ""}:${call.name}`;
   if (state.renderedToolIds.has(key)) return;
@@ -627,7 +759,7 @@ function renderToolCallItem(call, messageId) {
     argsText = String(call.args ?? "");
   }
   $("pre", details).textContent = argsText;
-  $("#messages").append(details);
+  (article || $("#messages")).append(details);
   scrollMessages();
 }
 
@@ -798,11 +930,7 @@ function consumeGraphEvent(data) {
       return;
     }
     if (type !== "ai" && type !== "assistant") return;
-    const text = contentText(message.content);
-    if (text) addMessage("agent", text, message.id);
-    (Array.isArray(message.tool_calls) ? message.tool_calls : []).forEach(
-      (call) => renderToolCallItem(call, message.id),
-    );
+    renderAgentMessage(message);
   });
 }
 
@@ -1299,7 +1427,7 @@ async function streamRun(body) {
       "Content-Type": "application/json",
       "X-CSRF-Token": csrfToken(),
     },
-    body: JSON.stringify({ ...body, stream_mode: ["values"] }),
+    body: JSON.stringify({ ...body, stream_mode: ["messages", "values"] }),
   });
 
   if (response.status === 401) {
@@ -1317,12 +1445,21 @@ async function streamRun(body) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let frameCount = 0;
   while (true) {
     const { value, done } = await reader.read();
     buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
     const frames = buffer.split(/\r?\n\r?\n/);
     buffer = frames.pop() || "";
-    frames.forEach((frame) => handleSseFrame(frame, streamId));
+    for (const frame of frames) {
+      handleSseFrame(frame, streamId);
+      // 每处理一批 SSE 帧，主动让出主线程一次，让浏览器有机会在推理流式期间重绘
+      // （逐 token 增长的 think-line 正文）。若无此让出，大批 stream 帧同一 tick 处理完，
+      // 浏览器只在最后重绘一次 -> 表现为"处理中几秒后突然出现完整推理"。
+      if ((++frameCount & 31) === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
     if (done) break;
   }
 }
@@ -1343,6 +1480,7 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
   }
   if (event === "metadata" && data?.run_id) state.currentRunId = data.run_id;
   if (event === "events") consumeGraphEvent(data);
+  if (event === "stream") consumeTokenChunk(data);
   if (event === "interrupt") {
     if (data?.value?.type === "plan_review") showPlanReview(data);
     else if (data?.value?.type === "decision_table_adjudication") showDecisionTableAdjudication(data);

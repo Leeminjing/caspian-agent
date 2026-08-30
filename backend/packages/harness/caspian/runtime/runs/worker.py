@@ -282,6 +282,19 @@ async def _stream_one_round(
                 continue
 
             serialized_chunk = _serialize_chunk(chunk)
+            if mode == "messages":
+                # messages 模式：逐 token chunk（AIMessageChunk + metadata），
+                # 以独立 "stream" 事件转发，供前端就地增量展示推理/正文。
+                if isinstance(serialized_chunk, (list, tuple)) and len(serialized_chunk) == 2:
+                    token_dict = serialized_chunk[0]
+                    bridge.publish(
+                        record.run_id,
+                        _build_chunk_event(
+                            "stream",
+                            {"message": _serialize_chunk(token_dict)},
+                        ),
+                    )
+                continue
             if (
                 isinstance(serialized_chunk, (list, tuple))
                 and len(serialized_chunk) == 2

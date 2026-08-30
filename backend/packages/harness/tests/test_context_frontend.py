@@ -16,7 +16,7 @@ class ContextFrontendTests(unittest.TestCase):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn('href="/assets/context.css?v=f49"', html)
         self.assertIn('src="/assets/context-editor.js?v=f49"', html)
-        self.assertIn('src="/assets/context-ui.js?v=polish-2"', html)
+        self.assertIn('src="/assets/context-ui.js?v=rename-2"', html)
         self.assertLess(
             html.index("context-ui.js"),
             html.index("app.js"),
@@ -30,6 +30,39 @@ class ContextFrontendTests(unittest.TestCase):
         self.assertIn('detail?.code === "context_projection_blocked"', script)
         self.assertIn("CaspianContextUi?.openDecisionFromBlock(detail)", script)
         self.assertIn("CaspianContextUi.orderThreads(state.threads)", script)
+
+    def test_appjs_reasoning_panel_keyed_by_message_id(self):
+        # 回归守卫：推理必须挂到消息自身的气泡（agentArticle 按 data-message-id 定位/新建），
+        # 不得经模糊回退挂到上一条消息（曾导致空正文 AI 消息的推理/工具调用错位到兄弟气泡）。
+        # agent 气泡内容收进 .message-body 块级容器，避免 flex 布局把推理/工具调用并排错乱。
+        # 推理展示为内联「· Think」流式行（.think-line），流式逐 token 追加、完成态可展开收起。
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function renderAgentMessage(message)", script)
+        self.assertIn("function agentArticle(id)", script)
+        self.assertIn("function agentBody(article)", script)
+        self.assertIn('data-message-id="${CSS.escape(id)}"', script)
+        self.assertIn("renderToolCallItem(call, id, h.body)", script)
+        # 内联 Think 行 + 统一交互对象（单路径）：流式与 values 整帧共享同一批元素
+        self.assertIn("function ensureAgentHandle(id)", script)
+        self.assertIn("function ensureThinkLine(h)", script)
+        self.assertIn("function tailSummary(text, max)", script)
+        self.assertIn("think-badge", script)
+        self.assertIn("think-excerpt", script)
+        # 回归守卫：think-line 默认收起（不自动弹出）；推理仍逐 token 追加到 <pre>，点开可见完整推理
+        self.assertNotIn('line.setAttribute("open", "")', script)
+        self.assertNotIn("line.open = true", script)
+        # 双流模式（messages 逐 token + values 整帧）
+        self.assertIn("function consumeTokenChunk(data)", script)
+        self.assertIn('stream_mode: ["messages", "values"]', script)
+        self.assertIn("if (event === \"stream\") consumeTokenChunk(data);", script)
+        # 回归守卫：流式 AIMessageChunk 的 type 是 "AIMessageChunk"，不能因严格 === "ai"/"assistant"
+        # 而被跳过（曾导致推理增量全被忽略、只剩 values 整帧一次性渲染）
+        self.assertIn("if (!/ai|assistant/i.test(tokenType)) return;", script)
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+        self.assertIn(".message-body", css)
+        self.assertIn(".message-body .tool-item", css)
+        self.assertIn(".think-line", css)
+        self.assertIn(".think-badge", css)
 
     def test_context_ui包含rail编辑器与拖拽(self):
         script = (STATIC_DIR / "context-ui.js").read_text(encoding="utf-8")
