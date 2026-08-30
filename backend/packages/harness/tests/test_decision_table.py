@@ -431,26 +431,26 @@ class TestDecisionTableInRealAgent(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(tables), 0)
 
 
-class TestUpdateDecisionTableTool(unittest.TestCase):
+class TestUpdateDecisionTableTool(unittest.IsolatedAsyncioTestCase):
     def _runtime(self, thread_id="th-tool"):
         return SimpleNamespace(execution_info=SimpleNamespace(thread_id=thread_id))
 
     def _seed(self, temp_dir):
         write_decision_table("th-tool", STAGE_TWO, STAGE_THREE, root=Path(temp_dir))
 
-    def test_add_creates_entry(self):
+    async def test_add_creates_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="add", requirement="新要求", decision="保留", priority=2
                 )
                 # 直接函数调用（无 runtime）应返回 thread 缺失错误
                 self.assertIn("无法获取当前 thread ID", result)
 
-    def test_add_via_runtime_and_version_change(self):
+    async def test_add_via_runtime_and_version_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
@@ -458,7 +458,7 @@ class TestUpdateDecisionTableTool(unittest.TestCase):
             ):
                 self._seed(temp_dir)
                 before = read_decision_table("th-tool", root=Path(temp_dir)).version
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="add", requirement="新增约束", decision="丢弃", priority=1,
                     runtime=self._runtime(),
                 )
@@ -469,27 +469,27 @@ class TestUpdateDecisionTableTool(unittest.TestCase):
                     any(r.requirement == "新增约束" and r.priority == 1 for r in table.rows)
                 )
 
-    def test_add_duplicate_rejected(self):
+    async def test_add_duplicate_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="add", requirement="必须使用 Supabase", priority=3,
                     runtime=self._runtime(),
                 )
                 self.assertIn("已存在", result)
 
-    def test_update_existing_entry(self):
+    async def test_update_existing_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="update", requirement="必须使用 Supabase", priority=1,
                     runtime=self._runtime(),
                 )
@@ -498,27 +498,27 @@ class TestUpdateDecisionTableTool(unittest.TestCase):
                 row = next(r for r in table.rows if r.requirement == "必须使用 Supabase")
                 self.assertEqual(row.priority, 1)
 
-    def test_update_missing_rejected(self):
+    async def test_update_missing_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="update", requirement="不存在的要求", priority=3,
                     runtime=self._runtime(),
                 )
                 self.assertIn("不存在", result)
 
-    def test_remove_entry(self):
+    async def test_remove_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="remove", requirement="需要支持 SSR",
                     runtime=self._runtime(),
                 )
@@ -526,40 +526,40 @@ class TestUpdateDecisionTableTool(unittest.TestCase):
                 table = read_decision_table("th-tool", root=Path(temp_dir))
                 self.assertFalse(any(r.requirement == "需要支持 SSR" for r in table.rows))
 
-    def test_invalid_priority_rejected(self):
+    async def test_invalid_priority_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="add", requirement="X", priority=9,
                     runtime=self._runtime(),
                 )
                 self.assertIn("priority 只允许", result)
 
-    def test_empty_requirement_rejected(self):
+    async def test_empty_requirement_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="add", requirement="   ", priority=3,
                     runtime=self._runtime(),
                 )
                 self.assertIn("不能为空", result)
 
-    def test_invalid_operation_rejected(self):
+    async def test_invalid_operation_rejected(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
                 "caspian.agents.commitment.decision_table._PROJECT_ROOT",
                 Path(temp_dir),
             ):
                 self._seed(temp_dir)
-                result = update_decision_table.func(
+                result = await update_decision_table.coroutine(
                     operation="frobnicate", requirement="X", priority=3,
                     runtime=self._runtime(),
                 )

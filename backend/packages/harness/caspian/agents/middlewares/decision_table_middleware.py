@@ -2,12 +2,14 @@
 本文件对外提供 DecisionTableMiddleware 类，作为决策等级表的版本去重注入中间件。
 
 对外提供:
-    DecisionTableMiddleware(AgentMiddleware) — 覆盖 before_agent / abefore_agent 钩子，
-    读取当前 thread 的决策等级表并以固定 message id 注入 SystemMessage（含等级表与仲裁规则），
-    版本一致时跳过注入（零 token 去重）
+    DecisionTableMiddleware(AgentMiddleware) — 覆盖 before_agent / abefore_agent 与
+    before_model / abefore_model 钩子，读取当前 thread 的决策等级表并以固定 message id 注入
+    SystemMessage（含等级表与仲裁规则），版本一致时跳过注入（零 token 去重）。
+    before_model 在每次模型调用前重读磁盘并按版本热替换，使当前 run 内发生的等级表变更
+    可在当前 run 的后续轮次立即生效。
 
 输入:
-    before_agent / abefore_agent:
+    before_agent / abefore_agent / before_model / abefore_model:
         state: AgentState — 当前 agent 状态（含 messages，可含历史注入的等级表消息）
         runtime: ToolRuntime — LangGraph 运行时（含 execution_info.thread_id）
 
@@ -165,4 +167,36 @@ class DecisionTableMiddleware(AgentMiddleware):
             return self._inject_decision_table(state, runtime)
         except Exception:
             logger.error("DecisionTableMiddleware.abefore_agent 异常，跳过注入", exc_info=True)
+            return None
+
+    def before_model(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
+        """同步钩子：每次模型调用前重读磁盘并按版本热替换等级表。
+
+        输入:
+            state: AgentState — 当前 agent 状态
+            runtime: ToolRuntime — LangGraph 运行时
+
+        输出:
+            dict | None — 状态增量，无等级表或版本一致时返回 None
+        """
+        try:
+            return self._inject_decision_table(state, runtime)
+        except Exception:
+            logger.error("DecisionTableMiddleware.before_model 异常，跳过注入", exc_info=True)
+            return None
+
+    async def abefore_model(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
+        """异步钩子：每次模型调用前重读磁盘并按版本热替换等级表。
+
+        输入:
+            state: AgentState — 当前 agent 状态
+            runtime: ToolRuntime — LangGraph 运行时
+
+        输出:
+            dict | None — 状态增量，无等级表或版本一致时返回 None
+        """
+        try:
+            return self._inject_decision_table(state, runtime)
+        except Exception:
+            logger.error("DecisionTableMiddleware.abefore_model 异常，跳过注入", exc_info=True)
             return None

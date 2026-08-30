@@ -47,6 +47,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from caspian.agents.commitment import CommitmentMiddleware
+from caspian.agents.middlewares.decision_table_edit_middleware import DecisionTableEditMiddleware
 from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.tool_error_middleware import ToolErrorMiddleware
@@ -90,6 +91,7 @@ def build_general_middlewares(
     middlewares.extend([
         UploadsMiddleware(),
         DecisionTableMiddleware(),
+        DecisionTableEditMiddleware(),
     ])
     if commitment_enabled:
         if model is None:

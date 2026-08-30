@@ -90,7 +90,16 @@ def _build_graph_input(body: Any) -> dict | Command:
             if isinstance(additional_kwargs, dict)
             else None
         )
-        kwargs = {"additional_kwargs": {"files": files}} if files is not None else {}
+        kwargs: dict = {}
+        if files is not None:
+            kwargs["additional_kwargs"] = {"files": files}
+        elif (
+            isinstance(additional_kwargs, dict)
+            and additional_kwargs.get("decision_table_edit") is not None
+        ):
+            kwargs["additional_kwargs"] = {
+                "decision_table_edit": additional_kwargs["decision_table_edit"]
+            }
         messages.append(HumanMessage(content=message.get("content", ""), **kwargs))
     graph_input["messages"] = messages
     return graph_input

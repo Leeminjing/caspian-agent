@@ -125,3 +125,5 @@ class LeadAgentState(AgentState):
     task_contract: NotRequired[str]
     delegations: Annotated[list[DelegationEntry], merge_delegations]
     plan_active: NotRequired[bool]
+    # 中间件（如 DecisionTableEditMiddleware）可设置 jump_to="end" 让图跳过模型调用直接结束
+    jump_to: NotRequired[str | None]

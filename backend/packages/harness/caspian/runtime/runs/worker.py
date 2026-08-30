@@ -59,6 +59,7 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 from langgraph.types import Command, Interrupt
+from langgraph.errors import GraphInterrupt
 
 from caspian.agents.lead import make_lead_agent
 from caspian.config.app_config import AppConfig
@@ -257,58 +258,69 @@ async def _stream_one_round(
     """
     graph_interrupted = False
     aborted = False
-    async for mode, chunk in agent.astream(
-        graph_input,
-        config=runnable_config,
-        context=langgraph_context,
-        stream_mode=stream_mode,
-    ):
-        _accumulate_usage(record, mode, chunk)
-        if record.abort_event.is_set():
-            logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
-            aborted = True
-            break
+    try:
+        async for mode, chunk in agent.astream(
+            graph_input,
+            config=runnable_config,
+            context=langgraph_context,
+            stream_mode=stream_mode,
+        ):
+            _accumulate_usage(record, mode, chunk)
+            if record.abort_event.is_set():
+                logger.info("run '%s' 收到 abort 信号，停止执行", record.run_id)
+                aborted = True
+                break
 
-        interrupts = _extract_interrupts(chunk)
-        if interrupts:
-            graph_interrupted = True
-            for interrupt_data in interrupts:
+            interrupts = _extract_interrupts(chunk)
+            if interrupts:
+                graph_interrupted = True
+                for interrupt_data in interrupts:
+                    bridge.publish(
+                        record.run_id,
+                        _build_chunk_event("interrupt", interrupt_data),
+                    )
+                continue
+
+            serialized_chunk = _serialize_chunk(chunk)
+            if (
+                isinstance(serialized_chunk, (list, tuple))
+                and len(serialized_chunk) == 2
+                and serialized_chunk[0] == "custom"
+                and isinstance(serialized_chunk[1], dict)
+                and serialized_chunk[1].get("type") == "commitment_messages"
+            ):
+                if os.getenv("COMMITMENT_MESSAGES_MONITOR") == "1":
+                    print(
+                        "COMMITMENT_MESSAGES "
+                        + json.dumps(
+                            {
+                                "run_id": record.run_id,
+                                **serialized_chunk[1],
+                            },
+                            ensure_ascii=True,
+                        ),
+                        flush=True,
+                    )
                 bridge.publish(
                     record.run_id,
-                    _build_chunk_event("interrupt", interrupt_data),
-                )
-            continue
-
-        serialized_chunk = _serialize_chunk(chunk)
-        if (
-            isinstance(serialized_chunk, (list, tuple))
-            and len(serialized_chunk) == 2
-            and serialized_chunk[0] == "custom"
-            and isinstance(serialized_chunk[1], dict)
-            and serialized_chunk[1].get("type") == "commitment_messages"
-        ):
-            if os.getenv("COMMITMENT_MESSAGES_MONITOR") == "1":
-                print(
-                    "COMMITMENT_MESSAGES "
-                    + json.dumps(
-                        {
-                            "run_id": record.run_id,
-                            **serialized_chunk[1],
-                        },
-                        ensure_ascii=True,
+                    _build_chunk_event(
+                        "events",
+                        serialized_chunk[1],
                     ),
-                    flush=True,
                 )
+                continue
+            chunk_event = _build_chunk_event("events", serialized_chunk)
+            bridge.publish(record.run_id, chunk_event)
+    except GraphInterrupt as exc:
+        # before_agent / 非工具节点内的 interrupt() 以 GraphInterrupt 抛出而非 chunk；
+        # 捕获后同样发布 interrupt 事件，使其与工具中断的前端呈现一致。
+        graph_interrupted = True
+        interrupts = getattr(exc, "__interrupt__", None) or _extract_interrupts(exc)
+        for interrupt_data in interrupts:
             bridge.publish(
                 record.run_id,
-                _build_chunk_event(
-                    "events",
-                    serialized_chunk[1],
-                ),
+                _build_chunk_event("interrupt", _serialize_chunk(interrupt_data)),
             )
-            continue
-        chunk_event = _build_chunk_event("events", serialized_chunk)
-        bridge.publish(record.run_id, chunk_event)
     return graph_interrupted, aborted
 
 

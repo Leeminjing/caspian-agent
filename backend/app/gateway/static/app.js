@@ -312,6 +312,13 @@ function renderHistoryMessages(messages, archived = []) {
       showArchived = false;
       return;
     }
+    // 决策等级表编辑事务消息（编辑意图 / 编辑结果）不作为对话渲染
+    if (
+      message.additional_kwargs?.decision_table_edit ||
+      message.additional_kwargs?.decision_table_edit_ack
+    ) {
+      return;
+    }
     const type = message.type || message.role;
     if (type === "tool") {
       renderToolResultItem(message);
@@ -1176,6 +1183,47 @@ function disableReview(panel) {
   panel.classList.add("review-submitted");
 }
 
+function showDecisionTableAdjudication(interrupt) {
+  removeThinking();
+  finishTracePanel("等待确认");
+  state.pendingInterrupt = interrupt;
+  if (state.tracePanel?.isConnected) state.tracePanel.open = true;
+  const payload = interrupt.value || {};
+  setBusy(false);
+  setStatus("review", "等待确认");
+  removeEmptyState();
+
+  const fragment = $("#review-template").content.cloneNode(true);
+  const panel = $(".review-panel", fragment);
+  panel.dataset.stage = "0";
+  $(".review-kicker", panel).textContent = "决策等级表";
+  $("h3", panel).textContent = "存在冲突，需确认";
+  const rows = [].concat(
+    (payload.candidate || []).map((r) => `候选：${r.requirement}（${r.decision}，等级 ${r.priority}）`),
+    (payload.existing || []).map((r) => `现有：${r.requirement}（${r.decision}，等级 ${r.priority}）`)
+  );
+  $(".review-draft", panel).textContent = [].concat(rows, payload.conflicts || []).join("\n");
+  $(".review-error", panel).textContent = "";
+  $(".approve-button", panel).textContent = "采纳新表";
+  $(".approve-button", panel).dataset.decision = "adopt";
+  $(".revise-toggle", panel).textContent = "保留旧表";
+  $(".revise-toggle", panel).dataset.decision = "keep";
+  $(".segmented", panel)?.remove();
+  $(".revision-form", panel)?.remove();
+
+  $(".approve-button", panel).addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: "adopt" });
+  });
+  $(".revise-toggle", panel).addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: "keep" });
+  });
+
+  $("#messages").append(panel);
+  scrollMessages();
+}
+
 function showPlanReview(interrupt) {
   removeThinking();
   finishTracePanel("等待确认");
@@ -1297,6 +1345,7 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
   if (event === "events") consumeGraphEvent(data);
   if (event === "interrupt") {
     if (data?.value?.type === "plan_review") showPlanReview(data);
+    else if (data?.value?.type === "decision_table_adjudication") showDecisionTableAdjudication(data);
     else showReview(data);
   }
   if (event === "goal_state") renderGoalBadge(data?.goal);
@@ -1756,29 +1805,116 @@ function renderDecisionTable(data) {
   const version = $("#decision-table-version");
   const body = $("#decision-table-body");
   if (!data.exists || !data.rows.length) {
-    version.textContent = "";
-    body.innerHTML = '<p class="decision-table-empty">暂无等级表</p>';
-    return;
+    // 空表/新建：仍渲染可编辑表格与新增/提交，便于创建首条条目
+    version.textContent = data.exists ? `版本 ${data.version}` : "";
+  } else {
+    version.textContent = `版本 ${data.version}`;
   }
-  version.textContent = `版本 ${data.version}`;
   const table = document.createElement("table");
-  table.className = "decision-table";
-  table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th></tr></thead>";
+  table.className = "decision-table decision-table-editable";
+  table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th><th></th></tr></thead>";
   const tbody = document.createElement("tbody");
-  for (const row of data.rows) {
+  const appendEditRow = (row) => {
+    const r = row || {};
     const tr = document.createElement("tr");
-    const cells = [row.requirement, row.decision, _LEVEL_LABELS[row.priority] ?? String(row.priority)];
-    for (const [i, text] of cells.entries()) {
-      const td = document.createElement("td");
-      td.textContent = text;
-      if (i === 1) td.className = row.decision === "丢弃" ? "decision-dropped" : "decision-kept";
-      if (i === 2) td.className = "decision-level";
-      tr.append(td);
+    const tdReq = document.createElement("td");
+    const inputReq = document.createElement("input");
+    inputReq.type = "text";
+    inputReq.value = r.requirement || "";
+    inputReq.dataset.field = "requirement";
+    tdReq.append(inputReq);
+    const tdDec = document.createElement("td");
+    const selectDec = document.createElement("select");
+    selectDec.dataset.field = "decision";
+    for (const d of ["保留", "丢弃"]) {
+      const opt = document.createElement("option");
+      opt.value = d;
+      opt.textContent = d;
+      if (d === (r.decision || "保留")) opt.selected = true;
+      selectDec.append(opt);
     }
+    tdDec.append(selectDec);
+    const tdPri = document.createElement("td");
+    const selectPri = document.createElement("select");
+    selectPri.dataset.field = "priority";
+    for (const [v, label] of Object.entries(_LEVEL_LABELS)) {
+      const opt = document.createElement("option");
+      opt.value = v;
+      opt.textContent = label;
+      if (Number(v) === (r.priority || 3)) opt.selected = true;
+      selectPri.append(opt);
+    }
+    tdPri.append(selectPri);
+    const tdDel = document.createElement("td");
+    const delBtn = document.createElement("button");
+    delBtn.type = "button";
+    delBtn.className = "icon-button icon-button-muted";
+    delBtn.textContent = "删";
+    delBtn.title = "删除该条目";
+    delBtn.addEventListener("click", () => tr.remove());
+    tdDel.append(delBtn);
+    tr.append(tdReq, tdDec, tdPri, tdDel);
     tbody.append(tr);
-  }
+  };
+  for (const row of data.rows) appendEditRow(row);
   table.append(tbody);
   body.replaceChildren(table);
+
+  const actions = document.createElement("div");
+  actions.className = "decision-table-actions";
+  const addBtn = document.createElement("button");
+  addBtn.type = "button";
+  addBtn.className = "button button-quiet";
+  addBtn.textContent = "新增条目";
+  addBtn.addEventListener("click", () => appendEditRow({}));
+  const saveBtn = document.createElement("button");
+  saveBtn.type = "button";
+  saveBtn.className = "button button-primary";
+  saveBtn.textContent = "提交编辑";
+  const msg = document.createElement("p");
+  msg.className = "decision-table-msg";
+  saveBtn.addEventListener("click", () => {
+    collectAndSubmitDecisionTable(body, msg);
+  });
+  actions.append(addBtn, saveBtn);
+  body.append(actions, msg);
+}
+
+function collectRows(body) {
+  const rows = [];
+  body.querySelectorAll("tbody tr").forEach((tr) => {
+    const requirement = tr.querySelector('[data-field="requirement"]')?.value || "";
+    const decision = tr.querySelector('[data-field="decision"]')?.value || "";
+    const priority = Number(tr.querySelector('[data-field="priority"]')?.value || 0);
+    if (!requirement || !decision || !priority) return;
+    rows.push({ requirement, decision, priority });
+  });
+  return rows;
+}
+
+function collectAndSubmitDecisionTable(body, msg) {
+  const rows = collectRows(body);
+  if (!rows.length) {
+    msg.textContent = "没有可提交的条目";
+    return;
+  }
+  msg.textContent = "提交中…";
+  sendDecisionTableEdit(rows, msg);
+}
+
+async function sendDecisionTableEdit(rows, msg) {
+  const content = "用户手工编辑了决策等级表，请据此执行冲突检测。";
+  await streamRun({
+    input: {
+      messages: [{
+        role: "user",
+        content,
+        additional_kwargs: { decision_table_edit: { rows } },
+      }],
+    },
+    selected_skills: [],
+    context: state.modelName ? { model_name: state.modelName } : undefined,
+  });
 }
 
 async function loadDecisionTable() {
