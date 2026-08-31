@@ -139,7 +139,27 @@ function renderThreads() {
         onCommit: (value) => renameThread(thread.id, value),
       });
     });
-    row.append(button, rename);
+    const archive = document.createElement("button");
+    archive.type = "button";
+    archive.className = "thread-archive";
+    archive.textContent = "⊘";
+    archive.title = "归档";
+    archive.setAttribute("aria-label", "归档");
+    archive.addEventListener("click", (event) => {
+      event.stopPropagation();
+      archiveThread(thread.id);
+    });
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "thread-delete";
+    del.textContent = "✕";
+    del.title = "删除";
+    del.setAttribute("aria-label", "删除");
+    del.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteThread(thread.id);
+    });
+    row.append(button, rename, archive, del);
     list.append(row);
   });
   const thread = currentThread();
@@ -225,6 +245,167 @@ function renameThread(id, title) {
       return payload;
     });
 }
+
+async function apiFetch(url, options = {}) {
+  const response = await fetch(url, {
+    ...options,
+    credentials: "same-origin",
+    headers: {
+      "Content-Type": "application/json",
+      "X-CSRF-Token": csrfToken(),
+      ...(options.headers || {}),
+    },
+  });
+  if (!response.ok) {
+    let detail;
+    try { detail = (await response.json()).detail; } catch { detail = await response.text(); }
+    throw new Error(typeof detail === "string" ? detail : (detail?.message || JSON.stringify(detail)));
+  }
+  return response.json();
+}
+
+function removeLocalThread(id) {
+  const index = state.threads.findIndex((item) => item.id === id);
+  if (index === -1) return;
+  state.threads.splice(index, 1);
+  saveThreads();
+  if (state.threadId === id) {
+    const next = state.threads[0];
+    if (next) selectThread(next.id);
+    else {
+      state.threadId = null;
+      saveCurrentThread();
+      renderThreads();
+    }
+  } else {
+    renderThreads();
+  }
+}
+
+async function archiveThread(id) {
+  try {
+    await apiFetch(`/api/threads/${encodeURIComponent(id)}/archive`, { method: "POST" });
+    removeLocalThread(id);
+    window.CaspianContextUi?.onRunEnded();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+function deleteThread(id) {
+  const title = state.threads.find((item) => item.id === id)?.title || id;
+  openConfirm(`「${title}」将被永久删除且不可恢复（连同其所有派生子会话）。确定删除吗？`, async () => {
+    await apiFetch(`/api/threads/${encodeURIComponent(id)}`, { method: "DELETE" });
+    removeLocalThread(id);
+    window.CaspianContextUi?.onRunEnded();
+  });
+}
+
+async function restoreThread(id) {
+  try {
+    await apiFetch(`/api/threads/${encodeURIComponent(id)}/restore`, { method: "POST" });
+    const items = await loadArchived();
+    const archived = items.find((item) => item.thread_id === id);
+    if (archived && !state.threads.some((item) => item.id === id)) {
+      state.threads.unshift({ id, title: archived.title || "新会话", updatedAt: Date.now() });
+      saveThreads();
+      renderThreads();
+    }
+    window.CaspianContextUi?.onRunEnded();
+  } catch (error) {
+    handleError(error);
+  }
+}
+
+async function loadArchived() {
+  try {
+    const items = await apiFetch("/api/threads/archived");
+    const list = Array.isArray(items) ? items : [];
+    renderArchivedList(list);
+    return list;
+  } catch (error) {
+    $("#archived-list").innerHTML = '<p class="archived-empty">加载失败</p>';
+    return [];
+  }
+}
+
+function renderArchivedList(items) {
+  const list = $("#archived-list");
+  if (!items.length) {
+    list.innerHTML = '<p class="archived-empty">暂无已归档的会话</p>';
+    return;
+  }
+  list.replaceChildren();
+  items.forEach((item) => {
+    const row = document.createElement("div");
+    row.className = "archived-row";
+    const name = document.createElement("span");
+    name.className = "archived-name";
+    name.textContent = item.title || item.thread_id;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "button button-quiet archived-restore";
+    btn.textContent = "恢复";
+    btn.addEventListener("click", () => restoreThread(item.thread_id));
+    row.append(name, btn);
+    list.append(row);
+  });
+}
+
+function setSettingsMenu(open) {
+  const menu = $("#settings-menu");
+  menu.hidden = !open;
+  $("#user-menu-button").setAttribute("aria-expanded", String(open));
+}
+
+function setArchivedOpen(open) {
+  const panel = $("#archived-panel");
+  const wasOpen = !panel.hidden;
+  const trigger = document.activeElement;
+  panel.hidden = !open;
+  if (open && !wasOpen) {
+    document.dispatchEvent(new CustomEvent("ui:surface-open", {
+      detail: { surface: panel, trigger, modal: false, label: "已归档的会话" },
+    }));
+  } else if (!open && wasOpen) {
+    document.dispatchEvent(new CustomEvent("ui:surface-close", {
+      detail: { surface: panel, label: "已归档的会话" },
+    }));
+  }
+  if (open) loadArchived();
+}
+
+let confirmCallback = null;
+function openConfirm(text, onOk) {
+  $("#confirm-text").textContent = text;
+  confirmCallback = onOk;
+  $("#confirm-panel").hidden = false;
+}
+function closeConfirm() {
+  $("#confirm-panel").hidden = true;
+  confirmCallback = null;
+}
+
+$("#user-menu-button")?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  setSettingsMenu($("#settings-menu").hidden);
+});
+$("#open-archived")?.addEventListener("click", () => {
+  setSettingsMenu(false);
+  setArchivedOpen(true);
+});
+$("#archived-close")?.addEventListener("click", () => setArchivedOpen(false));
+$("#confirm-cancel")?.addEventListener("click", closeConfirm);
+$("#confirm-ok")?.addEventListener("click", async () => {
+  const ok = confirmCallback;
+  closeConfirm();
+  if (ok) {
+    try { await ok(); } catch (error) { handleError(error); }
+  }
+});
+document.addEventListener("click", (event) => {
+  if (!event.target.closest?.(".user-row")) setSettingsMenu(false);
+});
 
 function selectThread(id) {
   if (state.running) return;

@@ -137,11 +137,13 @@ from backend.app.gateway.routers.contexts import router as contexts_router
 from backend.app.gateway.routers.plugins import router as plugins_router
 from backend.app.gateway.routers.models import router as models_router
 from backend.app.gateway.routers.goal import router as goal_router
+from backend.app.gateway.routers.thread_lifecycle import router as thread_lifecycle_router
 
 app.include_router(thread_runs_router, prefix="/api/threads")
 app.include_router(uploads_router, prefix="/api/threads")
 app.include_router(decision_table_router, prefix="/api/threads")
 app.include_router(chat_records_router, prefix="/api/threads")
+app.include_router(thread_lifecycle_router, prefix="/api/threads")
 app.include_router(skills_router)
 app.include_router(knowledge_router)
 app.include_router(contexts_router)
@@ -149,4 +151,4 @@ app.include_router(plugins_router)
 app.include_router(models_router)
 app.include_router(auth_router)
 app.include_router(goal_router, prefix="/api/threads")
-logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, skills, knowledge, contexts, plugins, models, auth, goal")
+logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, thread_lifecycle, skills, knowledge, contexts, plugins, models, auth, goal")

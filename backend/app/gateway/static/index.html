@@ -45,8 +45,16 @@
       </header>
       <nav id="thread-list" class="thread-list" aria-label="会话列表"></nav>
       <footer class="user-row">
-        <span id="user-avatar" class="avatar"></span>
-        <span id="user-name" class="user-name"></span>
+        <button id="user-menu-button" class="user-row-main" type="button"
+          title="打开设置" aria-label="打开设置" aria-haspopup="menu" aria-expanded="false">
+          <span id="user-avatar" class="avatar"></span>
+          <span id="user-name" class="user-name"></span>
+        </button>
+        <div id="settings-menu" class="settings-menu" role="menu" hidden>
+          <div class="settings-menu-title">设置</div>
+          <div class="settings-menu-section">数据</div>
+          <button id="open-archived" class="settings-menu-item" type="button" role="menuitem">已归档的会话</button>
+        </div>
         <button id="logout" class="icon-button icon-button-muted" type="button" title="退出登录" aria-label="退出登录">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/></svg>
         </button>
@@ -264,6 +272,29 @@
     <div id="plugin-status-list"></div>
     <h4>执行参与链</h4>
     <ol id="plugin-trace-list" class="plugin-trace-list"></ol>
+  </section>
+
+  <section id="archived-panel" class="archived-panel" hidden role="dialog" aria-modal="false"
+    aria-labelledby="archived-title" tabindex="-1" data-ui-surface="archived">
+    <header>
+      <strong id="archived-title">已归档的会话</strong>
+      <button id="archived-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </header>
+    <div id="archived-list" class="archived-list"></div>
+  </section>
+
+  <section id="confirm-panel" class="confirm-panel" hidden role="dialog" aria-modal="true"
+    aria-labelledby="confirm-title">
+    <div class="confirm-card">
+      <strong id="confirm-title">删除会话</strong>
+      <p id="confirm-text"></p>
+      <div class="confirm-actions">
+        <button id="confirm-cancel" class="button button-quiet" type="button">取消</button>
+        <button id="confirm-ok" class="button button-danger" type="button">删除</button>
+      </div>
+    </div>
   </section>
 
   <script src="/assets/vendor/marked.min.js" defer></script>

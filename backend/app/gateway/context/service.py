@@ -267,7 +267,7 @@ class ContextService:
             tasks = (
                 await session.scalars(
                     select(WebThread)
-                    .where(WebThread.user_id == user_id)
+                    .where(WebThread.user_id == user_id, WebThread.archived_at.is_(None))
                     .order_by(WebThread.created_at)
                 )
             ).all()

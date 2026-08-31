@@ -23,6 +23,8 @@
     (3.6) 通过 create_store(app_config) 创建 Store → 挂载到 app.state.store
         → 通过 stack.push_async_callback 注册 dispose_store 以确保退出时释放连接
     (3.7) 创建 ContextService（Recursive Context Forking，依赖 checkpointer）
+    (3.7.1) 创建 ThreadLifecycleService（会话级联删除/归档/恢复，依赖 checkpointer + store）→ 挂载到
+        app.state.thread_lifecycle
     (3.8) 创建 PluginRuntime（插件系统，public 插件启动期加载）→ 挂载到
         app.state.plugin_runtime 并设置进程单例
     (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
@@ -94,6 +96,12 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
 
         app.state.context_service = ContextService(checkpointer)
         logger.info("ContextService 已挂载到 app.state.context_service")
+
+        # (3.7.1) ThreadLifecycleService 初始化（会话级联删除/归档/恢复，依赖 checkpointer + store）
+        from backend.app.gateway.context.lifecycle import ThreadLifecycleService
+
+        app.state.thread_lifecycle = ThreadLifecycleService(checkpointer, store)
+        logger.info("ThreadLifecycleService 已挂载到 app.state.thread_lifecycle")
 
         # (3.8) PluginRuntime 初始化（插件系统：public 插件在启动期加载，
         #       custom 插件在用户首次 run 时惰性加载；加载失败不影响系统启动）

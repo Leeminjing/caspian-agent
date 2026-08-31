@@ -313,11 +313,11 @@ textarea:focus-visible {
 }
 
 .user-row {
-  display: grid;
+  position: relative;
+  display: flex;
   height: 62px;
-  grid-template-columns: 30px minmax(0, 1fr) 36px;
-  gap: 9px;
   align-items: center;
+  gap: 9px;
   padding: 0 12px;
   border-top: 1px solid rgb(255 255 255 / 9%);
 }
@@ -1733,8 +1733,223 @@ textarea:focus-visible {
 .goal-bar-action[data-cmd="edit"]:hover {
   color: var(--accent, #0969da);
 }
-.goal-bar-action[data-cmd="clear"]:hover {
-  color: #cf222e;
+.goal-bar-action[data-cmd="clear"]:focus-visible {
+  outline: 2px solid #cf222e;
+}
+
+/* --- 会话生命周期：设置菜单 / 已归档会话面板 / 删除确认弹窗 / 会话行动作按钮 --- */
+
+.user-row-main {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+  grid-template-columns: 30px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.thread-archive,
+.thread-delete {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  margin-left: 2px;
+  border: 0;
+  border-radius: 4px;
+  color: #8f979d;
+  background: transparent;
+  font-size: 12px;
+  line-height: 1;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.thread-row:hover .thread-rename,
+.thread-row:hover .thread-archive,
+.thread-row:hover .thread-delete {
+  opacity: 1;
+}
+
+.thread-archive:hover {
+  color: white;
+  background: rgb(255 255 255 / 10%);
+}
+
+.thread-delete:hover {
+  color: white;
+  background: #d9534f;
+}
+
+.settings-menu {
+  position: absolute;
+  right: 12px;
+  bottom: calc(100% + 6px);
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 8px;
+  background: #20282c;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 35%);
+  z-index: 40;
+}
+
+.settings-menu[hidden] {
+  display: none;
+}
+
+.settings-menu-title {
+  padding: 6px 8px;
+  color: #8f979d;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.settings-menu-section {
+  padding: 6px 8px 2px;
+  color: #8f979d;
+  font-size: 11px;
+}
+
+.settings-menu-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 8px 10px;
+  color: #dce0e2;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.settings-menu-item:hover {
+  background: rgb(255 255 255 / 8%);
+  color: white;
+}
+
+.archived-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  width: min(560px, 92vw);
+  max-height: 70vh;
+  flex-direction: column;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 12px;
+  background: #20282c;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 45%);
+  z-index: 60;
+}
+
+.archived-panel[hidden] {
+  display: none;
+}
+
+.archived-panel header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-bottom: 1px solid rgb(255 255 255 / 9%);
+}
+
+.archived-list {
+  overflow: auto;
+  padding: 8px;
+}
+
+.archived-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-bottom: 1px solid rgb(255 255 255 / 6%);
+}
+
+.archived-row:last-child {
+  border-bottom: 0;
+}
+
+.archived-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: #dce0e2;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.archived-restore {
+  flex: 0 0 auto;
+}
+
+.archived-empty {
+  padding: 12px;
+  color: #8f979d;
+  text-align: center;
+}
+
+.confirm-panel {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgb(0 0 0 / 55%);
+  z-index: 70;
+}
+
+.confirm-panel[hidden] {
+  display: none;
+}
+
+.confirm-card {
+  width: min(460px, 92vw);
+  padding: 18px 20px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 12px;
+  background: #20282c;
+  box-shadow: 0 16px 48px rgb(0 0 0 / 45%);
+}
+
+.confirm-card strong {
+  display: block;
+  margin-bottom: 8px;
+  font-size: 15px;
+}
+
+.confirm-card p {
+  margin: 0 0 16px;
+  color: #cbd0d3;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.confirm-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.button-danger {
+  background: #d9534f;
+  color: white;
+}
+
+.button-danger:hover {
+  background: #c9302c;
 }
 
 
