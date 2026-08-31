@@ -152,7 +152,7 @@ class FrontendTests(unittest.TestCase):
         plugins = (STATIC_DIR / "plugins.js").read_text(encoding="utf-8")
 
         self.assertIn('/assets/ui-polish.css?v=polish-10', html)
-        self.assertIn('/assets/ui-polish.js?v=polish-5', html)
+        self.assertIn('/assets/ui-polish.js?v=f64-settings-1', html)
         self.assertIn('id="model-toggle"', html)
         self.assertIn('id="model-popover"', html)
         self.assertIn('class="model-toggle"', html)

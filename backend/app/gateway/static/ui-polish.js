@@ -88,7 +88,7 @@
 
   function surfaceCloseControl(surface) {
     return $(
-      "#decision-table-close, #plugin-close, [data-action=\"exit-context-editor\"]",
+      "#decision-table-close, #plugin-close, #settings-close, [data-action=\"exit-context-editor\"]",
       surface,
     );
   }

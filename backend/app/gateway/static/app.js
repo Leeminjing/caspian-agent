@@ -311,6 +311,7 @@ async function restoreThread(id) {
       saveThreads();
       renderThreads();
     }
+    document.dispatchEvent(new CustomEvent("ui:archived-changed", { detail: { items } }));
     window.CaspianContextUi?.onRunEnded();
   } catch (error) {
     handleError(error);
@@ -320,22 +321,19 @@ async function restoreThread(id) {
 async function loadArchived() {
   try {
     const items = await apiFetch("/api/threads/archived");
-    const list = Array.isArray(items) ? items : [];
-    renderArchivedList(list);
-    return list;
+    return Array.isArray(items) ? items : [];
   } catch (error) {
-    $("#archived-list").innerHTML = '<p class="archived-empty">加载失败</p>';
     return [];
   }
 }
 
-function renderArchivedList(items) {
-  const list = $("#archived-list");
+function renderArchivedList(items, container) {
+  if (!container) return;
   if (!items.length) {
-    list.innerHTML = '<p class="archived-empty">暂无已归档的会话</p>';
+    container.innerHTML = '<p class="archived-empty">暂无已归档的会话</p>';
     return;
   }
-  list.replaceChildren();
+  container.replaceChildren();
   items.forEach((item) => {
     const row = document.createElement("div");
     row.className = "archived-row";
@@ -348,31 +346,8 @@ function renderArchivedList(items) {
     btn.textContent = "恢复";
     btn.addEventListener("click", () => restoreThread(item.thread_id));
     row.append(name, btn);
-    list.append(row);
+    container.append(row);
   });
-}
-
-function setSettingsMenu(open) {
-  const menu = $("#settings-menu");
-  menu.hidden = !open;
-  $("#user-menu-button").setAttribute("aria-expanded", String(open));
-}
-
-function setArchivedOpen(open) {
-  const panel = $("#archived-panel");
-  const wasOpen = !panel.hidden;
-  const trigger = document.activeElement;
-  panel.hidden = !open;
-  if (open && !wasOpen) {
-    document.dispatchEvent(new CustomEvent("ui:surface-open", {
-      detail: { surface: panel, trigger, modal: false, label: "已归档的会话" },
-    }));
-  } else if (!open && wasOpen) {
-    document.dispatchEvent(new CustomEvent("ui:surface-close", {
-      detail: { surface: panel, label: "已归档的会话" },
-    }));
-  }
-  if (open) loadArchived();
 }
 
 let confirmCallback = null;
@@ -386,15 +361,6 @@ function closeConfirm() {
   confirmCallback = null;
 }
 
-$("#user-menu-button")?.addEventListener("click", (event) => {
-  event.stopPropagation();
-  setSettingsMenu($("#settings-menu").hidden);
-});
-$("#open-archived")?.addEventListener("click", () => {
-  setSettingsMenu(false);
-  setArchivedOpen(true);
-});
-$("#archived-close")?.addEventListener("click", () => setArchivedOpen(false));
 $("#confirm-cancel")?.addEventListener("click", closeConfirm);
 $("#confirm-ok")?.addEventListener("click", async () => {
   const ok = confirmCallback;
@@ -402,9 +368,6 @@ $("#confirm-ok")?.addEventListener("click", async () => {
   if (ok) {
     try { await ok(); } catch (error) { handleError(error); }
   }
-});
-document.addEventListener("click", (event) => {
-  if (!event.target.closest?.(".user-row")) setSettingsMenu(false);
 });
 
 function selectThread(id) {

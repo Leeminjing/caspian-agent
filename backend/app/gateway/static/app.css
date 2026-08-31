@@ -1804,21 +1804,6 @@ textarea:focus-visible {
   display: none;
 }
 
-.settings-menu-title {
-  padding: 6px 8px;
-  color: #8f979d;
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.settings-menu-section {
-  padding: 6px 8px 2px;
-  color: #8f979d;
-  font-size: 11px;
-}
-
 .settings-menu-item {
   display: block;
   width: 100%;
@@ -1837,32 +1822,172 @@ textarea:focus-visible {
   color: white;
 }
 
-.archived-panel {
+.settings-window {
   position: fixed;
-  top: 50%;
-  left: 50%;
-  transform: translate(-50%, -50%);
-  display: flex;
-  width: min(560px, 92vw);
-  max-height: 70vh;
-  flex-direction: column;
-  border: 1px solid rgb(255 255 255 / 12%);
-  border-radius: 12px;
-  background: #20282c;
-  box-shadow: 0 16px 48px rgb(0 0 0 / 45%);
-  z-index: 60;
+  inset: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  place-items: center;
+  background: rgb(0 0 0 / 45%);
+  padding: 16px;
+  z-index: 65;
 }
 
-.archived-panel[hidden] {
+.settings-window[hidden] {
   display: none;
 }
 
-.archived-panel header {
+.settings-window-card {
+  display: flex;
+  width: min(960px, 100%);
+  min-height: min(78vh, 640px);
+  max-height: min(88vh, 800px);
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.18);
+}
+
+.settings-window-card > header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 12px 14px;
-  border-bottom: 1px solid rgb(255 255 255 / 9%);
+  border-bottom: 1px solid var(--line);
+}
+
+.settings-window-card > header strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.settings-window-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.settings-window-body {
+  display: flex;
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.settings-nav {
+  display: flex;
+  width: 220px;
+  flex: 0 0 auto;
+  flex-direction: column;
+  gap: 3px;
+  padding: 18px 12px;
+  border-right: 1px solid var(--line);
+  background: var(--soft);
+}
+
+.settings-nav-item {
+  display: block;
+  width: 100%;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: var(--ink);
+  background: transparent;
+  text-align: left;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.settings-nav-item:hover {
+  background: rgb(8 127 115 / 8%);
+}
+
+.settings-nav-item.is-active {
+  color: var(--teal-dark);
+  background: rgb(8 127 115 / 12%);
+  font-weight: 650;
+}
+
+.settings-sublinks {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.settings-sublink {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: min(480px, 100%);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--ink);
+  background: var(--surface);
+  text-align: left;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.settings-sublink::after {
+  content: "›";
+  color: var(--muted);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.settings-sublink:hover {
+  border-color: var(--teal);
+  color: var(--teal-dark);
+}
+
+.settings-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+  border: 0;
+  padding: 4px 6px;
+  color: var(--muted);
+  background: transparent;
+  text-align: left;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.settings-back:hover {
+  color: var(--teal-dark);
+}
+
+.settings-content {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: auto;
+  padding: 20px 22px;
+}
+
+.settings-page h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.settings-placeholder {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.settings-config {
+  margin: 12px 0 0;
+  padding: 12px;
+  overflow: auto;
+  max-height: 40vh;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 12px;
+  white-space: pre-wrap;
 }
 
 .archived-list {
@@ -1875,7 +2000,7 @@ textarea:focus-visible {
   align-items: center;
   gap: 10px;
   padding: 8px 6px;
-  border-bottom: 1px solid rgb(255 255 255 / 6%);
+  border-bottom: 1px solid var(--line);
 }
 
 .archived-row:last-child {
@@ -1886,7 +2011,7 @@ textarea:focus-visible {
   flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
-  color: #dce0e2;
+  color: var(--ink);
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1898,7 +2023,7 @@ textarea:focus-visible {
 
 .archived-empty {
   padding: 12px;
-  color: #8f979d;
+  color: var(--muted);
   text-align: center;
 }
 

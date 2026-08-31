@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
   <title>Caspian</title>
-  <link rel="stylesheet" href="/assets/app.css?v=f62-streaming-md-1">
+  <link rel="stylesheet" href="/assets/app.css?v=f64-settings-4">
   <link rel="stylesheet" href="/assets/skills.css?v=change50">
   <link rel="stylesheet" href="/assets/markdown.css?v=merge-45">
   <link rel="stylesheet" href="/assets/context.css?v=f49">
@@ -51,9 +51,7 @@
           <span id="user-name" class="user-name"></span>
         </button>
         <div id="settings-menu" class="settings-menu" role="menu" hidden>
-          <div class="settings-menu-title">设置</div>
-          <div class="settings-menu-section">数据</div>
-          <button id="open-archived" class="settings-menu-item" type="button" role="menuitem">已归档的会话</button>
+          <button id="open-settings" class="settings-menu-item" type="button" role="menuitem">设置</button>
         </div>
         <button id="logout" class="icon-button icon-button-muted" type="button" title="退出登录" aria-label="退出登录">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/></svg>
@@ -274,15 +272,37 @@
     <ol id="plugin-trace-list" class="plugin-trace-list"></ol>
   </section>
 
-  <section id="archived-panel" class="archived-panel" hidden role="dialog" aria-modal="false"
-    aria-labelledby="archived-title" tabindex="-1" data-ui-surface="archived">
-    <header>
-      <strong id="archived-title">已归档的会话</strong>
-      <button id="archived-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
-      </button>
-    </header>
-    <div id="archived-list" class="archived-list"></div>
+  <section id="settings-window" class="settings-window" hidden role="dialog" aria-modal="false"
+    aria-labelledby="settings-title" tabindex="-1" data-ui-surface="settings">
+    <div class="settings-window-card">
+      <header>
+        <strong id="settings-title">设置</strong>
+        <div class="settings-window-actions">
+          <button id="open-config-file" class="button button-quiet" type="button">打开配置文件</button>
+          <button id="settings-close" class="icon-button icon-button-muted" type="button" aria-label="关闭" title="关闭">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+        </div>
+      </header>
+      <div class="settings-window-body">
+        <nav class="settings-nav" aria-label="设置导航">
+          <button type="button" class="settings-nav-item" data-settings-view="data">数据</button>
+        </nav>
+        <div class="settings-content">
+          <div class="settings-page" data-settings-page="data">
+            <div class="settings-sublinks">
+              <button type="button" class="settings-sublink" id="open-archived">已归档的会话</button>
+            </div>
+          </div>
+          <div class="settings-page" data-settings-page="archived" hidden>
+            <button type="button" class="settings-back" id="back-to-data">← 数据</button>
+            <h4>已归档的会话</h4>
+            <div id="settings-archived-list" class="archived-list"></div>
+          </div>
+          <pre id="settings-config" class="settings-config" hidden></pre>
+        </div>
+      </div>
+    </div>
   </section>
 
   <section id="confirm-panel" class="confirm-panel" hidden role="dialog" aria-modal="true"
@@ -303,7 +323,8 @@
   <script src="/assets/context-editor.js?v=f49" defer></script>
   <script src="/assets/context-ui.js?v=rename-2" defer></script>
   <script src="/assets/plugins.js?v=polish-2" defer></script>
-  <script src="/assets/app.js?v=f62-streaming-md-1" defer></script>
-  <script src="/assets/ui-polish.js?v=polish-5" defer></script>
+  <script src="/assets/app.js?v=f64-settings-1" defer></script>
+  <script src="/assets/settings.js?v=f64-settings-3" defer></script>
+  <script src="/assets/ui-polish.js?v=f64-settings-1" defer></script>
 </body>
 </html>
