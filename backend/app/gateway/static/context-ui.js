@@ -167,10 +167,6 @@
     updateBanner();
   }
 
-  function orderThreads(threads) {
-    return contextEditor.orderTasksByTree(threads, state.tree);
-  }
-
   function onThreadSelected() {
     refreshTree().catch(() => {});
   }
@@ -928,6 +924,5 @@
     onThreadSelected,
     onRunEnded,
     openDecisionFromBlock,
-    orderThreads,
   };
 })(window);

@@ -48,13 +48,7 @@ assert.throws(
   /消息 1 不是合法 JSON/,
 );
 
-// Caspian 线程形状 { id }；树为单用户扁平列表
-const threadRoot = { id: "root" };
-const threadChild = { id: "child" };
-const threadBlocked = { id: "blocked" };
-const threadLegacy = { id: "legacy" };
-const threadUnrelated = { id: "unrelated" };
-const threadUnrelatedChild = { id: "unrelated-child" };
+// 单用户扁平 Context 树；血缘归属用于 Context 树栏的 family 过滤
 const tree = [
   { context_id: "child", parents: [{ context_id: "root" }] },
   { context_id: "blocked", parents: [{ context_id: "root" }] },
@@ -62,10 +56,6 @@ const tree = [
   { context_id: "unrelated", parents: [] },
   { context_id: "unrelated-child", parents: [{ context_id: "unrelated" }] },
 ];
-assert.deepEqual(
-  editor.orderTasksByTree([threadBlocked, threadChild, threadLegacy, threadUnrelatedChild, threadUnrelated, threadRoot], tree).map((t) => t.id),
-  ["root", "child", "blocked", "unrelated", "unrelated-child", "legacy"],
-);
 assert.deepEqual(
   [...editor.contextFamilyIds(tree, "child")].sort(),
   ["blocked", "child", "root"],

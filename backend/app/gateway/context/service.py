@@ -6,6 +6,10 @@
 数据。具体工作流为校验同用户来源和已提交 checkpoint，保存用户 authored messages，
 调用 context_projection 编译执行投影，在无需降级或用户批准后以新 thread_id 调用
 aupdate_state 创建独立 checkpoint。示例：`context = await service.derive(user_id, body)`。
+
+其中 tree() 的返回体同时服务两个消费方：Context 树栏读血缘字段（depth/parents），
+会话列表读时间字段（created_at/updated_at）按最近活跃倒序排序。updated_at 由
+web_threads 列的 onupdate=func.now() 在 usage 聚合、重命名、归档等写入时自动推进。
 """
 
 from __future__ import annotations
@@ -43,6 +47,10 @@ _RUNNABLE_STATUSES = frozenset({"valid", "repaired", "approved"})
 
 def _new_id() -> str:
     return uuid.uuid4().hex
+
+
+def _iso(value: datetime | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 class ContextService:
@@ -311,6 +319,8 @@ class ContextService:
                     "cache_input_tokens": input_tokens,
                     "cache_hit_tokens": hit_tokens,
                     "cache_hit_rate": hit_tokens / input_tokens if input_tokens else None,
+                    "created_at": _iso(task.created_at),
+                    "updated_at": _iso(task.updated_at),
                     "parents": [self._source_payload(source) for source in by_child.get(task.thread_id, [])],
                 })
             return result

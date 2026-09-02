@@ -1,3 +1,17 @@
+/*
+本文件对外提供网关前端主控制器：会话列表、聊天流式渲染、承诺层评审卡、决策等级表、
+目标徽章与登录态管理，是 index.html 的主脚本。
+
+输入为用户交互事件与 /api/threads/{id}/runs/stream 的 SSE 事件；输出为 DOM 渲染与对
+后端 REST 接口的调用。具体工作流为：登录后 loadThreads() 以 GET /api/contexts/tree
+为事实源装载会话全集，经 CaspianThreadList 合并本地未入库会话并按最近活跃倒序渲染；
+提交任务后逐帧消费 SSE，按事件类型分派到正文、推理、工具卡与中断评审面板。
+
+会话列表的事实源是服务端；localStorage["caspian.threads"] 仅作离线降级缓存（保存前
+先排序再截断最近 20 条），localStorage["caspian.current_thread"] 记住当前选中会话。
+
+示例：submitTask("帮我分析这份日志") 会创建 run 并把流式结果渲染到消息区。
+*/
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 
@@ -73,7 +87,26 @@ function threadId() {
 }
 
 function saveThreads() {
-  localStorage.setItem("caspian.threads", JSON.stringify(state.threads.slice(0, 20)));
+  // ponytail: 仅作离线降级缓存，先按最近活跃排序再截断，避免缓存到最旧的 20 条
+  const recent = window.CaspianThreadList
+    ? window.CaspianThreadList.sortThreads(state.threads).slice(0, 20)
+    : state.threads.slice(0, 20);
+  localStorage.setItem("caspian.threads", JSON.stringify(recent));
+}
+
+async function loadThreads() {
+  try {
+    const tree = await apiFetch("/api/contexts/tree");
+    // 不变量：state.threads 始终按展示序排列（未入库置顶 + 最近活跃倒序），
+    // 使 ensureThread / removeLocalThread 等按 [0] 取「列表首位」的调用方无需各自排序
+    state.threads = window.CaspianThreadList.sortThreads(
+      window.CaspianThreadList.mergeThreads(tree, state.threads),
+    );
+    saveThreads();
+    renderThreads();
+  } catch {
+    // 服务端不可达：保留既有本地缓存列表，不清空，当前会话仍可用
+  }
 }
 
 function saveCurrentThread() {
@@ -86,7 +119,7 @@ function currentThread() {
 }
 
 function createThread() {
-  const thread = { id: threadId(), title: "新会话", updatedAt: Date.now() };
+  const thread = { id: threadId(), title: "新会话", updatedAt: Date.now(), pending: true };
   state.threads.unshift(thread);
   state.threadId = thread.id;
   saveThreads();
@@ -111,8 +144,8 @@ function ensureThread() {
 function renderThreads() {
   const list = $("#thread-list");
   list.replaceChildren();
-  const threads = window.CaspianContextUi
-    ? window.CaspianContextUi.orderThreads(state.threads)
+  const threads = window.CaspianThreadList
+    ? window.CaspianThreadList.sortThreads(state.threads)
     : state.threads;
   threads.forEach((thread) => {
     const row = document.createElement("div");
@@ -384,6 +417,9 @@ function selectThread(id) {
   state.renderedToolIds.clear();
   state.commitmentMessageIds.clear();
   state.commitmentTraceItems.clear();
+  // msgAcc 缓存了指向旧 DOM 节点的渲染句柄，切换会话清空消息区后必须一并清掉，
+  // 否则回到旧会话时 renderAgentMessage 把内容写进已脱离文档的节点（历史消息丢失）
+  state.msgAcc = Object.create(null);
   state.tracePanel = null;
   state.activeSelectedSkills = [];
   subtaskEvents.clear();
@@ -1662,6 +1698,8 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
     stopGoalPoll();
     if (!state.pendingInterrupt && !state.interruptedByUser) finishTracePanel("已完成");
     window.CaspianContextUi?.onRunEnded();
+    // usage 落库先于关流，收到 end 时 updated_at 已刷新，可直接重排会话列表
+    loadThreads();
   }
   if (event === "error") {
     stopGoalPoll();
@@ -1737,10 +1775,14 @@ function renderGoalBadge(goal) {
 async function submitTask(content, selectedSkills = []) {
   const thread = currentThread();
   if (thread && thread.title === "新会话") {
-    thread.title = content.replace(/\s+/g, " ").slice(0, 32);
+    const autoTitle = content.replace(/\s+/g, " ").slice(0, 32);
+    thread.title = autoTitle;
     thread.updatedAt = Date.now();
     saveThreads();
     renderThreads();
+    // 与手动重命名共用权威源 web_threads.title（服务端不存在时懒创建）；
+    // 失败不阻断发送，本地标题已即时生效
+    renameThread(thread.id, autoTitle).catch(() => {});
   }
   state.followMessages = true;
   addMessage("user", content);
@@ -1952,7 +1994,7 @@ function showLogin() {
   $("#app-view").hidden = true;
 }
 
-function showApp(user) {
+async function showApp(user) {
   if (state.user?.id !== user.id) window.CaspianSkills?.clearCache();
   state.user = user;
   $("#login-view").hidden = true;
@@ -1960,6 +2002,8 @@ function showApp(user) {
   const name = user.display_name || user.email;
   $("#user-name").textContent = name;
   $("#user-avatar").textContent = name.slice(0, 1).toUpperCase();
+  // 先以服务端为事实源装载会话全集，再决定是否需要新建，避免本地缓存为空时误建空会话
+  await loadThreads();
   ensureThread();
   selectThread(state.threadId);
   loadModels();
@@ -1972,7 +2016,7 @@ async function restoreSession() {
     return;
   }
   const result = await response.json();
-  showApp(result.user);
+  await showApp(result.user);
 }
 
 $("#login-form").addEventListener("submit", async (event) => {
@@ -1994,7 +2038,7 @@ $("#login-form").addEventListener("submit", async (event) => {
     if (!response.ok) {
       throw new Error(result.detail || `登录失败 (${response.status})`);
     }
-    showApp(result.user);
+    await showApp(result.user);
   } catch (error) {
     $("#login-error").textContent = error.message;
   } finally {

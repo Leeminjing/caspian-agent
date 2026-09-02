@@ -15,10 +15,16 @@ class ContextFrontendTests(unittest.TestCase):
     def test_index引入context资源与脚本顺序(self):
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         self.assertIn('href="/assets/context.css?v=f49"', html)
-        self.assertIn('src="/assets/context-editor.js?v=f49"', html)
-        self.assertIn('src="/assets/context-ui.js?v=rename-2"', html)
+        self.assertIn('src="/assets/context-editor.js?v=f65-recency-1"', html)
+        self.assertIn('src="/assets/context-ui.js?v=f65-recency-1"', html)
+        self.assertIn("src=\"/assets/thread-list.js", html)
         self.assertLess(
             html.index("context-ui.js"),
+            html.index("app.js"),
+        )
+        # 会话列表排序模块必须先于 app.js 加载，renderThreads 才能取到 CaspianThreadList
+        self.assertLess(
+            html.index("thread-list.js"),
             html.index("app.js"),
         )
 
@@ -29,7 +35,9 @@ class ContextFrontendTests(unittest.TestCase):
         self.assertIn("CaspianContextUi?.onRunEnded()", script)
         self.assertIn('detail?.code === "context_projection_blocked"', script)
         self.assertIn("CaspianContextUi?.openDecisionFromBlock(detail)", script)
-        self.assertIn("CaspianContextUi.orderThreads(state.threads)", script)
+        # 会话列表排序已与 Context tree 解耦（f65）：改由 CaspianThreadList 按最近活跃倒序
+        self.assertIn("CaspianThreadList.sortThreads(state.threads)", script)
+        self.assertNotIn("CaspianContextUi.orderThreads", script)
 
     def test_appjs_reasoning_panel_keyed_by_message_id(self):
         # 回归守卫：推理必须挂到消息自身的气泡（agentArticle 按 data-message-id 定位/新建），

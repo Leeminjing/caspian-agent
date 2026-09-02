@@ -78,40 +78,6 @@
     messages.splice(to, 0, messages.splice(from, 1)[0]);
   }
 
-  function orderTasksByTree(tasks, trees) {
-    const taskList = Array.isArray(tasks) ? tasks : [];
-    const ordered = [];
-    const seen = new Set();
-    const append = task => {
-      if (task && !seen.has(task.id)) {
-        seen.add(task.id);
-        ordered.push(task);
-      }
-    };
-
-    const tree = Array.isArray(trees) ? trees : [];
-    const nodeIds = new Set(tree.map(node => node.context_id));
-    const byId = new Map(taskList.map(task => [task.id, task]));
-    const children = new Map();
-    const roots = [];
-    tree.forEach(node => {
-      const parentId = node.parents?.[0]?.context_id;
-      if (parentId && nodeIds.has(parentId)) {
-        if (!children.has(parentId)) children.set(parentId, []);
-        children.get(parentId).push(node.context_id);
-      } else roots.push(node.context_id);
-    });
-    const walk = contextId => {
-      if (seen.has(contextId)) return;
-      append(byId.get(contextId));
-      (children.get(contextId) || []).forEach(walk);
-    };
-    roots.forEach(walk);
-    tree.forEach(node => walk(node.context_id));
-    taskList.forEach(append);
-    return ordered;
-  }
-
   function rootContextId(nodes, contextId) {
     let currentId = contextId;
     const visited = new Set();
@@ -134,5 +100,5 @@
     );
   }
 
-  global.CaspianContextEditor = { cloneMessages, contextFamilyIds, createUiKeys, move, orderTasksByTree, readMessages, renderMessages, renderSourceMessages, rootContextId };
+  global.CaspianContextEditor = { cloneMessages, contextFamilyIds, createUiKeys, move, readMessages, renderMessages, renderSourceMessages, rootContextId };
 })(window);
