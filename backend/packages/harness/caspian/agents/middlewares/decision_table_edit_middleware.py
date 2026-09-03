@@ -33,7 +33,7 @@ from langchain.agents.middleware.types import AgentState
 from langchain.messages import HumanMessage
 from langgraph.prebuilt import ToolRuntime
 
-from caspian.agents.commitment.decision_table import DecisionRow
+from caspian.agents.commitment.decision_table import DecisionRow, Guard
 from caspian.agents.commitment.decision_table_submit import submit_decision_table
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,19 @@ def _find_edit_intent(state: AgentState) -> tuple[HumanMessage | None, list[Deci
             priority = item.get("priority")
             if not requirement or decision not in {"保留", "丢弃"} or priority not in {1, 2, 3}:
                 return message, None, "编辑载荷条目字段非法（requirement/decision/priority）"
-            rows.append(DecisionRow(requirement=requirement, decision=decision, priority=priority))
+            row_id = str(item.get("id", "") or "").strip()
+            guards: list[Guard] = []
+            for guard_value in item.get("guards", []) or []:
+                guard = Guard.from_dict(guard_value)
+                if guard is not None:
+                    guards.append(guard)
+            rows.append(DecisionRow(
+                requirement=requirement,
+                decision=decision,
+                priority=priority,
+                id=row_id,
+                guards=guards,
+            ))
         return message, rows, None
     return None, None, None
 
@@ -98,6 +110,13 @@ class DecisionTableEditMiddleware(AgentMiddleware):
             logger.warning("DecisionTableEditMiddleware: 无法获取 thread_id，跳过")
             return None
 
+        user_id = None
+        ctx = getattr(runtime, "context", None)
+        if isinstance(ctx, dict):
+            raw_user_id = ctx.get("user_id")
+            if raw_user_id:
+                user_id = str(raw_user_id)
+
         trigger, candidate, error = _find_edit_intent(state)
         if trigger is None:
             return None  # 非编辑意图，放行普通 run
@@ -114,7 +133,7 @@ class DecisionTableEditMiddleware(AgentMiddleware):
             }
 
         result = await submit_decision_table(
-            str(thread_id), candidate, internal_consistency=True
+            str(thread_id), candidate, internal_consistency=True, user_id=user_id
         )
         # 编辑事务不是对话：以带 ack 标记的结果消息收尾，并把图跳到 end（不调模型、不留 AI 回复）
         return {

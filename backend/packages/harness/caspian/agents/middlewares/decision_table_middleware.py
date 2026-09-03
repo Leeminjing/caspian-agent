@@ -70,13 +70,25 @@ def _build_content(table: DecisionTable) -> str:
     输出:
         str — 等级表全文（含版本标记）+ 仲裁规则文本
     """
-    rows_md = "\n".join(
-        f"| {row.requirement} | {row.decision} | {row.priority} |"
+    rows_lines = ["| id | requirement | decision | priority |", "|---|---|---|---|"]
+    rows_lines.extend(
+        f"| {row.id} | {row.requirement} | {row.decision} | {row.priority} |"
         for row in table.rows
     )
+    rows_md = "\n".join(rows_lines)
+
+    guard_lines = []
+    for row in table.hard_entries():
+        for guard in row.guards:
+            guard_lines.append(
+                f"- 条目 {row.id}（等级 {row.priority}）：{guard.kind} {guard.target} "
+                f"{guard.operator} \"{guard.pattern}\""
+            )
+    guards_md = ("\n\n守卫规则：\n" + "\n".join(guard_lines)) if guard_lines else ""
+
     return (
         f'<decision_table version="{table.version}" updated="{table.updated}">\n'
-        f"{rows_md}\n"
+        f"{rows_md}{guards_md}\n"
         f"</decision_table>\n\n"
         f"{_ARBITRATION_RULES}"
     )
@@ -116,7 +128,14 @@ class DecisionTableMiddleware(AgentMiddleware):
             logger.warning("DecisionTableMiddleware: 无法获取 thread_id，跳过注入")
             return None
 
-        table = read_decision_table(str(thread_id))
+        user_id = None
+        ctx = getattr(runtime, "context", None)
+        if isinstance(ctx, dict):
+            raw_user_id = ctx.get("user_id")
+            if raw_user_id:
+                user_id = str(raw_user_id)
+
+        table = read_decision_table(str(thread_id), user_id=user_id)
         if table is None:
             return None
 

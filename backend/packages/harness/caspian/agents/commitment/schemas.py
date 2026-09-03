@@ -115,6 +115,7 @@ class CommitmentState(AgentState):
     source_text: NotRequired[str]
     uploads_tag: NotRequired[str]
     thread_id: NotRequired[str]
+    user_id: NotRequired[str | None]
     knowledge_files: NotRequired[list[str]]
     task_contract: NotRequired[str]
     final_message: NotRequired[str]

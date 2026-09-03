@@ -34,6 +34,7 @@ from typing import Any, Callable
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import ToolMessage
+from langgraph.errors import GraphInterrupt
 
 __all__ = ["ToolErrorMiddleware"]
 
@@ -48,8 +49,8 @@ class ToolErrorMiddleware(AgentMiddleware):
     ) -> Any:
         try:
             return await handler(request)
-        except (asyncio.CancelledError, KeyboardInterrupt):
-            # 中断/取消信号不吞掉，保持 abort/取消语义
+        except (asyncio.CancelledError, KeyboardInterrupt, GraphInterrupt):
+            # 中断/取消/GraphInterrupt 信号不吞掉，保持中断(interrupt/resume)语义
             raise
         except Exception as exc:  # noqa: BLE001 - 有意兜底：所有工具失败都回传 LLM
             call = getattr(request, "tool_call", {}) or {}

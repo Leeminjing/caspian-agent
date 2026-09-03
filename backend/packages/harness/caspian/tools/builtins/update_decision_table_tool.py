@@ -7,24 +7,25 @@
 
 输入:
     operation: str — add（新增）/ update（更新）/ remove（删除）
-    requirement: str — 条目要求文本（非空，≤200 字符）
+    id: str — 条目 id，update/remove 时用于定位（与 requirement 文本无关）
+    requirement: str — 条目要求文本，add 必填、update 可选（非空，≤200 字符）
     decision: str — 条目决策（保留 / 丢弃），add/update 时校验
     priority: int — 条目等级（1/2/3），add/update 时校验
-    runtime: ToolRuntime — LangGraph 运行时注入，从中取当前 thread_id
+    runtime: ToolRuntime — LangGraph 运行时注入，从中取当前 thread_id / user_id
 
 输出:
     str — 操作结果：检测通过提交返回新 version；冲突中断由用户裁定后返回结果；
           校验失败或前置不满足返回错误说明
 
 具体工作流:
-    (1) 从 runtime.execution_info 获取当前 thread_id（不可由参数指定，限定作用域）
+    (1) 从 runtime.execution_info 获取当前 thread_id、从 runtime.context 获取 user_id
     (2) 读取当前 thread 的决策等级表，不存在时视为空表
-    (3) 校验操作合法性与字段，构造候选新表
+    (3) 校验操作合法性与字段，按 id 定位构造候选新表（add 生成新条目、update/remove 按 id 匹配）
     (4) 调用共享 submit_decision_table 执行冲突检测 → 提交/中断（与手工编辑同源）
 
 示例:
-    result = update_decision_table(operation="add", requirement="必须使用 Supabase", decision="保留", priority=3, runtime=runtime)
-    # → "决策等级表已更新，新版本 6d1cee0cec81"
+    result = await update_decision_table(operation="add", requirement="必须使用 Supabase", decision="保留", priority=3, runtime=runtime)
+    result = await update_decision_table(operation="update", id="abc123", priority=2, runtime=runtime)
 """
 
 import logging
@@ -78,6 +79,7 @@ def _validate_entry(decision: str, priority: int) -> str | None:
 def _build_candidate_rows(
     rows: list[DecisionRow],
     operation: str,
+    row_id: str,
     requirement: str,
     decision: str,
     priority: int | None,
@@ -85,8 +87,9 @@ def _build_candidate_rows(
     """构造候选新表条目（受保护 helper）。
 
     输入:
-        rows: 当前表条目
-        operation / requirement / decision / priority: 操作参数
+        rows: list[DecisionRow] — 当前表条目
+        operation / row_id / requirement / decision / priority: 操作参数
+
     输出:
         tuple[list | None, str | None] — (候选条目，错误)；错误非空时候选为 None
     """
@@ -96,30 +99,41 @@ def _build_candidate_rows(
         if priority is None:
             return None, "add 需要提供 priority"
         return rows + [DecisionRow(requirement=requirement, decision=decision, priority=priority)], None
+
     if operation == "update":
-        if not any(row.requirement == requirement for row in rows):
-            return None, f"条目 '{requirement}' 不存在，如需新增请使用 add"
+        if not row_id:
+            return None, "update 需要提供 id"
+        target = next((row for row in rows if row.id == row_id), None)
+        if target is None:
+            return None, f"条目 id '{row_id}' 不存在"
         if priority is None:
             return None, "update 需要提供 priority"
-        return [
-            DecisionRow(requirement=requirement, decision=decision, priority=priority)
-            if row.requirement == requirement
-            else row
-            for row in rows
-        ], None
+        updated = DecisionRow(
+            requirement=requirement or target.requirement,
+            decision=decision,
+            priority=priority,
+            id=target.id,
+            guards=target.guards,
+        )
+        return [updated if row.id == row_id else row for row in rows], None
+
     if operation == "remove":
-        if not any(row.requirement == requirement for row in rows):
-            return None, f"条目 '{requirement}' 不存在"
-        return [row for row in rows if row.requirement != requirement], None
+        if not row_id:
+            return None, "remove 需要提供 id"
+        if not any(row.id == row_id for row in rows):
+            return None, f"条目 id '{row_id}' 不存在"
+        return [row for row in rows if row.id != row_id], None
+
     return None, f"operation 只允许 {'/'.join(sorted({'add', 'update', 'remove'}))}"
 
 
 @tool
 async def update_decision_table(
     operation: str,
-    requirement: str,
+    requirement: str = "",
     decision: str = "保留",
     priority: int = 3,
+    id: str = "",
     runtime: ToolRuntime = None,
 ) -> str:
     """Update the thread's decision LEVEL TABLE (决策等级表) — add / update / remove one entry.
@@ -139,7 +153,8 @@ async def update_decision_table(
 
     Args:
         operation: One of "add", "update", "remove".
-        requirement: The requirement text of the entry (non-empty, max 200 chars).
+        id: The entry id. Required for update/remove (locates the entry independently of text).
+        requirement: The requirement text. Required for add, optional for update (max 200 chars).
         decision: Entry decision ("保留" or "丢弃"). Used for add/update.
         priority: Entry LEVEL (等级, 1, 2 or 3). Used for add/update.
     """
@@ -149,26 +164,38 @@ async def update_decision_table(
     if thread_id is None:
         return "无法获取当前 thread ID，拒绝更新"
 
-    table = read_decision_table(str(thread_id))
+    user_id = None
+    try:
+        ctx = runtime.context
+        if isinstance(ctx, dict):
+            user_id = ctx.get("user_id")
+    except Exception:
+        user_id = None
+
+    table = read_decision_table(str(thread_id), user_id=str(user_id) if user_id else None)
     existing = list(table.rows) if table is not None else []
+    expected_version = table.version if table is not None else None
 
     requirement = str(requirement).strip()
-    if error := _validate_requirement(requirement):
-        return error
-
-    # add/update 需校验 decision、priority；remove 不需
-    effective_priority = priority
+    if operation == "add":
+        if error := _validate_requirement(requirement):
+            return error
     if operation != "remove":
         if error := _validate_entry(decision, priority):
             return error
-    else:
-        effective_priority = None
 
+    effective_priority = priority if operation != "remove" else None
     candidate, build_error = _build_candidate_rows(
-        existing, operation, requirement, decision, effective_priority
+        existing, operation, str(id).strip(), requirement, decision, effective_priority
     )
     if build_error:
         return build_error
 
     # 共享事务：冲突检测 → 提交/中断（与手工编辑同源）
-    return await submit_decision_table(str(thread_id), candidate, existing)
+    return await submit_decision_table(
+        str(thread_id),
+        candidate,
+        existing,
+        user_id=str(user_id) if user_id else None,
+        expected_version=expected_version,
+    )

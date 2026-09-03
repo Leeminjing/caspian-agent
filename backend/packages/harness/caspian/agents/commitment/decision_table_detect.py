@@ -30,6 +30,7 @@
 """
 
 import logging
+import re
 from enum import Enum
 from typing import Literal
 
@@ -193,8 +194,11 @@ async def _semantic_conflicts(
     candidate: list[DecisionRow],
     existing: list[DecisionRow],
     model: BaseChatModel,
-) -> list[DecisionTableConflict]:
-    """LLM 语义扫描：识别候选条目与旧表条目的语义冲突（受保护 helper）。"""
+) -> list[DecisionTableConflict] | None:
+    """LLM 语义扫描：识别候选条目与旧表条目的语义冲突（受保护 helper）。
+
+    返回 None 表示扫描失败（调用方应转人工确认）。
+    """
     if not candidate or not existing:
         return []
 
@@ -218,12 +222,48 @@ async def _semantic_conflicts(
         fenced = re.search(r"```(?:json)?\s*(\{.*\})\s*```", text, re.DOTALL)
         raw = json.loads(fenced.group(1)) if fenced else json.loads(text)
         if not isinstance(raw, dict):
-            return []
+            return None
         return _parse_semantic_conflicts(raw, known_existing)
     except Exception as exc:
         logger.warning("决策等级表语义冲突扫描失败：%s", exc)
-        # 语义扫描失败时保守返回空（放行），等级裁决仍由确定性代码兜底
-        return []
+        # fail-closed：扫描失败返回 None，由调用方转人工确认，不再放行
+        return None
+
+
+def _normalize_text(text: str) -> str:
+    """归一化条目文本：折叠所有空白并折叠大小写（受保护 helper）。"""
+    return re.sub(r"\s+", "", text).strip().lower()
+
+
+def _deterministic_collisions(
+    candidate: list[DecisionRow],
+    existing: list[DecisionRow],
+) -> list[DecisionTableConflict]:
+    """确定性底线：归一化后文本相同但原文不同的候选/既有条目判为冲突（不依赖 LLM，受保护 helper）。"""
+    conflicts: list[DecisionTableConflict] = []
+    by_norm: dict[str, DecisionRow] = {}
+    for row in existing:
+        by_norm[_normalize_text(row.requirement)] = row
+    for crow in candidate:
+        norm = _normalize_text(crow.requirement)
+        erow = by_norm.get(norm)
+        if erow is not None and crow.requirement.strip() != erow.requirement.strip():
+            conflicts.append(
+                DecisionTableConflict(
+                    candidate=crow.requirement,
+                    existing=erow.requirement,
+                    relation="explicit",
+                    explanation="归一化后文本相同（仅大小写/空白差异）",
+                )
+            )
+    return conflicts
+
+
+def _fail_closed_verdict(reason: str) -> DecisionTableVerdict:
+    """构造 fail-closed 的 CONFIRM 裁决（受保护 helper）。"""
+    return DecisionTableVerdict(
+        action=DecisionTableAction.CONFIRM, conflicts=[], reasons=[reason]
+    )
 
 
 async def detect_decision_table(
@@ -236,29 +276,35 @@ async def detect_decision_table(
     输入:
         candidate: 候选新表条目
         existing: 旧表条目（磁盘当前）
-        model: 语义扫描所用模型；None 时内部创建，创建失败则跳过语义扫描
-               （仅依赖确定性等级裁决，检测结果为放行）
+        model: 语义扫描所用模型；None 时内部创建
+
     输出:
-        DecisionTableVerdict — action 为 CONFIRM 则工具应中断待机，REJECT 则拒绝保留旧表
+        DecisionTableVerdict — action 为 CONFIRM 则工具应中断待机
     """
-    resolved_model = model
-    # 无旧表条目时不构成冲突（语义与等级都无从比较），直接放行，避免无谓创建模型
     if not existing:
         return _adjudicate_conflicts([], existing, candidate)
+
+    # 确定性底线：归一化文本碰撞，无需 LLM
+    deterministic = _deterministic_collisions(candidate, existing)
+    if deterministic:
+        return _adjudicate_conflicts(deterministic, existing, candidate)
+
+    resolved_model = model
     if resolved_model is None:
         try:
             from caspian.models import create_chat_model
 
             resolved_model = create_chat_model()
         except Exception as exc:
-            logger.warning("决策等级表语义扫描模型创建失败，跳过语义扫描：%s", exc)
+            logger.warning("决策等级表语义扫描模型创建失败：%s", exc)
+            resolved_model = None
 
-    conflicts: list[DecisionTableConflict] = []
-    if resolved_model is not None:
-        try:
-            conflicts = await _semantic_conflicts(candidate, existing, resolved_model)
-        except Exception as exc:
-            logger.warning("决策等级表语义冲突扫描异常，降级为放行：%s", exc)
+    if resolved_model is None:
+        return _fail_closed_verdict("语义冲突扫描不可用（模型创建失败），需人工确认")
+
+    conflicts = await _semantic_conflicts(candidate, existing, resolved_model)
+    if conflicts is None:
+        return _fail_closed_verdict("语义冲突扫描失败，需人工确认")
     return _adjudicate_conflicts(conflicts, existing, candidate)
 
 
@@ -275,7 +321,8 @@ async def detect_decision_table_internal(
 
     输入:
         rows: 完整目标新表条目
-        model: 语义扫描所用模型；None 时懒创建，失败降级为放行
+        model: 语义扫描所用模型；None 时懒创建
+
     输出:
         DecisionTableVerdict — action 为 CONFIRM 则编辑应中断待机
     """
@@ -289,14 +336,25 @@ async def detect_decision_table_internal(
 
             resolved_model = create_chat_model()
         except Exception as exc:
-            logger.warning("决策等级表内部自洽扫描模型创建失败，跳过语义扫描：%s", exc)
+            logger.warning("决策等级表内部自洽扫描模型创建失败：%s", exc)
+            resolved_model = None
 
-    conflicts: list[DecisionTableConflict] = []
-    if resolved_model is not None:
-        try:
-            # 同一集合作为 candidate 与 existing，检测条目两两语义冲突
-            conflicts = await _semantic_conflicts(rows, rows, resolved_model)
-        except Exception as exc:
-            logger.warning("决策等级表内部自洽扫描异常，降级为放行：%s", exc)
-    # 以"新表 vs 新表"裁决内部自洽性；任一 explicit 冲突 → CONFIRM 中断
-    return _adjudicate_conflicts(conflicts, rows, rows)
+    if resolved_model is None:
+        return _fail_closed_verdict("语义冲突扫描不可用（模型创建失败），需人工确认")
+
+    conflicts = await _semantic_conflicts(rows, rows, resolved_model)
+    if conflicts is None:
+        return _fail_closed_verdict("语义冲突扫描失败，需人工确认")
+
+    # 过滤自对与对称对（同一集合自比较会产生噪音）
+    seen: set[frozenset] = set()
+    filtered: list[DecisionTableConflict] = []
+    for conflict in conflicts:
+        if conflict.candidate.strip() == conflict.existing.strip():
+            continue
+        pair = frozenset((conflict.candidate, conflict.existing))
+        if pair in seen:
+            continue
+        seen.add(pair)
+        filtered.append(conflict)
+    return _adjudicate_conflicts(filtered, rows, rows)

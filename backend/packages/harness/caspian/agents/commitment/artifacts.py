@@ -3,8 +3,9 @@
 
 对外提供:
     _write_knowledge — 阶段六 knowledge 结果写入 knowledge 目录，返回相对路径列表
-    _write_contract — 阶段七合同写入 requirements/{thread_id}/task-contract.md，
-                      并在提供阶段2/3结果时同步写入决策等级表（best-effort）
+    _write_contract — 阶段七合同写入 requirements/{user_id}/{thread_id}/task-contract.md（user_id 为空时
+                      写入 requirements/{thread_id}/task-contract.md），并在提供阶段2/3结果时同步写入
+                      决策等级表（best-effort）
     _build_final_message — 组装交给 lead agent 的最终合同消息
 
 输入:
@@ -15,6 +16,7 @@
         result: dict — 阶段七合同结果（contract_markdown）
         stage_two_result: dict | None — 阶段2 artifacts（requirements/discarded_requirements）
         stage_three_result: dict | None — 阶段3 artifacts（逐条优先级）
+        user_id: str | None — 用户标识，非空则 task-contract 与决策等级表均按用户隔离
     _build_final_message:
         contract: str — 合同正文
         knowledge_files: list[str] — 已写入的知识文件相对路径
@@ -27,13 +29,13 @@
 具体工作流:
     (1) 校验技术名、版本和 thread_id 的安全路径片段。
     (2) 将官方知识写入根目录 knowledge。
-    (3) 将合同写入 requirements/{thread_id}/task-contract.md。
+    (3) 将合同写入 requirements/{user_id}/{thread_id}/task-contract.md（user_id 为空则不含 user 维度）。
     (4) 合同写入成功后，若提供阶段2/3结果，同步写入决策等级表（失败仅日志，不阻断）。
     (5) 读取已确认知识并组装交给 lead agent 的第一条 HumanMessage 内容。
 
 示例:
     contract, path = _write_contract(thread_id, stage_seven_result)
-    contract, path = _write_contract(thread_id, stage_seven_result, stage_two, stage_three)
+    contract, path = _write_contract(thread_id, stage_seven_result, stage_two, stage_three, user_id="u-1")
 """
 
 from pathlib import Path
@@ -73,12 +75,16 @@ def _write_contract(
     result: dict[str, Any],
     stage_two_result: dict[str, Any] | None = None,
     stage_three_result: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> tuple[str, str]:
     safe_thread_id = _safe_segment(thread_id, "thread_id")
     contract = str(result.get("contract_markdown", "")).strip()
     if not contract:
         raise ValueError("合同内容为空")
-    relative_path = Path("requirements") / safe_thread_id / "task-contract.md"
+    if user_id:
+        relative_path = Path("requirements") / str(user_id) / safe_thread_id / "task-contract.md"
+    else:
+        relative_path = Path("requirements") / safe_thread_id / "task-contract.md"
     path = _PROJECT_ROOT / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contract + "\n", encoding="utf-8")
@@ -87,6 +93,7 @@ def _write_contract(
             safe_thread_id,
             stage_two_result,
             stage_three_result,
+            user_id=user_id,
             root=_PROJECT_ROOT,
         )
     return contract, relative_path.as_posix()

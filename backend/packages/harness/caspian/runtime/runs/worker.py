@@ -53,13 +53,14 @@ import os
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from langchain_core.messages import BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.runnables import RunnableConfig
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.errors import GraphInterrupt
+from langgraph.graph.message import RemoveMessage
 from langgraph.store.base import BaseStore
 from langgraph.types import Command, Interrupt
-from langgraph.errors import GraphInterrupt
 
 from caspian.agents.lead import make_lead_agent
 from caspian.config.app_config import AppConfig
@@ -337,6 +338,85 @@ async def _stream_one_round(
     return graph_interrupted, aborted
 
 
+def _find_dangling_turn(messages: list) -> list[RemoveMessage]:
+    """找出悬空轮次需移除的消息（受保护 helper）。
+
+    interrupt 可能把 run 停在「AI 已带 tool_calls 却无紧跟 tool result」的悬空点，后续还可能隔着
+    用户消息。LangGraph 的 messages reducer 只能 append、无法按位置插入，无法补插缺失的 tool
+    result，故采用「清理悬空轮次」：移除悬空 AI 消息与其孤儿 ToolMessage，使状态回到最后一个
+    完整轮次，模型端不会因 tool_call 悬空而拒绝（400）。
+
+    输入:
+        messages: list — checkpoint 消息列表
+
+    输出:
+        list[RemoveMessage] — 待移除的消息；无悬空时返回空列表
+    """
+    removals: list[RemoveMessage] = []
+    # 从后往前找悬空 AI（其后紧跟的 tool result 不完整）
+    for index in range(len(messages) - 1, -1, -1):
+        message = messages[index]
+        if not (isinstance(message, AIMessage) and getattr(message, "tool_calls", None)):
+            continue
+        need_ids = {
+            tool_call.get("id")
+            for tool_call in (message.tool_calls or [])
+            if isinstance(tool_call, dict) and tool_call.get("id")
+        }
+        if not need_ids:
+            continue
+        # 检查该 AI 之后是否紧跟 tool result：遇到第一个非 Tool 消息即停止扫描
+        resolved: set[str] = set()
+        for nxt in messages[index + 1:]:
+            if isinstance(nxt, ToolMessage):
+                resolved.add(nxt.tool_call_id)
+            elif isinstance(nxt, (HumanMessage, AIMessage, SystemMessage)):
+                break
+        if need_ids.issubset(resolved):
+            continue  # 该轮次完整，无需清理
+        removals.append(RemoveMessage(id=message.id))
+        # 清理该轮次的孤儿 ToolMessage（出现在 AI 之后、未被紧跟解析）
+        for nxt in messages[index + 1:]:
+            if isinstance(nxt, ToolMessage) and nxt.tool_call_id in need_ids:
+                removals.append(RemoveMessage(id=nxt.id))
+    return removals
+
+
+async def _repair_dangling_tool_calls(agent, config: RunnableConfig) -> None:
+    """图执行前清理 checkpoint 中的悬空 tool_call（受保护 helper）。
+
+    输入:
+        agent: CompiledStateGraph — 已挂载 checkpointer 的 lead agent
+        config: RunnableConfig — 线程配置（含 thread_id）
+
+    输出:
+        None — 若发现悬空 tool_call 则经 aupdate_state 清理使状态合法
+    """
+    checkpointer = getattr(agent, "checkpointer", None)
+    if checkpointer is None:
+        return
+    thread_id = (config.get("configurable") or {}).get("thread_id")
+    if thread_id is None:
+        return
+    configurable = {"configurable": {"thread_id": thread_id}}
+    try:
+        snapshot = await checkpointer.aget_tuple(configurable)
+    except Exception:
+        logger.warning("清理悬空 tool_call 时读取 checkpoint 失败 (thread_id=%s)", thread_id, exc_info=True)
+        return
+    if snapshot is None:
+        return
+    messages = snapshot.checkpoint.get("channel_values", {}).get("messages", [])
+    removals = _find_dangling_turn(messages)
+    if not removals:
+        return
+    try:
+        await agent.aupdate_state(configurable, {"messages": removals})
+        logger.warning("已清理 %d 条悬空 tool_call 消息 (thread_id=%s)", len(removals), thread_id)
+    except Exception:
+        logger.error("清理悬空 tool_call 时 aupdate_state 失败 (thread_id=%s)", thread_id, exc_info=True)
+
+
 async def run_agent(
     *,
     record: RunRecord,
@@ -410,6 +490,10 @@ async def run_agent(
             agent.checkpointer = checkpointer
         if store is not None:
             agent.store = store
+
+        # (3.6) 清理悬空 tool_call：中断可能把 run 停在「AI 已带 tool_calls 却无紧跟 tool result」的
+        # 悬空点，发新消息直接复用该状态会被模型端以 400 拒绝。用 aupdate_state 清理悬空轮次。
+        await _repair_dangling_tool_calls(agent, runnable_config)
 
         # (4) agent.astream 主循环（目标模式下可由 GoalRoundDriver 驱动多轮）
         graph_interrupted = False

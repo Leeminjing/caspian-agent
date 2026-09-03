@@ -211,6 +211,7 @@ async def _human_review(
                         artifacts["7"],
                         artifacts.get("2"),
                         artifacts.get("3"),
+                        user_id=state.get("user_id"),
                     )
                 except (OSError, ValueError) as exc:
                     error = f"合同写入失败: {exc}"

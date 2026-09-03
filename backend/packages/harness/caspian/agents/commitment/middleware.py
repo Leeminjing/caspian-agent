@@ -183,7 +183,7 @@ def _subgraph_config(thread_id: str) -> dict[str, Any]:
     return {"configurable": configurable}
 
 
-def _load_decision_table_dict(thread_id: str) -> dict[str, Any]:
+def _load_decision_table_dict(thread_id: str, user_id: str | None = None) -> dict[str, Any]:
     """读取当前 thread 的决策等级表并转为 JSON 兼容 dict（受保护 helper）。
 
     输入:
@@ -195,7 +195,7 @@ def _load_decision_table_dict(thread_id: str) -> dict[str, Any]:
     """
     from caspian.agents.commitment.decision_table import read_decision_table
 
-    table = read_decision_table(str(thread_id))
+    table = read_decision_table(str(thread_id), user_id=user_id)
     if table is None:
         return {}
     return {
@@ -218,6 +218,7 @@ def _seed_subgraph_input(
     uploads_tag: str | None,
     thread_id: str,
     decision_table: dict[str, Any] | None = None,
+    user_id: str | None = None,
 ) -> dict[str, Any]:
     """构造子图首次执行的种子输入：只含指令消息，不携带 /commit 前置历史。"""
     return {
@@ -228,6 +229,7 @@ def _seed_subgraph_input(
         "awaiting_human": None,
         "artifacts": {},
         "thread_id": str(thread_id),
+        "user_id": user_id,
         "knowledge_files": [],
         "source_text": instruction,
         "uploads_tag": uploads_tag or "",
@@ -308,6 +310,13 @@ class CommitmentMiddleware(AgentMiddleware):
         if thread_id is None:
             raise ValueError("CommitmentMiddleware 无法获取 thread_id")
 
+        user_id = None
+        ctx = getattr(runtime, "context", None)
+        if isinstance(ctx, dict):
+            raw_user_id = ctx.get("user_id")
+            if raw_user_id:
+                user_id = str(raw_user_id)
+
         # 确认为 /commit 触发后，才尝试加载 Context7 工具；不可用时优雅降级为说明消息。
         # 若 supervisor 已存在（如测试注入），视为工具已就绪，不重新要求 context7 loader。
         context7_tools = [] if self._supervisor is not None else await self._context7_tools()
@@ -360,7 +369,8 @@ class CommitmentMiddleware(AgentMiddleware):
                 instruction,
                 uploads_tag,
                 str(thread_id),
-                _load_decision_table_dict(str(thread_id)),
+                _load_decision_table_dict(str(thread_id), user_id),
+                user_id,
             )
 
         supervisor = await self._ensure_supervisor(context7_tools)

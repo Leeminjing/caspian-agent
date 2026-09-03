@@ -2164,11 +2164,13 @@ function renderDecisionTable(data) {
   }
   const table = document.createElement("table");
   table.className = "decision-table decision-table-editable";
-  table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th><th></th></tr></thead>";
+  table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th><th>守卫</th><th></th></tr></thead>";
   const tbody = document.createElement("tbody");
   const appendEditRow = (row) => {
     const r = row || {};
     const tr = document.createElement("tr");
+    tr.dataset.id = r.id || "";
+    try { tr.dataset.guards = JSON.stringify(r.guards || []); } catch { tr.dataset.guards = "[]"; }
     const tdReq = document.createElement("td");
     const inputReq = document.createElement("input");
     inputReq.type = "text";
@@ -2197,6 +2199,9 @@ function renderDecisionTable(data) {
       selectPri.append(opt);
     }
     tdPri.append(selectPri);
+    const tdGuard = document.createElement("td");
+    tdGuard.className = "guard-cell";
+    tdGuard.textContent = (r.guards || []).map((g) => `${g.kind}:${g.target} ${g.operator} "${g.pattern}"`).join("; ");
     const tdDel = document.createElement("td");
     const delBtn = document.createElement("button");
     delBtn.type = "button";
@@ -2205,7 +2210,7 @@ function renderDecisionTable(data) {
     delBtn.title = "删除该条目";
     delBtn.addEventListener("click", () => tr.remove());
     tdDel.append(delBtn);
-    tr.append(tdReq, tdDec, tdPri, tdDel);
+    tr.append(tdReq, tdDec, tdPri, tdGuard, tdDel);
     tbody.append(tr);
   };
   for (const row of data.rows) appendEditRow(row);
@@ -2239,7 +2244,13 @@ function collectRows(body) {
     const decision = tr.querySelector('[data-field="decision"]')?.value || "";
     const priority = Number(tr.querySelector('[data-field="priority"]')?.value || 0);
     if (!requirement || !decision || !priority) return;
-    rows.push({ requirement, decision, priority });
+    const row = { requirement, decision, priority };
+    const id = tr.dataset.id || "";
+    if (id) row.id = id;
+    let guards = [];
+    try { guards = JSON.parse(tr.dataset.guards || "[]"); } catch { guards = []; }
+    if (Array.isArray(guards) && guards.length) row.guards = guards;
+    rows.push(row);
   });
   return rows;
 }

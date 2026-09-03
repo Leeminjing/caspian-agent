@@ -15,6 +15,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import yaml
+
 from langchain.agents import create_agent
 from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.language_models import BaseChatModel
@@ -78,25 +80,31 @@ class TestComputeVersion(unittest.TestCase):
 class TestBuildDecisionTable(unittest.TestCase):
     def test_rows_mapping(self):
         content = build_decision_table(STAGE_TWO, STAGE_THREE)
-        self.assertIn("| 必须使用 Supabase | 保留 | 3 |", content)
-        self.assertIn("| 需要支持 SSR | 保留 | 2 |", content)
-        self.assertIn("| 应用必须是纯静态前端 | 丢弃 | 0 |", content)
+        rows = yaml.safe_load(content)["rows"]
+        self.assertEqual(rows[0]["requirement"], "必须使用 Supabase")
+        self.assertEqual(rows[0]["decision"], "保留")
+        self.assertEqual(rows[0]["priority"], 3)
+        self.assertEqual(rows[1]["requirement"], "需要支持 SSR")
+        self.assertEqual(rows[1]["priority"], 2)
+        self.assertEqual(rows[2]["requirement"], "应用必须是纯静态前端")
+        self.assertEqual(rows[2]["decision"], "丢弃")
+        self.assertEqual(rows[2]["priority"], 0)
 
     def test_missing_priority_defaults_to_3(self):
         content = build_decision_table(
             {"requirements": ["无优先级要求"], "discarded_requirements": []},
             {"requirements": []},
         )
-        self.assertIn("| 无优先级要求 | 保留 | 3 |", content)
+        rows = yaml.safe_load(content)["rows"]
+        self.assertEqual(rows[0]["requirement"], "无优先级要求")
+        self.assertEqual(rows[0]["priority"], 3)
 
     def test_frontmatter_version_matches_body(self):
         content = build_decision_table(STAGE_TWO, STAGE_THREE)
-        parts = content.split("---", 2)
-        body = parts[2].strip()
-        version_line = next(
-            line for line in parts[1].strip().splitlines() if line.startswith("version:")
-        )
-        self.assertEqual(version_line.split(":", 1)[1].strip(), compute_version(body))
+        data = yaml.safe_load(content)
+        self.assertEqual(data["format"], 2)
+        self.assertEqual(len(data["version"]), 12)
+        int(data["version"], 16)  # 非法 hex 会抛 ValueError
 
 
 class TestWriteReadRoundTrip(unittest.TestCase):
