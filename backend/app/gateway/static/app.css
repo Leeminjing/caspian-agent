@@ -1990,6 +1990,47 @@ textarea:focus-visible {
   white-space: pre-wrap;
 }
 
+.config-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.config-editor-textarea {
+  width: 100%;
+  min-height: 240px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+  tab-size: 2;
+}
+
+.config-editor-textarea:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+
+.config-editor-status {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--soft);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.config-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
 .archived-list {
   overflow: auto;
   padding: 8px;

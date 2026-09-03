@@ -132,6 +132,7 @@ from backend.app.gateway.routers.uploads import router as uploads_router
 from backend.app.gateway.routers.skills import router as skills_router
 from backend.app.gateway.routers.decision_table import router as decision_table_router
 from backend.app.gateway.routers.chat_records import router as chat_records_router
+from backend.app.gateway.routers.config import router as config_router
 from backend.app.gateway.routers.knowledge import router as knowledge_router
 from backend.app.gateway.routers.contexts import router as contexts_router
 from backend.app.gateway.routers.plugins import router as plugins_router
@@ -151,4 +152,5 @@ app.include_router(plugins_router)
 app.include_router(models_router)
 app.include_router(auth_router)
 app.include_router(goal_router, prefix="/api/threads")
-logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, thread_lifecycle, skills, knowledge, contexts, plugins, models, auth, goal")
+app.include_router(config_router)
+logger.info("路由已注册: thread_runs, uploads, decision_table, chat_records, config, thread_lifecycle, skills, knowledge, contexts, plugins, models, auth, goal")

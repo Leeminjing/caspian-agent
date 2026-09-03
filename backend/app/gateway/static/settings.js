@@ -25,6 +25,10 @@
   const dataNav = $('.settings-nav-item[data-settings-view="data"]', windowEl || document);
   const configPre = $("#settings-config");
 
+  // 配置编辑器运行时引用（由 buildConfigEditor 创建）
+  let configEditor = null;
+  let configStatus = null;
+
   // 菜单开合
   function setMenu(open) {
     if (!menu) return;
@@ -99,17 +103,103 @@
   async function openConfigFile() {
     if (!configPre) return;
     configPre.hidden = false;
-    configPre.textContent = "正在读取 config.yaml…";
+    // 构建可编辑视图：textarea + 保存/取消
+    if (!configPre.dataset.editorBuilt) {
+      buildConfigEditor();
+    }
+    configEditor.value = "正在读取 config.yaml…";
     try {
-      const response = await fetch("/config.yaml", {
+      const response = await fetch("/api/config", {
         headers: { Accept: "text/plain" },
         cache: "no-store",
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      configPre.textContent = await response.text();
+      configEditor.value = await response.text();
     } catch (error) {
-      configPre.textContent = "无法读取配置文件：config.yaml 未在同源提供。";
+      configEditor.value = "";
+      configStatus.textContent = "无法读取配置文件：请确认已登录且后端 /api/config 可用。";
     }
+  }
+
+  function buildConfigEditor() {
+    // 单次构建：textarea + 状态行 + 保存/取消按钮
+    configPre.classList.add("config-editor");
+    configPre.textContent = "";
+
+    configEditor = document.createElement("textarea");
+    configEditor.className = "config-editor-textarea";
+    configEditor.setAttribute("aria-label", "config.yaml 编辑区");
+    configEditor.spellcheck = false;
+    configPre.appendChild(configEditor);
+
+    configStatus = document.createElement("p");
+    configStatus.className = "config-editor-status";
+    configPre.appendChild(configStatus);
+
+    const actions = document.createElement("div");
+    actions.className = "config-editor-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.type = "button";
+    saveBtn.className = "button button-primary";
+    saveBtn.textContent = "保存";
+    saveBtn.addEventListener("click", saveConfig);
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "button button-quiet";
+    cancelBtn.textContent = "取消";
+    cancelBtn.addEventListener("click", cancelConfigEdit);
+
+    actions.appendChild(saveBtn);
+    actions.appendChild(cancelBtn);
+    configPre.appendChild(actions);
+
+    configPre.dataset.editorBuilt = "1";
+  }
+
+  async function saveConfig() {
+    if (!configEditor) return;
+    configStatus.textContent = "正在保存…";
+    try {
+      const response = await fetch("/api/config", {
+        method: "PUT",
+        headers: {
+          "Content-Type": "text/plain",
+          "X-CSRF-Token": csrfToken(),
+        },
+        body: configEditor.value,
+        cache: "no-store",
+      });
+      if (response.status === 401) {
+        configStatus.textContent = "保存失败：未登录，请重新登录。";
+        return;
+      }
+      if (response.status === 403) {
+        configStatus.textContent = "保存失败：CSRF 校验未通过，请刷新页面重试。";
+        return;
+      }
+      if (!response.ok) {
+        let detail = `HTTP ${response.status}`;
+        try {
+          const body = await response.json();
+          if (body && body.detail) detail = body.detail;
+        } catch (_) { /* 非 JSON，保留状态码 */ }
+        configStatus.textContent = `保存失败：${detail}`;
+        return;
+      }
+      const data = await response.json();
+      configStatus.textContent = data.detail || "配置已保存，将在下一次 run 生效。";
+    } catch (error) {
+      configStatus.textContent = "保存失败：网络异常或端点不可用。";
+    }
+  }
+
+  function cancelConfigEdit() {
+    if (!configEditor || !configStatus) return;
+    configEditor.value = "";
+    configStatus.textContent = "已取消编辑，未保存的改动已丢弃。";
+    openConfigFile();
   }
 
   // 事件绑定
