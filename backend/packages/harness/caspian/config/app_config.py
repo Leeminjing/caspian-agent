@@ -24,6 +24,7 @@ from caspian.config.context_compression_config import ContextCompressionConfig
 from caspian.config.database_config import DatabaseConfig
 from caspian.config.extensions_config import ExtensionsConfig
 from caspian.config.goal_mode_config import GoalModeConfig
+from caspian.config.knowledge_config import KnowledgeConfig
 from caspian.config.langgraph_store_config import LanggraphStoreConfig
 from caspian.config.model_config import ModelConfig
 from caspian.config.plan_mode_config import PlanModeConfig
@@ -54,6 +55,7 @@ class AppConfig(BaseModel):
     agent: AgentConfig = AgentConfig()
     plan_mode: PlanModeConfig = PlanModeConfig()
     goal_mode: GoalModeConfig = GoalModeConfig()
+    knowledge: KnowledgeConfig = KnowledgeConfig()
 
     def _normalize_name(self, name: str) -> str:
         return name.strip()

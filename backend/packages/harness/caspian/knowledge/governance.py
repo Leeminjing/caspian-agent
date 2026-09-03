@@ -13,19 +13,14 @@
 
 具体工作流:
     (1) 过滤未知 id、自环的冲突关系；explicit 与 potential 分开处理
-    (2) 候选按等级降序（同级保持原序）单遍处理，规则:
-        - 当前条目已被压制 → 跳过（被压制者不能继续压制他人）
-        - 与更低等级的 explicit 冲突伙伴 → 压制对方；scope=partial 记录被压命题
-          文本（内容不删改），scope=full 则整体失去决策资格
-        - 与同等级 explicit 冲突伙伴 → 双方保留并标记 conflict_same_level，
-          等级系统不裁决
-    (3) potential 冲突 → 双方保留 + note"潜在分歧"（不确定不压制）
-    (4) 组装 ledger（状态 + 原因 + 被压命题）与 final_evidence_set（排除
-        suppressed，含 retained_partial 的 suppressed_claims 注解）
-    (5) 结果零持久化：压制只存在于本次返回对象，不影响其他查询
-
-    压制依赖 judge 的直接冲突边：同一命题的对立结论应由 judge 产出直接边。
-    # ponytail: 按等级降序单遍 + 同级原序，O(n²)；候选≤20，无需更复杂结构
+    (2) 未评级(None)为独立裁决类：不压制他人、也不被他人压制
+    (3) 跨等级 explicit 冲突按等级分组（降序）压制：高等级压制低等级，被压制者
+        不再压制他人；scope=partial 记录被压命题及其锚 span
+    (4) 同等级 explicit 冲突 → conflict_same_level，等级系统不裁决
+    (5) potential 冲突 → 双方保留 + note"潜在分歧"
+    (6) 组装 ledger 与 final_evidence_set：排除 suppressed；retained_partial 按
+        span 裁掉被压命题（非冲突余文保留）；按等级降序重排
+    (7) 结果零持久化：压制只存在于本次返回对象，不影响其他查询
 
 示例:
     result = govern(
@@ -44,23 +39,42 @@ from caspian.knowledge.schemas import (
     FinalEvidence,
     GovernanceResult,
     LedgerEntry,
-    level_display,
     level_value,
 )
 
 logger = logging.getLogger(__name__)
 
 
-def _key(order: dict[str, int], entry: EvidenceEntry) -> tuple[int, int]:
-    """按等级降序、原序升序的排序键。"""
-    return (-level_value(entry.level), order[entry.id])
+def _sort_key(entry: EvidenceEntry, order: dict[str, int]):
+    """排序键：非未评级按等级降序、原序升序；未评级排最后。"""
+    return (entry.level is None, -(entry.level or 0), order[entry.id])
 
 
-def _claim_for(
-    rel: ConflictRelation, loser_id: str
-) -> str:
+def _claim_for(rel: ConflictRelation, loser_id: str) -> str:
     """取冲突关系中属于 loser 一侧的命题文本。"""
     return rel.claim_b if rel.b == loser_id else rel.claim_a
+
+
+def _span_for(rel: ConflictRelation, loser_id: str) -> tuple[int, int] | None:
+    """取冲突关系中属于 loser 一侧的命题锚 span。"""
+    return rel.claim_b_span if rel.b == loser_id else rel.claim_a_span
+
+
+def _splice(content: str, spans: list[tuple[int, int]]) -> str:
+    """按锚 span 从原文中裁掉被压命题（span 升序、去重叠）。"""
+    ordered = sorted(
+        (s for s in spans if s and s[0] < s[1]),
+        key=lambda s: s[0],
+    )
+    result: list[str] = []
+    prev = 0
+    for start, end in ordered:
+        if start < prev:
+            continue
+        result.append(content[prev:start])
+        prev = end
+    result.append(content[prev:])
+    return "".join(result)
 
 
 def govern(
@@ -81,66 +95,78 @@ def govern(
         else:
             potential.append(rel)
 
-    # id → {status, reasons: [str], claims: [str], full: bool}
+    # id → {status, reasons, claims, spans, full}
     state: dict[str, dict] = {}
-    same_level_pairs: list[tuple[str, str, str]] = []  # (a, b, level_display)
-    seen_same_level: set[frozenset] = set()
+    sorted_entries = sorted(candidates, key=lambda e: _sort_key(e, order))
 
-    sorted_entries = sorted(candidates, key=lambda e: _key(order, e))
+    # (3) 跨等级压制：按等级降序，未评级不压制/不被压制，被压制者不再压制他人
     for entry in sorted_entries:
-        if entry.id in state and state[entry.id]["status"] == "suppressed":
+        if entry.level is None:
             continue
-
+        if state.get(entry.id, {}).get("status") == "suppressed":
+            continue
+        my_level = level_value(entry.level)
         for rel in explicit:
             if entry.id not in (rel.a, rel.b):
                 continue
             other_id = rel.b if rel.a == entry.id else rel.a
             other = by_id[other_id]
-            if state.get(other_id, {}).get("status") == "suppressed":
-                continue  # 被压制者不能再压制他人
-
-            my_level = level_value(entry.level)
+            if other.level is None:
+                continue
             other_level = level_value(other.level)
-            if other_level > my_level:
-                continue  # 更高等级的对手会先于本条目处理，此处不应出现
-            if other_level < my_level:
-                st = state.setdefault(other_id, {
-                    "status": "suppressed",
-                    "reasons": [],
-                    "claims": [],
-                    "full": False,
-                })
-                st["status"] = "suppressed"
-                st["reasons"].append(
-                    f"与更高等级证据 {entry.id}（{entry.level_display}）冲突"
-                )
-                if rel.scope == "full":
-                    st["full"] = True
-                else:
-                    claim = _claim_for(rel, other_id)
-                    if claim:
-                        st["claims"].append(claim)
-            else:  # 同等级
-                pair = frozenset((entry.id, other_id))
-                if pair not in seen_same_level:
-                    seen_same_level.add(pair)
-                    same_level_pairs.append(
-                        (entry.id, other_id, entry.level_display)
-                    )
+            if other_level >= my_level:
+                continue
+            st = state.setdefault(other_id, {
+                "status": "", "reasons": [], "claims": [], "spans": [], "full": False,
+            })
+            if st["status"] == "suppressed":
+                continue
+            st["status"] = "suppressed"
+            st["reasons"].append(
+                f"与更高等级证据 {entry.id}（{entry.level_display}）冲突"
+            )
+            if rel.scope == "full":
+                st["full"] = True
+            else:
+                claim = _claim_for(rel, other_id)
+                if claim:
+                    st["claims"].append(claim)
+                    span = _span_for(rel, other_id)
+                    if span:
+                        st["spans"].append(span)
 
-    # 同等级冲突标记（保留、不裁决）
+    # (4) 同等级 explicit 冲突 → conflict_same_level（未评级不参与同级裁决）
+    same_level_pairs: list[tuple[str, str, str]] = []
+    seen_same_level: set[frozenset] = set()
+    for rel in explicit:
+        a_lv = by_id[rel.a].level
+        b_lv = by_id[rel.b].level
+        if a_lv is None or b_lv is None or level_value(a_lv) != level_value(b_lv):
+            continue
+        pair = frozenset((rel.a, rel.b))
+        if pair in seen_same_level:
+            continue
+        seen_same_level.add(pair)
+        same_level_pairs.append((rel.a, rel.b, by_id[rel.a].level_display))
+
     for a_id, b_id, lv in same_level_pairs:
         for eid in (a_id, b_id):
-            st = state.setdefault(eid, {"status": "", "reasons": [], "claims": [], "full": False})
+            st = state.setdefault(eid, {
+                "status": "", "reasons": [], "claims": [], "spans": [], "full": False,
+            })
             if st["status"] == "suppressed":
                 continue
             st["status"] = "conflict_same_level"
-            st["reasons"].append(f"与同等级证据 {b_id if eid == a_id else a_id}（{lv}）冲突，等级系统不裁决")
+            st["reasons"].append(
+                f"与同等级证据 {b_id if eid == a_id else a_id}（{lv}）冲突，等级系统不裁决"
+            )
 
-    # potential 冲突（保留 + 提示）
+    # (5) potential 冲突 → 双方保留 + 提示
     for rel in potential:
         for eid in (rel.a, rel.b):
-            st = state.setdefault(eid, {"status": "", "reasons": [], "claims": [], "full": False})
+            st = state.setdefault(eid, {
+                "status": "", "reasons": [], "claims": [], "spans": [], "full": False,
+            })
             if st["status"] in ("suppressed", "conflict_same_level"):
                 continue
             st["status"] = "potential_conflict"
@@ -158,42 +184,54 @@ def govern(
             f"证据 {rel.a} 与证据 {rel.b} 可能存在冲突，当前检索结果存在潜在分歧。"
         )
 
+    # (6) 组装 ledger 与 final_evidence_set（按等级降序）
     ledger: list[LedgerEntry] = []
     final_set: list[FinalEvidence] = []
-    for entry in candidates:
+    for entry in sorted_entries:
         st = state.get(entry.id, {})
-        status = st.get("status", "") or "retained"
+        status = st.get("status", "")
         reasons = list(dict.fromkeys(st.get("reasons", [])))
         claims = list(dict.fromkeys(st.get("claims", [])))
+        spans = list(st.get("spans", []))
+
+        if status == "":
+            status = "unrated" if entry.level is None else "retained"
+        if status == "unrated" and not reasons:
+            reasons.append("未评级，未参与等级压制")
+
         if status == "suppressed":
             if st.get("full") or not claims:
-                ledger.append(
-                    LedgerEntry(
-                        id=entry.id,
-                        level_display=entry.level_display,
-                        status="suppressed",
-                        reason="；".join(reasons),
-                    )
-                )
+                ledger.append(LedgerEntry(
+                    id=entry.id,
+                    level_display=entry.level_display,
+                    status="suppressed",
+                    reason="；".join(reasons),
+                ))
                 continue
             status = "retained_partial"
-        ledger.append(
-            LedgerEntry(
-                id=entry.id,
-                level_display=entry.level_display,
-                status=status,
-                reason="；".join(reasons),
-                suppressed_claims=claims if status == "retained_partial" else [],
-            )
-        )
-        final_set.append(
-            FinalEvidence(
-                id=entry.id,
-                content=entry.content,
-                level_display=entry.level_display,
-                suppressed_claims=claims if status == "retained_partial" else [],
-            )
-        )
+
+        # partial 真删：裁掉被压命题；无 span 时回退按命题文本子串定位
+        effective_spans = list(spans)
+        if status == "retained_partial" and not effective_spans:
+            for claim in claims:
+                idx = entry.content.find(claim)
+                if idx >= 0:
+                    effective_spans.append((idx, idx + len(claim)))
+        content = _splice(entry.content, effective_spans) if status == "retained_partial" else entry.content
+
+        ledger.append(LedgerEntry(
+            id=entry.id,
+            level_display=entry.level_display,
+            status=status,
+            reason="；".join(reasons),
+            suppressed_claims=claims if status == "retained_partial" else [],
+        ))
+        final_set.append(FinalEvidence(
+            id=entry.id,
+            content=content,
+            level_display=entry.level_display,
+            suppressed_claims=claims if status == "retained_partial" else [],
+        ))
 
     return GovernanceResult(
         final_evidence_set=final_set,

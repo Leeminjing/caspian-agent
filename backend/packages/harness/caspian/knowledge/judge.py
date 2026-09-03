@@ -5,28 +5,23 @@
     judge_conflicts — 单次批量调用模型，判定候选证据两两之间与查询命题相关的冲突关系
 
 输入:
-    candidates: list[EvidenceEntry] — 候选证据（仅用 id 与 content；等级不参与判定，
-        等级裁决由 governance 确定性完成）
+    candidates: list[EvidenceEntry] — 候选证据（仅用 id 与 content；等级不参与判定）
     model: BaseChatModel — 已构造的聊天模型
-    query: str — 用户查询文本，冲突判定只针对与查询命题相关的关系（规格第 10 节：
-        压制针对具体查询与具体命题发生）
+    query: str — 用户查询文本，冲突判定只针对与查询命题相关的关系
     timeout_seconds: float — 单次模型请求超时，默认 120
 
 输出:
-    list[ConflictRelation] — 两两冲突关系（explicit/potential × full/partial）
+    list[ConflictRelation] — 两两冲突关系（explicit/potential × full/partial）；
+        partial 冲突必须给出锚定原文的 claim 与 span，未锚定者降级为 potential
 
 具体工作流:
     (1) 组装 candidates JSON 与判定 system prompt（含用户查询）
-    (2) 结构化输出（json_mode）单次批量调用（先例 delegation.py 的
-        with_structured_output 模式）
-    (3) 结构化调用异常/解析失败 → 纯文本兜底 + json.loads 解析（先例
-        stage_rules._extract_structured 的 fenced 提取模式）
-    (4) 校验关系合法性（未知 id、非法枚举丢弃并 WARNING）
-    (5) 全部失败 → 抛异常，由调用方返回 502（绝不静默跳过治理）
+    (2) 结构化输出（json_mode）单次批量调用，解析失败回退纯文本 json.loads
+    (3) _validated_conflicts 过滤非法关系并校验 partial 命题锚定原文（claim ⊆ content）
+    (4) 全部失败 → 抛异常，由调用方降级为"未治理"
 
 示例:
     conflicts = await judge_conflicts(candidates, model, query="功能 A 是否已废弃？")
-    result = govern(candidates, conflicts)
 """
 
 import asyncio
@@ -53,10 +48,13 @@ _JUDGE_SYSTEM_PROMPT = """你是知识证据的冲突判定器。给定用户查
 3. 疑似相反但无法可靠确认的，只能标 relation="potential"，不得标 explicit。
 4. 无冲突的证据对不列入输出。
 5. 若证据包含多个可分离命题，仅部分命题与对方冲突，必须标 scope="partial"，
-   并给出各自冲突命题的原文 claim_a（对应 a 的命题）与 claim_b（对应 b 的命题）；
-   scope="full" 仅用于整条证据整体与对方对立的情况。
+   并给出各自冲突命题的原文 claim_a（对应 a）与 claim_b（对应 b）。
+   claim_a/claim_b 必须是证据原文中的**精确子串**，并同时给出其在原文中的
+   claim_a_span/claim_b_span（[起, 止) 字符下标，止不含）；若无法给出精确子串
+   与 span，则只能标 relation="potential"。
+   scope="full" 仅用于整条证据整体与对方对立的情况（此时 claim 留空）。
 6. 输出必须是一个 JSON 对象，格式：
-{"conflicts": [{"a": "<id>", "b": "<id>", "relation": "explicit|potential", "scope": "full|partial", "claim_a": "...", "claim_b": "..."}]}"""
+{"conflicts": [{"a": "<id>", "b": "<id>", "relation": "explicit|potential", "scope": "full|partial", "claim_a": "...", "claim_b": "...", "claim_a_span": [起,止], "claim_b_span": [起,止]}]}"""
 
 _FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
 
@@ -69,10 +67,50 @@ def _parse_fenced_or_raw(text: str) -> dict | None:
     return json.loads(text)
 
 
+def _anchor(
+    content: str, claim: str, span: tuple[int, int] | None
+) -> tuple[int, int] | None:
+    """校验命题锚定原文：claim 必须命中 content 的精确子串。
+
+    输入:
+        content: str — 证据原文
+        claim: str — 待校验的冲突命题
+        span: tuple[int, int] | None — judge 给出的 [起,止) 下标
+
+    输出:
+        tuple[int, int] | None — 命中返回 (起,止)，未命中或空 claim 返回 None
+    """
+    if not claim:
+        return None
+    if span is not None:
+        try:
+            start, end = span
+            if isinstance(start, int) and isinstance(end, int) and 0 <= start <= end <= len(content):
+                if content[start:end] == claim:
+                    return (start, end)
+        except (TypeError, ValueError):
+            pass
+    idx = content.find(claim)
+    if idx >= 0:
+        return (idx, idx + len(claim))
+    return None
+
+
 def _validated_conflicts(
-    raw_conflicts: list[dict], known_ids: set[str]
+    raw_conflicts: list[dict],
+    known_ids: set[str],
+    content_by_id: dict[str, str] | None = None,
 ) -> list[ConflictRelation]:
-    """过滤未知 id、非法枚举、自环与重复对。"""
+    """过滤未知 id、非法枚举、自环与重复对，并校验 partial 命题锚定原文。
+
+    输入:
+        raw_conflicts: list[dict] — judge 原始输出
+        known_ids: set[str] — 候选证据 id 集合
+        content_by_id: dict[str, str] | None — id → 原文映射；None 时跳过锚定校验
+
+    输出:
+        list[ConflictRelation] — 合法冲突关系；partial 且无法锚定者降级为 potential
+    """
     result: list[ConflictRelation] = []
     seen_pairs: set[frozenset] = set()
     for item in raw_conflicts or []:
@@ -93,14 +131,44 @@ def _validated_conflicts(
         if pair in seen_pairs:
             continue
         seen_pairs.add(pair)
+
+        claim_a = str(item.get("claim_a", "") or "")
+        claim_b = str(item.get("claim_b", "") or "")
+        claim_a_span = item.get("claim_a_span")
+        claim_b_span = item.get("claim_b_span")
+        # 模型可能输出 [] / "" / null 表示"无锚"（full 冲突常见），统一归一化为 None
+        if not claim_a_span:
+            claim_a_span = None
+        if not claim_b_span:
+            claim_b_span = None
+
+        # partial 冲突必须锚定原文：claim ⊆ content；未锚定 → 降级 potential，不压制
+        if scope == "partial" and content_by_id is not None:
+            a_content = content_by_id.get(a, "")
+            b_content = content_by_id.get(b, "")
+            anchored_a = _anchor(a_content, claim_a, claim_a_span)
+            anchored_b = _anchor(b_content, claim_b, claim_b_span)
+            if anchored_a is None or anchored_b is None:
+                logger.warning(
+                    "judge partial 冲突命题未锚定原文，降级为 potential: a=%s b=%s", a, b
+                )
+                relation = "potential"
+                claim_a_span = None
+                claim_b_span = None
+            else:
+                claim_a_span = anchored_a
+                claim_b_span = anchored_b
+
         result.append(
             ConflictRelation(
                 a=str(a),
                 b=str(b),
                 relation=relation,
                 scope=scope,
-                claim_a=str(item.get("claim_a", "") or ""),
-                claim_b=str(item.get("claim_b", "") or ""),
+                claim_a=claim_a,
+                claim_b=claim_b,
+                claim_a_span=claim_a_span,
+                claim_b_span=claim_b_span,
             )
         )
     return result
@@ -117,6 +185,7 @@ async def judge_conflicts(
     if len(known_ids) < 2:
         return []
 
+    content_by_id = {c.id: c.content for c in candidates}
     payload = json.dumps(
         {
             "query": query,
@@ -138,7 +207,7 @@ async def judge_conflicts(
             )
         if isinstance(parsed, JudgeConflictOutput):
             return _validated_conflicts(
-                [rel.model_dump() for rel in parsed.conflicts], known_ids
+                [rel.model_dump() for rel in parsed.conflicts], known_ids, content_by_id
             )
         raise ValueError("结构化输出类型异常")
     except Exception as exc:
@@ -158,7 +227,7 @@ async def judge_conflicts(
             conflicts = data.get("conflicts") if isinstance(data, dict) else None
             if not isinstance(conflicts, list):
                 raise ValueError("兜底解析结果缺少 conflicts 数组")
-            return _validated_conflicts(conflicts, known_ids)
+            return _validated_conflicts(conflicts, known_ids, content_by_id)
         except Exception:
             logger.error("judge 兜底解析也失败", exc_info=True)
             raise

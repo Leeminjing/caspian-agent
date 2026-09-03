@@ -67,7 +67,7 @@ class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result["result"]["final_evidence_set"], [])
         self.assertIn("知识库中没有检索到相关内容", result["result"]["notes"][0])
 
-    async def test_judge失败返回502(self):
+    async def test_judge失败返回未治理(self):
         async def boom(*args, **kwargs):
             raise RuntimeError("boom")
 
@@ -75,15 +75,17 @@ class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
             patch("caspian.knowledge.pipeline.create_chat_model", return_value=None),
             patch("caspian.knowledge.pipeline.judge_conflicts", side_effect=boom),
         ):
-            with self.assertRaises(HTTPException) as ctx:
-                await query_knowledge(
-                    QueryRequest(query="x"),
-                    _request(_FakeStore([
-                        _FakeItem("a", "c1", 1),
-                        _FakeItem("b", "c2", 2),
-                    ])),
-                )
-        self.assertEqual(ctx.exception.status_code, 502)
+            result = await query_knowledge(
+                QueryRequest(query="x"),
+                _request(_FakeStore([
+                    _FakeItem("a", "c1", 1),
+                    _FakeItem("b", "c2", 2),
+                ])),
+            )
+        self.assertEqual(result["status"], "unadjudicated")
+        self.assertEqual(len(result["candidates"]), 2)
+        for item in result["ledger"]:
+            self.assertEqual(item["status"], "unadjudicated")
 
     async def test_成功响应含完整治理结构(self):
         with (

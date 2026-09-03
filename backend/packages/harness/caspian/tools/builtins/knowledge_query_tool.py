@@ -16,14 +16,12 @@
 
 具体工作流:
     (1) 从 runtime 取 store 与 user_id；缺失时返回说明性错误字符串
-    (2) 调用共享管线 run_governed_query（search_knowledge 向量召回 → judge_conflicts
-        冲突判定 → govern 等级治理）；judge 失败返回显式错误文本，不静默跳过治理
+    (2) 调用共享管线 run_governed_query；judge 失败时返回 unadjudicated（证据保留并标注）
     (3) 经 get_stream_writer 发射 {type: "knowledge_governance", ...} 自定义事件
-        （前端渲染证据/账本面板）
-    (4) 组装模型文本：最终证据集 + 部分压制注解 + 同等级冲突/潜在分歧提示
+    (4) 组装模型文本：最终证据集 + 部分移除注解 + 同等级冲突/潜在分歧提示
 
 示例:
-    result = await knowledge_query_tool.ainvoke({
+    result = await knowledge_query.ainvoke({
         "query": "功能 A 是否已经废弃？",
         "top_k": 5,
     })
@@ -50,12 +48,18 @@ def _emit_governance_event(payload: dict) -> None:
 
 
 def _format_evidence_text(result) -> str:
+    if result.status == "unadjudicated":
+        lines = ["以下证据未经冲突治理（判定失败），请谨慎引用并留意潜在矛盾："]
+        for i, evidence in enumerate(result.final_evidence_set, start=1):
+            lines.append(f"{i}. [{evidence.level_display}] {evidence.content}")
+        return "\n".join(lines)
+
     lines = ["以下证据已经离散等级治理，可作为回答依据："]
     for i, evidence in enumerate(result.final_evidence_set, start=1):
         lines.append(f"{i}. [{evidence.level_display}] {evidence.content}")
         if evidence.suppressed_claims:
             lines.append(
-                f"   ⚠ 该证据中以下命题已被等级治理压制，不得作为依据："
+                f"   ⚠ 该证据中以下命题因与更高等级证据冲突已被移除，不得作为依据："
                 + "；".join(evidence.suppressed_claims)
             )
     suppressed = [item for item in result.ledger if item.status == "suppressed"]
@@ -63,6 +67,11 @@ def _format_evidence_text(result) -> str:
         lines.append(
             f"另有 {len(suppressed)} 条证据因与更高等级证据冲突被压制"
             "（不得引用其内容，治理账本已展示给用户）。"
+        )
+    same_level = [item for item in result.ledger if item.status == "conflict_same_level"]
+    if same_level:
+        lines.append(
+            "存在同等级冲突：等级系统不裁决，请在回答中列出双方结论并向用户说明分歧，不得自行选边。"
         )
     if result.notes:
         lines.append("治理提示：")
@@ -79,8 +88,8 @@ async def knowledge_query(
     """在受治理的知识库中检索证据（离散等级治理 RAG）。
 
     When to use: 回答与已收录知识相关的问题时，先调用本工具获取经过等级治理的
-    最终证据集；知识库中的证据按权威等级（L0-L3/未评级）入库，明确冲突时高等级
-    压制低等级。不要自行臆测知识库内容，先检索。
+    最终证据集；知识库中的证据按来源归属派生权威等级（L0-L3/未评级），明确冲突时
+    高等级压制低等级。不要自行臆测知识库内容，先检索。
 
     When NOT to use: 与知识库无关的对话、代码编写、一般常识问答不需要调用。
 
@@ -94,25 +103,21 @@ async def knowledge_query(
         return "知识库不可用：缺少 store 或 user_id 运行上下文。"
 
     model_name = _runtime_context(runtime).get("model_name")
-    result, candidates, error = await run_governed_query(
+    result = await run_governed_query(
         store,
         str(user_id),
         query,
         top_k,
         model_name,
     )
-    if error is not None:
-        return (
-            "知识检索治理失败：冲突判定出错，本次不采用知识库证据。"
-            f"（{error}）"
-        )
-    if result is None:
+    if result.status == "empty":
         return "知识库中没有检索到相关内容。"
 
     _emit_governance_event(
         {
             "type": "knowledge_governance",
             "query": query,
+            "status": result.status,
             "ledger": [item.model_dump() for item in result.ledger],
             "notes": result.notes,
         }
