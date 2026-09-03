@@ -7,7 +7,7 @@
 输出:
     可运行检查，覆盖规格 12 节全部治理行为：无冲突保留、部分重叠部分压制、
     跨等级明确冲突压制（相似度/数量不可推翻）、多级冲突最高等级胜出、
-    同等级冲突不裁决、不确定冲突不压制、未评级按最低档、查询隔离、账本可解释。
+    同等级冲突不裁决、不确定冲突不压制、未评级独立类不参与压制、查询隔离、账本可解释。
 """
 
 import unittest
@@ -130,14 +130,51 @@ class GovernanceSpecMatrixTests(unittest.TestCase):
         final_b = next(e for e in result.final_evidence_set if e.id == "b")
         self.assertIn("参数格式是 X", final_b.content)
 
-    def test_1_2_未评级按最低档比较(self):
+    def test_1_2_未评级不参与压制(self):
         result = govern(
             [_entry("a", "A", 1), _entry("b", "非A", None)],
             [ConflictRelation(a="a", b="b", relation="explicit", scope="full")],
         )
         self.assertEqual(_status(result, "a").status, "retained")
-        self.assertEqual(_status(result, "b").status, "suppressed")
+        self.assertEqual(_status(result, "b").status, "unrated")
         self.assertEqual(_status(result, "b").level_display, "未评级")
+        self.assertEqual(len(result.final_evidence_set), 2)
+
+    def test_未评级不压制他人(self):
+        result = govern(
+            [_entry("a", "A", None), _entry("b", "非A", 1)],
+            [ConflictRelation(a="a", b="b", relation="explicit", scope="full")],
+        )
+        self.assertEqual(_status(result, "a").status, "unrated")
+        self.assertEqual(_status(result, "b").status, "retained")
+        self.assertEqual(len(result.final_evidence_set), 2)
+
+    def test_部分压制真删裁掉被压命题(self):
+        result = govern(
+            [_entry("a", "功能 A 已经废弃。", 3),
+             _entry("b", "功能 A 仍然推荐使用。参数格式是 X。", 1)],
+            [ConflictRelation(
+                a="a", b="b", relation="explicit", scope="partial",
+                claim_a="功能 A 已经废弃", claim_b="功能 A 仍然推荐使用",
+                claim_a_span=(0, 9), claim_b_span=(0, 11),
+            )],
+        )
+        partial = _status(result, "b")
+        self.assertEqual(partial.status, "retained_partial")
+        self.assertEqual(partial.suppressed_claims, ["功能 A 仍然推荐使用"])
+        final_b = next(e for e in result.final_evidence_set if e.id == "b")
+        self.assertNotIn("仍然推荐使用", final_b.content)
+        self.assertIn("参数格式是 X", final_b.content)
+
+    def test_最终证据集按等级降序重排(self):
+        result = govern(
+            [_entry("low", "L0 内容", 0),
+             _entry("high", "L3 内容", 3),
+             _entry("mid", "L2 内容", 2)],
+            [],
+        )
+        levels = [e.level_display for e in result.final_evidence_set]
+        self.assertEqual(levels, ["L3", "L2", "L0"])
 
     def test_9_2_账本可解释(self):
         result = govern(

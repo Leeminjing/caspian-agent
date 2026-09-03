@@ -75,6 +75,16 @@ class JudgePureHelperTests(unittest.TestCase):
         self.assertEqual(len(conflicts), 1)
         self.assertEqual(conflicts[0].relation, "explicit")
 
+    def test_空span数组归一化为None(self):
+        conflicts = _validated_conflicts(
+            [{"a": "x", "b": "y", "relation": "explicit", "scope": "full",
+              "claim_a": "", "claim_b": "", "claim_a_span": [], "claim_b_span": []}],
+            {"x", "y"},
+        )
+        self.assertEqual(len(conflicts), 1)
+        self.assertIsNone(conflicts[0].claim_a_span)
+        self.assertIsNone(conflicts[0].claim_b_span)
+
 
 class JudgeTests(unittest.IsolatedAsyncioTestCase):
 

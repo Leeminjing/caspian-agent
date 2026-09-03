@@ -141,3 +141,11 @@ auth:
   csrf_cookie_name: csrf_token
   login_limit_window: 60
   login_limit_max_attempts: 5
+
+knowledge:
+  level_policy:
+    # 域名 → 等级：3=官方文档/官方公告，2=官方工程博客/论文，1=普通博客/社区，0=低质量。
+    # 未列出的域名一律按"未评级"处理（不参与压制）。入库时 level 由该策略确定性派生。
+    domains:
+      "docs.example.com": 3
+      "blog.example.com": 1

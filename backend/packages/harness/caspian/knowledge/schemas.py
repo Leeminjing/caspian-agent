@@ -16,8 +16,7 @@
 
 具体工作流:
     level_display: level 为 None → "未评级"；0-3 → "L0"-"L3"
-    level_value: level 为 None → 0（未评级按预定义最低默认等级参与比较）；
-        0-3 → 原值
+    level_value: 0-3 → 原值；None → 抛 ValueError（未评级不参与等级比较）
 
 示例:
     from caspian.knowledge.schemas import EvidenceEntry, level_display
@@ -43,11 +42,9 @@ def level_display(level: int | None) -> str:
 
 
 def level_value(level: int | None) -> int:
-    """将等级值转为参与比较的数值（None 按最低默认等级 0 处理）。"""
-    if level is None:
-        return 0
+    """将显式等级值转为参与比较的数值；未评级 None 不参与比较（抛 ValueError）。"""
     if level not in _VALID_LEVELS:
-        raise ValueError(f"非法等级: {level}，允许 0-3 或 null")
+        raise ValueError(f"非法等级: {level}，允许 0-3；未评级 None 不参与等级比较")
     return level
 
 
@@ -71,6 +68,7 @@ class ConflictRelation(BaseModel):
 
     relation: explicit=明确冲突（可触发等级压制）；potential=可能冲突（不压制）
     scope: full=整体冲突；partial=仅 claim_a/claim_b 所述命题冲突
+    claim_a/claim_b: 冲突命题原文；claim_a_span/claim_b_span 为其在对应证据中的锚
     """
 
     a: str
@@ -79,6 +77,8 @@ class ConflictRelation(BaseModel):
     scope: Literal["full", "partial"] = "full"
     claim_a: str = ""
     claim_b: str = ""
+    claim_a_span: tuple[int, int] | None = None
+    claim_b_span: tuple[int, int] | None = None
 
 
 class JudgeConflictOutput(BaseModel):
@@ -98,6 +98,8 @@ class LedgerEntry(BaseModel):
         "suppressed",
         "conflict_same_level",
         "potential_conflict",
+        "unrated",
+        "unadjudicated",
     ]
     reason: str = ""
     suppressed_claims: list[str] = Field(default_factory=list)
@@ -118,3 +120,5 @@ class GovernanceResult(BaseModel):
     final_evidence_set: list[FinalEvidence]
     ledger: list[LedgerEntry]
     notes: list[str] = Field(default_factory=list)
+    status: Literal["governed", "unadjudicated", "empty"] = "governed"
+    candidates: list[EvidenceEntry] = Field(default_factory=list)
