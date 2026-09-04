@@ -39,3 +39,4 @@ build/
 
 # Runtime artifacts
 .caspian/
+.lead_agent/

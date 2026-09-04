@@ -1,2 +1,0 @@
-Hello World from UTF-8 file!
-Line 2 here.
