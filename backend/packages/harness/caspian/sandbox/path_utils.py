@@ -65,6 +65,7 @@ shell 命令安全三维防护常量：
 import logging
 import os
 import re
+from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
@@ -210,15 +211,27 @@ def validate_subdir(vpath: str, allowed: set[str]) -> None:
         allowed: 允许的子目录名集合，如 {"workspace", "outputs"}
 
     工作流:
-        (1) 去掉 VRROOT 前缀，取剩余部分的第一级目录名
-        (2) 若该目录名不在 allowed 中，抛 SecurityError
+        (1) 校验 vpath 必须以 VRROOT + "/" 开头，否则抛 SecurityError
+            （虚拟路径必须规范化；不依赖下游 resolve_path 二次兜底）
+        (2) 拒绝任何含 ".." 路径段的虚拟路径（虚拟路径里不允许 ".."，不做智能解析）
+        (3) 去掉 VRROOT 前缀，取剩余部分的第一级目录名
+        (4) 若该目录名不在 allowed 中，抛 SecurityError
 
     示例:
         validate_subdir("/mnt/user-data/uploads/a.txt", {"uploads", "workspace"})  # 通过
         validate_subdir("/mnt/user-data/outputs/b.txt", {"uploads", "workspace"})  # 抛 SecurityError
+        validate_subdir("/mnt/user-data/workspace/../evil", {"workspace"})          # 抛 SecurityError (含 ..)
     """
+    if not vpath.startswith(VRROOT + "/"):
+        raise SecurityError(
+            f"虚拟路径越界: '{vpath}'，必须以 '{VRROOT}/' 开头"
+        )
+    if ".." in PurePosixPath(vpath).parts:
+        raise SecurityError(
+            f"虚拟路径不允许包含 '..': '{vpath}'"
+        )
     relative = vpath[len(VRROOT):].lstrip("/")
-    subdir = relative.split("/")[0]
+    subdir = relative.split("/", 1)[0]
     if subdir not in allowed:
         raise SecurityError(
             f"子目录 '{subdir}' 不在允许列表中: {sorted(allowed)}"
@@ -239,13 +252,46 @@ def resolve_path(vpath: str, user_id: str, thread_id: str) -> str:
 
 
 def validate_path(real_path: str, real_root: str) -> str:
-    real_root_abs = os.path.realpath(real_root)
-    real_path_abs = os.path.realpath(real_path)
-    if not real_path_abs.startswith(real_root_abs):
+    """校验真实路径是否在沙箱根目录内（目录层级判断），返回规范化路径。
+
+    输入:
+        real_path: str — 待校验的真实路径（含 .. / symlink 等未规范化成分）
+        real_root: str — 沙箱真实根目录
+
+    输出:
+        str — 已 resolve 的规范化绝对路径
+
+    工作流:
+        (1) root = Path(real_root).resolve(strict=False)：绝对化 + 消除 .. + 跟随 symlink
+        (2) candidate = Path(real_path).resolve(strict=False)：同上
+        (3) candidate.relative_to(root)：目录层级判断——root 必须是 candidate 的祖先，
+            否则抛 ValueError（兄弟前缀逃逸、非后代 symlink 均被拒）。
+            注意: relative_to 对"candidate == root"返回空相对路径 '.' 而非抛错，
+            故需再显式拒绝"等于根自身"（要求严格在根内，而非解到根目录本体）。
+        (4) 越界 → SecurityError；落界内 → 返回 str(candidate) 规范化路径
+
+    为什么用 relative_to 而非字符串前缀:
+        startswith 会把 /a/user-data 误判为 /a/user-data-evil 的"前缀包含"；
+        relative_to 判断的是目录层级（祖先-后代关系），机制上正确。
+
+    示例:
+        validate_path("/srv/user-data/a.py", "/srv/user-data")   → "/srv/user-data/a.py"
+        validate_path("/srv/user-data-evil/x", "/srv/user-data") → SecurityError
+        validate_path("/srv/user-data", "/srv/user-data")        → SecurityError
+    """
+    root = Path(real_root).resolve(strict=False)
+    candidate = Path(real_path).resolve(strict=False)
+    try:
+        candidate.relative_to(root)
+    except ValueError:
         raise SecurityError(
-            f"真实路径越界: '{real_path_abs}' 不在沙箱根目录 '{real_root_abs}' 内"
+            f"真实路径越界: '{candidate}' 不在沙箱根目录 '{root}' 内"
         )
-    return real_path
+    if candidate == root:
+        raise SecurityError(
+            f"真实路径越界: '{candidate}' 即沙箱根目录本身，必须位于其子路径内"
+        )
+    return str(candidate)
 
 
 def resolve_skill_path(vpath: str, user_id: str) -> str:

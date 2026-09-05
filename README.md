@@ -61,7 +61,7 @@ Caspian is a **parent-graph-with-child-graph** LangGraph system; the `lead_agent
 
 - **Storage**: `PostgreSQL + pgvector` for checkpoints (`PostgresSaver`) and the LangGraph Store (long-term memory, semantic search).
 - **Streaming**: in-process `StreamBridge` → SSE; `RunManager` tracks run status; rollback snapshots via checkpointer.
-- **Sandbox**: pluggable (`LocalSandbox` default; `AioSandbox` via Docker), with path whitelists + shell command guards + a regex risk-audit middleware.
+- **Sandbox**: pluggable. `LocalSandbox` is the **development-only** constrained local executor — it validates virtual paths (path containment, `..` traversal rejection, symlink escape rejection) and guards shell commands, but **does not provide OS-level isolation**; use it only for local/dev runs. `AioSandbox` (via Docker) provides container-isolated execution for untrusted agent runs. Both carry path whitelists + shell command guards + a regex risk-audit middleware.
 - **Frontend**: zero-dependency static UI, served by the same Python process (vanilla JS, hand-written CSS, 2 vendored libs: `marked` + `DOMPurify`). No npm, no build step, no framework.
 
 > - **存储**:`PostgreSQL + pgvector` 承载 checkpoint(`PostgresSaver`)与 LangGraph Store(长期记忆、语义检索)。
@@ -157,7 +157,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 - **子代理 (Subagents)**: `task` 委托;委托账本从消息流确定性重建;并发/总额硬上限截断;状态契约枚举 + 结果 sha256。
 - **插件 (Plugins)**: 注入注册表 + 单实现冲突检测 + 稳定顺序 + 依赖解析;接口分 tool / ordered-mutator / ordered-observer / service,失败策略 `skip`。
 - **技能 (Skills)**: `skills/public` + `skills/custom`;`extensions_config.json` 启停;`describe_skill` 发现。示例:`docx`、`vision`。
-- **沙箱 (Sandbox)**: 可插拔;虚拟路径白名单(`validate_subdir`)、`resolve_path` 防越界、shell 五道防线 + regex `block/warn/pass` 审计;错误自动清洗真实路径。
+- **沙箱 (Sandbox)**: 可插拔;`LocalSandbox` 为 **development-only** 本地受限执行器——校验虚拟路径(目录层级围栏、`..` 穿越拒绝、symlink 逃逸拒绝)与 shell 命令,但 **不提供 OS 级隔离**,仅用于本地/开发运行;不可信 agent 执行请用 `AioSandbox`(容器隔离)。含虚拟路径白名单 `validate_subdir`、`resolve_path` 防越界、shell 五道防线 + regex `block/warn/pass` 审计;错误自动清洗真实路径。
 - **上下文压缩**: 触发阈值 + 切点 + LLM 摘要 + 后置校验(fail-soft);被压消息入 `archive.jsonl` 存档。
 - **工具错误收口**: `ToolErrorMiddleware` 统一捕获工具异常并回传 LLM。
 
