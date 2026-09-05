@@ -1663,7 +1663,9 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                         "knowledge_files": [],
                     }
                 ),
-                timeout=0.2,
+                # 外层守卫仅防"整个图真挂死"，不是判定阈值;放宽容忍慢 runner 的冷启动
+                # 时间(内层 _STAGE_TIMEOUT_SECONDS=0.01 仍会稳定触发阶段超时)。
+                timeout=10,
             )
         payload = result["__interrupt__"][0].value
         self.assertEqual(payload["stage"], 1)
