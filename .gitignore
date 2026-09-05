@@ -70,6 +70,9 @@ _screenshot.png
 backend/packages/harness/.testtmp/
 backend/packages/harness/.pytest_cache/
 
+# RAG benchmark data (large third-party dataset + runtime checkpoint; download on demand)
+backend/packages/harness/caspian/benchmarks/rag/data/
+
 # requirements scratch/test dirs
 requirements/stress-*/
 requirements/edit-*/

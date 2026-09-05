@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -33,6 +34,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--corpus", default=str(_CORPUS_PATH), help="语料路径")
     parser.add_argument("--out", default="benchmark-report.md", help="报告输出路径")
     parser.add_argument("--mechanism", action="store_true", help="跑确定性机制级消融(不调 LLM)")
+    parser.add_argument("--rag", action="store_true", help="跑分层压制 RAG 四轴 benchmark(不调 LLM)")
     return parser.parse_args()
 
 
@@ -42,6 +44,19 @@ async def _run(args: argparse.Namespace) -> None:
         tasks = [t for t in tasks if t.id == args.task]
         if not tasks:
             raise SystemExit(f"未找到任务 {args.task}")
+
+    if args.rag:
+        from caspian.benchmarks.rag.accuracy import aggregate_checkpoint
+        from caspian.benchmarks.rag.report import render_conflictqa_report
+        from caspian.benchmarks.rag.runner import run_conflictqa
+
+        evidence = run_conflictqa()
+        answer = aggregate_checkpoint() or None
+        report = render_conflictqa_report(evidence, answer)
+        Path(args.out).write_text(report + "\n", encoding="utf-8")
+        print(report)
+        print(f"\n报告已写入 {args.out}")
+        return
 
     if args.mechanism:
         from caspian.benchmarks.mechanism import aggregate_mechanism, run_mechanism_ablation_all
@@ -63,6 +78,10 @@ async def _run(args: argparse.Namespace) -> None:
 def main() -> None:
     load_dotenv()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     args = _parse_args()
     asyncio.run(_run(args))
 

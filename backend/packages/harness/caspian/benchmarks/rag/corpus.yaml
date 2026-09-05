@@ -1,0 +1,160 @@
+items:
+  - id: rag-001
+    query: "React 19 是否还需要 forwardRef 传递 ref?"
+    candidates:
+      - {id: a, content: "React 19 中 forwardRef 已弃用,ref 现在作为普通 prop 传递。", level: 3, score: 0.61, source_count: 1}
+      - {id: b, content: "React 19 仍必须使用 forwardRef 来转发 ref。", level: 1, score: 0.98, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-002
+    query: "Next.js App Router 如何获取数据?"
+    candidates:
+      - {id: a, content: "Next.js App Router 推荐在服务端组件中直接 await 获取数据,无需 getServerSideProps。", level: 3, score: 0.58, source_count: 1}
+      - {id: b, content: "Next.js 15 仍必须使用 getServerSideProps 做数据获取。", level: 1, score: 0.96, source_count: 6}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-003
+    query: "Supabase 是否支持本地开发?"
+    candidates:
+      - {id: a, content: "Supabase 提供 CLI 与本地 Docker 栈,支持完全离线本地开发。", level: 3, score: 0.55, source_count: 1}
+      - {id: b, content: "Supabase 只能云端托管,不支持本地运行。", level: 1, score: 0.97, source_count: 4}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-004
+    query: "Tailwind CSS v4 还需要 tailwind.config.js 吗?"
+    candidates:
+      - {id: a, content: "Tailwind CSS v4 采用 CSS-first 配置,不再默认生成 tailwind.config.js。", level: 3, score: 0.60, source_count: 1}
+      - {id: b, content: "Tailwind v4 仍然强制要求 tailwind.config.js。", level: 1, score: 0.95, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-005
+    query: "TypeScript 是否推荐使用 enum?"
+    candidates:
+      - {id: a, content: "TypeScript 官方推荐优先使用 union types 而非 enum,因 enum 有运行时开销。", level: 3, score: 0.52, source_count: 1}
+      - {id: b, content: "TypeScript enum 没有任何问题,应始终优先使用 enum。", level: 1, score: 0.94, source_count: 7}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-006
+    query: "Node.js 是否内置 fetch?"
+    candidates:
+      - {id: a, content: "Node.js 18+ 已内置全局 fetch,无需再引入 node-fetch。", level: 3, score: 0.57, source_count: 1}
+      - {id: b, content: "Node.js 需要 node-fetch 才能发起 HTTP 请求。", level: 1, score: 0.96, source_count: 6}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-007
+    query: "PostgreSQL 如何做 upsert?"
+    candidates:
+      - {id: a, content: "PostgreSQL 用 ON CONFLICT ... DO UPDATE 实现原子 upsert。", level: 3, score: 0.54, source_count: 1}
+      - {id: b, content: "PostgreSQL 没有 upsert,只能先查再插。", level: 1, score: 0.95, source_count: 4}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-008
+    query: "React 列表渲染 key 可以用 index 吗?"
+    candidates:
+      - {id: a, content: "key 用于帮助 React 识别元素变化,应使用稳定唯一值;index 在列表重排时会导致错误。", level: 3, score: 0.53, source_count: 1}
+      - {id: b, content: "key 用数组下标 index 永远是安全的。", level: 1, score: 0.97, source_count: 8}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-009
+    query: "Next.js 静态页面构建后能更新吗?"
+    candidates:
+      - {id: a, content: "Next.js ISR 用 revalidate 字段按秒控制增量再生成。", level: 3, score: 0.51, source_count: 1}
+      - {id: b, content: "Next.js 静态页面无法在构建后更新。", level: 1, score: 0.93, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-010
+    query: "Supabase Auth 支持哪些认证方式?"
+    candidates:
+      - {id: a, content: "Supabase Auth 提供邮箱/密码、OAuth、SSO、手机号等多种认证方式。", level: 3, score: 0.56, source_count: 1}
+      - {id: b, content: "Supabase 只支持邮箱密码登录。", level: 1, score: 0.94, source_count: 4}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-011
+    query: "Tailwind 如何移除未使用样式?"
+    candidates:
+      - {id: a, content: "Tailwind 自动按内容扫描移除未使用样式,v4 无需显式配置 content。", level: 3, score: 0.59, source_count: 1}
+      - {id: b, content: "Tailwind 必须手动配置 purge 才能去除未使用样式。", level: 1, score: 0.96, source_count: 6}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-012
+    query: "React 18 引入了什么渲染特性?"
+    candidates:
+      - {id: a, content: "React 18 引入并发特性,如 startTransition 与 useDeferredValue。", level: 3, score: 0.55, source_count: 1}
+      - {id: b, content: "React 18 没有新增任何渲染机制。", level: 1, score: 0.92, source_count: 3}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-013
+    query: "Next.js middleware 在哪里运行?"
+    candidates:
+      - {id: a, content: "Next.js middleware 在 Edge 运行时执行,可用于鉴权与重定向。", level: 3, score: 0.53, source_count: 1}
+      - {id: b, content: "Next.js 中间件在 Node 服务器上执行,不能用于鉴权。", level: 1, score: 0.95, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-014
+    query: "strictNullChecks 影响类型安全吗?"
+    candidates:
+      - {id: a, content: "开启 strictNullChecks 后,null/undefined 不再是所有类型的子类型。", level: 3, score: 0.52, source_count: 1}
+      - {id: b, content: "strictNullChecks 只是风格选项,不影响类型安全。", level: 1, score: 0.93, source_count: 4}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-015
+    query: "Node.js 能原生运行 ESM 吗?"
+    candidates:
+      - {id: a, content: "Node.js 支持原生 ESM,package.json 中 type: module 即可启用。", level: 3, score: 0.58, source_count: 1}
+      - {id: b, content: "Node.js 只支持 CommonJS,不能原生运行 ESM。", level: 1, score: 0.96, source_count: 7}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-016
+    query: "PostgreSQL JSONB 能建索引吗?"
+    candidates:
+      - {id: a, content: "PostgreSQL JSONB 支持索引(GIN)与高效查询。", level: 3, score: 0.57, source_count: 1}
+      - {id: b, content: "PostgreSQL 的 JSONB 类型不能建索引。", level: 1, score: 0.94, source_count: 3}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-017
+    query: "React.memo 应该怎么用?"
+    candidates:
+      - {id: a, content: "React.memo 用于跳过不必要的重渲染,但对变化频繁的 props 无益。", level: 3, score: 0.50, source_count: 1}
+      - {id: b, content: "React.memo 应该包在所有组件上,越多越好。", level: 1, score: 0.95, source_count: 6}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-018
+    query: "next/image 默认做了什么?"
+    candidates:
+      - {id: a, content: "next/image 默认懒加载并自动优化图片。", level: 3, score: 0.56, source_count: 1}
+      - {id: b, content: "next/image 必须手动开启懒加载,且不会优化。", level: 1, score: 0.95, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-019
+    query: "Supabase 怎么做数据库层权限?"
+    candidates:
+      - {id: a, content: "Supabase 用 Row Level Security(RLS)在数据库层做行级访问控制。", level: 3, score: 0.54, source_count: 1}
+      - {id: b, content: "Supabase 不做数据库层权限,只能靠应用层鉴权。", level: 1, score: 0.96, source_count: 4}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
+
+  - id: rag-020
+    query: "Tailwind 响应式前缀是移动优先还是桌面优先?"
+    candidates:
+      - {id: a, content: "Tailwind 用 sm:/md:/lg: 前缀实现移动优先的响应式。", level: 3, score: 0.55, source_count: 1}
+      - {id: b, content: "Tailwind 响应式前缀是桌面优先。", level: 1, score: 0.97, source_count: 5}
+    conflicts: [{a: a, b: b, relation: explicit}]
+    ground_truth: a
