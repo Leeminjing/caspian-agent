@@ -40,3 +40,42 @@ build/
 # Runtime artifacts
 .caspian/
 .lead_agent/
+
+# Spec-driven design folder — never re-commit (open-source repo)
+openspec/
+
+# Local tooling / scratch
+.tools/
+.tmp-test/
+.tmp-pytest/
+_.testtmp/
+.testtmp/
+.tmp/
+
+# Ad-hoc diagnostics & screenshots
+_dt_*.py
+_dt_*.txt
+_screenshot.png
+.caspian-probe-eval-*.txt
+.caspian-probe-eval-*.json
+.caspian-apply.*.log
+.caspian-goaltest.*.log
+.caspian-monitor.*.log
+.caspian-server.*.log
+.gateway-*.log
+.caspian-run.log
+
+# Test artifacts
+.pytest_cache/
+backend/packages/harness/.testtmp/
+backend/packages/harness/.pytest_cache/
+
+# requirements scratch/test dirs
+requirements/stress-*/
+requirements/edit-*/
+requirements/extest/
+requirements/fake-thread/
+requirements/real-edit-probe/
+requirements/__pycache__/
+requirements/testing/
+requirements/playground/
