@@ -1,14 +1,14 @@
 name: live-benchmark
 
 # 真实 LLM benchmark:PR 不触发,仅手动 workflow_dispatch。
-# 未配置仓库级 Secrets(OPENAI_API_KEY / DASHSCOPE_API_KEY)时,两个 job 自动跳过(显示 skipped,不失败)。
+# 未配置仓库级 Secrets(OPENAI_API_KEY / DASHSCOPE_API_KEY)时,run 内的 shell 守卫会跳过,
+# job 显示 success(不失败)。注:不在 job/step 的 if 里引用 secrets(GitHub 对此受限)。
 on:
   workflow_dispatch:
 
 jobs:
   commitment:
     name: commitment (live LLM)
-    if: secrets.OPENAI_API_KEY != '' && secrets.DASHSCOPE_API_KEY != ''
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -20,11 +20,15 @@ jobs:
           python-version: "3.12"
       - run: pip install -e "backend/packages/harness[dev,postgres,sqlite,aiosandbox,mcp]"
       - name: commitment benchmark (default LLM mode)
-        run: python -m caspian.benchmarks.cli --n 30
+        run: |
+          if [ -z "$OPENAI_API_KEY" ] || [ -z "$DASHSCOPE_API_KEY" ]; then
+            echo "Skipping commitment live benchmark: OPENAI_API_KEY/DASHSCOPE_API_KEY not set."
+          else
+            python -m caspian.benchmarks.cli --n 30
+          fi
 
   rag:
     name: rag (live LLM)
-    if: secrets.OPENAI_API_KEY != '' && secrets.DASHSCOPE_API_KEY != ''
     runs-on: ubuntu-latest
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -36,4 +40,9 @@ jobs:
           python-version: "3.12"
       - run: pip install -e "backend/packages/harness[dev,postgres,sqlite,aiosandbox,mcp]"
       - name: rag conflictqa benchmark (live LLM)
-        run: python -m caspian.benchmarks.cli --rag
+        run: |
+          if [ -z "$OPENAI_API_KEY" ] || [ -z "$DASHSCOPE_API_KEY" ]; then
+            echo "Skipping rag live benchmark: OPENAI_API_KEY/DASHSCOPE_API_KEY not set."
+          else
+            python -m caspian.benchmarks.cli --rag
+          fi
