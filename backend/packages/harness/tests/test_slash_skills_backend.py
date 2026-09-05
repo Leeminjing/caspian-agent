@@ -103,9 +103,8 @@ class SlashSkillsBackendTests(unittest.TestCase):
         self.assertIn("<knowledge_system>", base)
         self.assertIn("add_knowledge", base)
         self.assertIn("knowledge_query", base)
-        self.assertIn("official documentation", base)
-        self.assertIn("ordinary blogs", base)
-        self.assertIn("omit level", base)
+        self.assertIn("deterministic policy", base)
+        self.assertIn("does not participate in level suppression", base)
         self.assertIn("never use suppressed evidence", base)
 
     def test_selected_skill_read_failure_raises(self):

@@ -1072,7 +1072,14 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(CommitmentConfig().enabled)
         self.assertEqual(
             [type(item).__name__ for item in build_general_middlewares()],
-            ["UploadsMiddleware", "DecisionTableMiddleware", "SandboxAuditMiddleware"],
+            [
+                "ToolErrorMiddleware",
+                "UploadsMiddleware",
+                "DecisionTableMiddleware",
+                "DecisionTableEditMiddleware",
+                "DecisionTableGuardMiddleware",
+                "SandboxAuditMiddleware",
+            ],
         )
 
     def test_enabled_builder_inserts_commitment(self):
@@ -1086,10 +1093,13 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 model=object(),
                 context7_tools=[],
             )
-        self.assertIs(result[2], sentinel)
-        self.assertEqual(type(result[0]).__name__, "UploadsMiddleware")
-        self.assertEqual(type(result[1]).__name__, "DecisionTableMiddleware")
-        self.assertEqual(type(result[3]).__name__, "SandboxAuditMiddleware")
+        self.assertIs(result[4], sentinel)
+        self.assertEqual(type(result[0]).__name__, "ToolErrorMiddleware")
+        self.assertEqual(type(result[1]).__name__, "UploadsMiddleware")
+        self.assertEqual(type(result[2]).__name__, "DecisionTableMiddleware")
+        self.assertEqual(type(result[3]).__name__, "DecisionTableEditMiddleware")
+        self.assertEqual(type(result[5]).__name__, "DecisionTableGuardMiddleware")
+        self.assertEqual(type(result[6]).__name__, "SandboxAuditMiddleware")
 
     async def test_reviewed_delegator_retries_without_exposing_failures(self):
         delegator = StubDelegator([False, True])

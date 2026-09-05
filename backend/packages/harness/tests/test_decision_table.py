@@ -9,6 +9,7 @@
 """
 
 import json
+import pytest
 import tempfile
 import unittest
 from pathlib import Path
@@ -458,6 +459,7 @@ class TestUpdateDecisionTableTool(unittest.IsolatedAsyncioTestCase):
                 # 直接函数调用（无 runtime）应返回 thread 缺失错误
                 self.assertIn("无法获取当前 thread ID", result)
 
+    @pytest.mark.live
     async def test_add_via_runtime_and_version_change(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
@@ -490,6 +492,7 @@ class TestUpdateDecisionTableTool(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn("已存在", result)
 
+    @pytest.mark.live
     async def test_update_existing_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
@@ -515,10 +518,11 @@ class TestUpdateDecisionTableTool(unittest.IsolatedAsyncioTestCase):
                 self._seed(temp_dir)
                 result = await update_decision_table.coroutine(
                     operation="update", requirement="不存在的要求", priority=3,
-                    runtime=self._runtime(),
+                    id="missing-id", runtime=self._runtime(),
                 )
                 self.assertIn("不存在", result)
 
+    @pytest.mark.live
     async def test_remove_entry(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
@@ -615,6 +619,7 @@ class ToolCallingModel(BaseChatModel):
 
 
 class TestUpdateToolInRealAgent(unittest.IsolatedAsyncioTestCase):
+    @pytest.mark.live
     async def test_agent_calls_tool_and_updates_file(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch(
