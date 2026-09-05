@@ -227,3 +227,27 @@ run_dev.py                Windows-safe start entry
 
 > **软硬兼施,而且连顺序与裁决都由代码说了算:离散等级治理 Agent。**
 > **Soft and hard, hand in hand — and even the ordering and the verdict belong to code: the discrete-level governance Agent.**
+
+---
+
+## Project Lineage and Development History
+
+Caspian is an independently developed Agent project, and its early general-purpose Agent Harness has a clear engineering lineage with DeerFlow. During the initial infrastructure-building stage of the project, Caspian referred relatively deeply to DeerFlow's architecture and implementation design. Some subsystems directly followed DeerFlow's core design ideas and interface organization, including the Skills system, as well as some conventions related to state, tools, prompts, sandbox, runtime, and Agent assembly.
+
+Caspian was not developed by forking the DeerFlow repository and then continuously modifying it. The project follows an OpenSpec-driven development approach, in which capabilities are incrementally broken down into specification, design, and tasks, and are then implemented and iterated in a separate codebase. Therefore, DeerFlow's influence on Caspian is mainly concentrated in the early construction of the Harness and in certain specific subsystems, and this cannot simply be equated with Caspian as a whole being derived from the DeerFlow source code.
+
+As the project continued to develop, Caspian's development focus gradually moved away from DeerFlow's original direction. A large number of subsequent capabilities began to evolve independently around Caspian's own requirements, including new sandbox security boundaries, runtime and persistence extensions, and the discrete-level governance system, deterministic commitment-stage progression, and layered-suppression RAG mechanisms that were ultimately formed.
+
+Therefore, a more accurate positioning of DeerFlow is that it is one of the important engineering foundations and design sources for Caspian's early Agent Harness, rather than the complete architectural source of the entire Caspian project. Caspian's subsequent main development direction, especially its discrete-level governance system, has formed technical goals and architectural priorities that are different from those of DeerFlow.
+
+---
+
+## 项目血缘与开发历史
+
+Caspian 是一个独立开发的 Agent 项目，其早期通用 Agent Harness 与 DeerFlow 存在明显的工程血缘关系。在项目最初的基础设施建设阶段，Caspian 曾较深入地参考 DeerFlow 的架构和实现设计，其中部分子系统直接沿用了 DeerFlow 的核心设计思路与接口组织，例如 Skills 体系，以及部分 state、tool、prompt、sandbox、runtime 与 Agent 装配相关约定。
+
+Caspian 并不是通过 fork DeerFlow 仓库后持续修改形成的。项目采用 OpenSpec 驱动的开发方式，将能力逐项拆分为 specification、design、tasks，再在独立代码库中实现和迭代。因此，DeerFlow 对 Caspian 的影响主要集中在早期 Harness 建设及部分具体子系统，而不能简单等同于 Caspian 整体由 DeerFlow 源码派生。
+
+随着项目继续发展，Caspian 的开发重点逐渐脱离 DeerFlow 的原有方向。后续大量能力开始围绕自身需求独立演化，包括新的沙箱安全边界、运行时与持久化扩展，以及最终形成的离散等级治理体系、确定性承诺阶段推进、分层压制 RAG 等治理机制。
+
+因此，DeerFlow 更准确的定位是：Caspian 早期 Agent Harness 的重要工程基础与设计来源之一，而不是 Caspian 整个项目的完整架构来源。Caspian 后续的主要发展方向，尤其是其离散等级治理体系，已经形成了与 DeerFlow 不同的技术目标和架构重点。
