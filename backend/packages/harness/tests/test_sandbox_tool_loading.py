@@ -28,6 +28,8 @@ def _env():
     os.environ.setdefault("JWT_SECRET", "test-secret")
     os.environ.setdefault("GITHUB_TOKEN", "test-token")
     os.environ.setdefault("OPENAI_API_KEY", "test-key")
+    os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
+    os.environ.setdefault("CASPIAN_SANDBOX", "caspian.sandbox.local:LocalSandbox")
 
 
 _env()

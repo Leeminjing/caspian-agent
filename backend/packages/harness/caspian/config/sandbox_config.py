@@ -48,3 +48,8 @@ class SandboxConfig(BaseModel):
     container_prefix: str = "caspian-sandbox"
     mounts: list[MountConfig] = []
     environment: dict[str, str] = {}
+    # 容器资源上限（AioSandbox 专用；memory_limit 支持 "2g"/"128m" 等 Docker 单位字符串，
+    # cpu_limit <= 0 表示不限 CPU，pids_limit 为进程数上限）
+    memory_limit: str = "2g"
+    cpu_limit: float = 2
+    pids_limit: int = 256

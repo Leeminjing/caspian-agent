@@ -61,12 +61,12 @@ Caspian is a **parent-graph-with-child-graph** LangGraph system; the `lead_agent
 
 - **Storage**: `PostgreSQL + pgvector` for checkpoints (`PostgresSaver`) and the LangGraph Store (long-term memory, semantic search).
 - **Streaming**: in-process `StreamBridge` → SSE; `RunManager` tracks run status; rollback snapshots via checkpointer.
-- **Sandbox**: pluggable. `LocalSandbox` is the **development-only** constrained local executor — it validates virtual paths (path containment, `..` traversal rejection, symlink escape rejection) and guards shell commands, but **does not provide OS-level isolation**; use it only for local/dev runs. `AioSandbox` (via Docker) provides container-isolated execution for untrusted agent runs. Both carry path whitelists + shell command guards + a regex risk-audit middleware.
+- **Sandbox**: pluggable, selected via the `$CASPIAN_SANDBOX` env var (see `.env.example`). **Default is `AioSandbox`** (container-isolated, requires Docker) for untrusted agent runs; set `CASPIAN_SANDBOX=caspian.sandbox.local:LocalSandbox` for development-only local runs. `LocalSandbox` validates virtual paths (path containment, `..` traversal rejection, symlink escape rejection) and guards shell commands, but **does not provide OS-level isolation**. `AioSandbox` runs one container per `(user, thread)`, enables default seccomp + `no-new-privileges` (no `seccomp=unconfined`; the all-in-one image keeps its default capability set), applies pids/memory/CPU limits, and binds its control port to `127.0.0.1` only. Both carry path whitelists + shell command guards + a regex risk-audit middleware.
 - **Frontend**: zero-dependency static UI, served by the same Python process (vanilla JS, hand-written CSS, 2 vendored libs: `marked` + `DOMPurify`). No npm, no build step, no framework.
 
 > - **存储**:`PostgreSQL + pgvector` 承载 checkpoint(`PostgresSaver`)与 LangGraph Store(长期记忆、语义检索)。
 > - **流式**:进程内 `StreamBridge` → SSE;`RunManager` 管理 run 状态;checkpointer 提供 rollback 快照。
-> - **沙箱**:可插拔(`LocalSandbox` 默认;`AioSandbox` 走 Docker),含路径白名单 + shell 命令守卫 + regex 风险审计中间件。
+> - **沙箱**:可插拔,经 `$CASPIAN_SANDBOX` 选择(见 `.env.example`);默认 `AioSandbox`(容器隔离、需 Docker,一个 `(user, thread)` 一容器:默认 seccomp + `no-new-privileges`(不关 `seccomp=unconfined`,all-in-one 镜像保留默认能力集)、pids/内存/CPU 上限、控制端口仅绑 `127.0.0.1`);`LocalSandbox` 仅限本地/开发,不做 OS 级隔离。两者均含路径白名单 + shell 命令守卫 + regex 风险审计中间件。
 > - **前端**:零依赖静态 UI,由同一个 Python 进程直接服务(vanilla JS + 手写 CSS + 2 个 vendor 库 `marked`/`DOMPurify`)。无 npm、无构建、无框架。
 
 ---
@@ -157,7 +157,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 - **子代理 (Subagents)**: `task` 委托;委托账本从消息流确定性重建;并发/总额硬上限截断;状态契约枚举 + 结果 sha256。
 - **插件 (Plugins)**: 注入注册表 + 单实现冲突检测 + 稳定顺序 + 依赖解析;接口分 tool / ordered-mutator / ordered-observer / service,失败策略 `skip`。
 - **技能 (Skills)**: `skills/public` + `skills/custom`;`extensions_config.json` 启停;`describe_skill` 发现。示例:`docx`、`vision`。
-- **沙箱 (Sandbox)**: 可插拔;`LocalSandbox` 为 **development-only** 本地受限执行器——校验虚拟路径(目录层级围栏、`..` 穿越拒绝、symlink 逃逸拒绝)与 shell 命令,但 **不提供 OS 级隔离**,仅用于本地/开发运行;不可信 agent 执行请用 `AioSandbox`(容器隔离)。含虚拟路径白名单 `validate_subdir`、`resolve_path` 防越界、shell 五道防线 + regex `block/warn/pass` 审计;错误自动清洗真实路径。
+- **沙箱 (Sandbox)**: 可插拔,经 `$CASPIAN_SANDBOX` 选择(见 `.env.example`);默认 `AioSandbox`(容器隔离,需 Docker,一个 `(user, thread)` 一容器:默认 seccomp + `no-new-privileges`(不关 `seccomp=unconfined`,all-in-one 镜像保留默认能力集)、pids/内存/CPU 上限、控制端口仅绑 `127.0.0.1`);`LocalSandbox` 为 **development-only** 本地受限执行器——校验虚拟路径(目录层级围栏、`..` 穿越拒绝、symlink 逃逸拒绝)与 shell 命令,但 **不提供 OS 级隔离**,仅用于本地/开发运行。两者均含虚拟路径白名单 `validate_subdir`、`resolve_path` 防越界、shell 五道防线 + regex `block/warn/pass` 审计;错误自动清洗真实路径。
 - **上下文压缩**: 触发阈值 + 切点 + LLM 摘要 + 后置校验(fail-soft);被压消息入 `archive.jsonl` 存档。
 - **工具错误收口**: `ToolErrorMiddleware` 统一捕获工具异常并回传 LLM。
 
@@ -188,7 +188,9 @@ cd backend/packages/harness/caspian/persistence/migrations
 ```
 
 ### 本地启动 / Local start
-Windows psycopg requires a `SelectorEventLoop`; do not run `uvicorn` directly. Use the entry script:
+- 沙箱后端由 `$CASPIAN_SANDBOX` 决定（`.env` / `.env.example`。默认 `AioSandbox` **需要 Docker**；无 Docker 的本地开发设为 `caspian.sandbox.local:LocalSandbox`）。
+- **注意**：`CASPIAN_SANDBOX` 是**必填**环境变量（`config.yaml` 的 `sandbox.use: $CASPIAN_SANDBOX` 引用它）。未设置时配置加载会抛 `KeyError`、应用无法启动——务必先 `cp .env.example .env` 并确保 `.env` 里有该值。
+- Windows psycopg requires a `SelectorEventLoop`; do not run `uvicorn` directly. Use the entry script:
 ```powershell
 python run_dev.py
 ```

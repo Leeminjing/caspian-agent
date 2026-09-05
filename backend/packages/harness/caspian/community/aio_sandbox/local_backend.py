@@ -42,6 +42,7 @@ import socket
 import time
 import urllib.request
 from contextlib import closing
+from typing import Any
 
 import docker
 from docker.errors import ImageNotFound
@@ -129,9 +130,12 @@ def create_container(
     container_name: str,
     user_data_root: str,
     skills_path: str,
+    pids_limit: int | None = None,
+    mem_limit: str | None = None,
+    cpu_limit: float | None = None,
 ) -> tuple[str, int]:
     host_port = _find_free_port(port)
-    logger.info("容器 '%s' 端口映射: host %d → container %d", container_name, host_port, _CONTAINER_AIO_PORT)
+    logger.info("容器 '%s' 端口映射: host 127.0.0.1:%d → container %d", container_name, host_port, _CONTAINER_AIO_PORT)
 
     all_mounts = [
         docker.types.Mount(target="/mnt/user-data/", source=user_data_root, type="bind"),
@@ -143,16 +147,56 @@ def create_container(
             type="bind", read_only=m.get("read_only", False),
         ))
 
+    # 安全姿态：恢复 Docker 默认 seccomp（不再显式 unconfined）、阻止提权
+    # （no-new-privileges）；资源上限来自配置（cpu_limit <= 0 表示不限 CPU，不传 nano_cpus）。
+    # 注：不 blanket 丢弃 capabilities——agent-sandbox 为 all-in-one 镜像（browser/VNC/
+    # jupyter/code-server），cap_drop=ALL 会导致其 init 建 gem 用户失败（groupadd 写 /etc/gshadow
+    # 失败），容器启动即 Exited(10)。故保留默认能力集，靠 seccomp + no-new-privileges +
+    # 资源上限 + 端口回环收窄。
+    host_kwargs: dict[str, Any] = {
+        "security_opt": ["no-new-privileges:true"],
+    }
+    if pids_limit is not None:
+        host_kwargs["pids_limit"] = pids_limit
+    if mem_limit is not None:
+        host_kwargs["mem_limit"] = mem_limit
+    if cpu_limit is not None and cpu_limit > 0:
+        host_kwargs["nano_cpus"] = int(cpu_limit * 1_000_000_000)
+
     client = docker.from_env()
     try:
         container = client.containers.create(
             image=image, name=container_name,
-            ports={f"{_CONTAINER_AIO_PORT}/tcp": host_port},
+            ports={f"{_CONTAINER_AIO_PORT}/tcp": ("127.0.0.1", host_port)},
             mounts=all_mounts, environment=environment, detach=True,
-            security_opt=["seccomp=unconfined"],
+            **host_kwargs,
         )
         logger.info("容器已创建: id=%s name=%s", container.id, container_name)
         return container.id, host_port
+    finally:
+        client.close()
+
+
+def remove_container(container_id: str) -> None:
+    """停止并移除容器（终态清理，best-effort：任一失败仅记日志，不向上抛）。
+
+    输入:
+        container_id: str — 容器 ID
+
+    输出:
+        None — 成功移除；容器已不存在/已停止时按成功处理
+    """
+    client = docker.from_env()
+    try:
+        container = client.containers.get(container_id)
+        try:
+            container.stop()
+        except docker.errors.APIError as exc:
+            logger.info("容器 '%s' stop 已忽略（可能已停止）: %s", container_id, exc)
+        container.remove(force=True)
+        logger.info("容器已移除: id=%s", container_id)
+    except docker.errors.NotFound:
+        logger.info("容器 '%s' 不存在，移除忽略", container_id)
     finally:
         client.close()
 

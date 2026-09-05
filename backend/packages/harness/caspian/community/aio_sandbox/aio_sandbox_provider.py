@@ -12,7 +12,7 @@
 
 具体工作流:
     acquire(user_id, thread_id) → str:
-    (1) warm-pool 中存在已释放连接的容器 → 复用
+    (1) 命中 _active[sandbox_id] → 幂等复用（同一 user/thread 不重复建容器）
     (2) 否则 active < replicas → 创建新容器
     (3) 返回 sandbox_id（格式 local:{user_id}:{thread_id}）
 
@@ -25,9 +25,10 @@
     (1) 从内部字典取回 AioSandbox 实例，不存在抛 KeyError
 
     release(sandbox_id) → None:
-    (1) 断开 SDK 连接，容器移入 warm-pool 待复用
+    (1) 断开 SDK 连接，停止并移除容器（终态清理，不进入可复用池）
 
-容器名遵循 {container_prefix}-{sandbox_id} 格式。replicas 计为 active + warm 总数。
+容器名遵循 {container_prefix}-{sandbox_id} 格式。一个 (user_id, thread_id) 独占一个容器；
+replicas 为活动容器数上限。容器以收窄安全姿态运行（默认 seccomp 不关 unconfined、no-new-privileges、pids/内存/CPU 上限；不 blanket 丢弃 capabilities——镜像启动需要），AI 控制端口仅绑 127.0.0.1。
 
 示例:
     from caspian.community.aio_sandbox.aio_sandbox_provider import AioSandboxProvider
@@ -65,7 +66,6 @@ class AioSandboxProvider:
     def __init__(self, app_config: AppConfig) -> None:
         self._app_config = app_config
         self._active: dict[str, _ContainerRecord] = {}
-        self._warm: list[_ContainerRecord] = []
 
     def _container_name(self, sandbox_id: str) -> str:
         # sandbox_id 含冒号 (local:user:thread)，Docker 容器名不允许冒号
@@ -85,18 +85,9 @@ class AioSandboxProvider:
         if sandbox_id in self._active:
             return sandbox_id
 
-        if self._warm:
-            record = self._warm.pop()
-            record.sandbox_id = sandbox_id
-            record.sdk_client = self._sdk_connect("localhost", record.host_port)
-            self._active[sandbox_id] = record
-            logger.info("warm-pool 复用容器 → sandbox_id='%s'", sandbox_id)
-            return sandbox_id
-
-        total = len(self._active) + len(self._warm)
-        if total >= self._app_config.sandbox.replicas:
+        if len(self._active) >= self._app_config.sandbox.replicas:
             raise RuntimeError(
-                f"容器已达上限 (replicas={self._app_config.sandbox.replicas}, active={len(self._active)}, warm={len(self._warm)})"
+                f"容器已达上限 (replicas={self._app_config.sandbox.replicas}, active={len(self._active)})"
             )
 
         record = _ContainerRecord(sandbox_id=sandbox_id)
@@ -128,6 +119,9 @@ class AioSandboxProvider:
             container_name=container_name,
             user_data_root=user_data_root,
             skills_path=os.path.abspath(".caspian/skills"),
+            pids_limit=self._app_config.sandbox.pids_limit,
+            mem_limit=self._app_config.sandbox.memory_limit,
+            cpu_limit=self._app_config.sandbox.cpu_limit,
         )
         record.container_id = cid
         record.host_port = host_port
@@ -164,5 +158,11 @@ class AioSandboxProvider:
             self._sdk_disconnect(record.sdk_client)
             record.sdk_client = None
         record.sandbox = None
-        self._warm.append(record)
-        logger.info("容器已释放至 warm-pool: sandbox_id='%s' warm=%d", sandbox_id, len(self._warm))
+        # 容器终态清理：停止并移除容器，不再移入 warm-pool 复用。
+        # best-effort：移除失败仅记日志，不向上抛（沙箱工具为同步方法）。
+        from caspian.community.aio_sandbox.local_backend import remove_container
+
+        try:
+            remove_container(record.container_id)
+        except Exception as exc:
+            logger.warning("release: 移除容器 '%s' 失败（best-effort）: %s", record.container_id, exc)

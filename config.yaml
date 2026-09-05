@@ -45,21 +45,17 @@ skills:
   container_path: /mnt/skills
 
 sandbox:
-  # 临时切换：LocalSandbox（本机文件系统沙箱，无需 Docker），用于计划模式 CDP 验证。
-  # 原有 AioSandbox (Docker) 配置保留在下方注释，测完还原。
-  use: caspian.sandbox.local:LocalSandbox
-  # 以下为 AioSandbox 取值（use 指向 LocalSandbox 时不生效，保留备查）：
-  # use: caspian.community.aio_sandbox:AioSandbox
-  # image: ghcr.io/agent-infra/sandbox:latest
-  # port: 8080
-  # replicas: 3
-  # container_prefix: caspian-sandbox
-  # mounts:
-  #   - host_path: /path/to/extra
-  #     container_path: /mnt/extra
-  #     read_only: false
-  # environment:
-  #   MY_KEY: value
+  # 沙箱后端由环境变量 CASPIAN_SANDBOX 决定（.env / .env.example 提供）：
+  #   容器沙箱(默认): CASPIAN_SANDBOX=caspian.community.aio_sandbox.aio_sandbox:AioSandbox
+  #   本机沙箱(开发): CASPIAN_SANDBOX=caspian.sandbox.local:LocalSandbox
+  use: $CASPIAN_SANDBOX
+  image: ghcr.io/agent-infra/sandbox:latest
+  port: 8080
+  replicas: 3
+  container_prefix: caspian-sandbox
+  # 额外 bind mount 与环境变量（默认空；按部署填写，mount 的 host_path 需真实存在）
+  mounts: []
+  environment: {}
 
 commitment:
   enabled: true

@@ -6,6 +6,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("JWT_SECRET", "test-secret")
 os.environ.setdefault("OPENAI_API_KEY", "test-key")
+os.environ.setdefault("DASHSCOPE_API_KEY", "test-dashscope-key")
+os.environ.setdefault("CASPIAN_SANDBOX", "caspian.sandbox.local:LocalSandbox")
 
 from caspian.subagents.config import SubagentConfig  # noqa: E402
 from caspian.subagents.executor import SubagentResult, SubagentStatus  # noqa: E402
