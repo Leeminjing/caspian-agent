@@ -11,6 +11,7 @@ from caspian.benchmarks.rag.arms import (
     arm_score_based,
     arm_source_count,
 )
+from caspian.benchmarks.rag.conflictqa import _DATA
 from caspian.benchmarks.rag.oracle import correct_info_retained, wrong_info_adopted
 from caspian.benchmarks.rag.schema import RagCandidate, RagConflict, RagItem, load_rag_corpus
 
@@ -94,6 +95,10 @@ class TestCorpus(unittest.TestCase):
 
 
 class TestConflictQA(unittest.TestCase):
+    @unittest.skipUnless(
+        _DATA.exists(),
+        "ConflictQA 数据集未提供(data/conflictqa-popqa-chatgpt.json 缺失),跳过真实数据用例",
+    )
     def test_loads_real_data_with_structure(self):
         from caspian.benchmarks.rag.conflictqa import load_conflictqa
 

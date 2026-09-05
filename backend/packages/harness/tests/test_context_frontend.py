@@ -88,10 +88,11 @@ class ContextFrontendTests(unittest.TestCase):
         # 整帧权威定型与流式共用同一累计字段与渲染入口
         self.assertIn("h.contentAcc = text;", script)
         self.assertIn("renderContentNow(h);", script)
-        # 缓存指纹 bump（防旧前端缓存，曾导致"处理中几秒后突然完整渲染"）
+        # 缓存指纹 bump（防旧前端缓存，曾导致"处理中几秒后突然完整渲染"）。
+        # 指纹随前端迭代递增;此处仅断言当前仍在用带指纹的缓存破坏版本。
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn('href="/assets/app.css?v=f62-streaming-md-1"', html)
-        self.assertIn('src="/assets/app.js?v=f62-streaming-md-1"', html)
+        self.assertIn('href="/assets/app.css?v=config-edit-1"', html)
+        self.assertIn('src="/assets/app.js?v=f65-recency-2"', html)
 
     def test_context_ui包含rail编辑器与拖拽(self):
         script = (STATIC_DIR / "context-ui.js").read_text(encoding="utf-8")

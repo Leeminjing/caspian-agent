@@ -1,0 +1,67 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  python-unit-linux:
+    name: python-unit-linux
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install harness (editable, with test extras)
+        run: pip install -e "backend/packages/harness[dev,postgres,sqlite,aiosandbox,mcp]"
+      - name: Run non-live unit tests (from repo root so `backend.*` is importable)
+        run: python -m pytest backend/packages/harness/tests -m "not live" -q
+
+  python-unit-windows:
+    name: python-unit-windows
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install harness (editable, with test extras)
+        run: pip install -e "backend/packages/harness[dev,postgres,sqlite,aiosandbox,mcp]"
+      - name: Run non-live unit tests (from repo root so `backend.*` is importable)
+        run: python -m pytest backend/packages/harness/tests -m "not live" -q
+
+  frontend-unit:
+    name: frontend-unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install harness (dev only, no Node required)
+        run: pip install -e "backend/packages/harness[dev]"
+      - name: Run frontend static-assertion tests (Python only)
+        run: python -m pytest backend/packages/harness/tests/test_frontend.py backend/packages/harness/tests/test_context_frontend.py -q
+
+  sandbox-security:
+    name: sandbox-security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install harness (with aiosandbox extra)
+        run: pip install -e "backend/packages/harness[dev,aiosandbox]"
+      - name: Run sandbox / path-security / tool-loading tests
+        run: python -m pytest backend/packages/harness/tests -m "not live" -q -k "sandbox or aio_sandbox or path_security or tool_loading"
