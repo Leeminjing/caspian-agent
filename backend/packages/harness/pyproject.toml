@@ -24,10 +24,18 @@ dependencies = [
     "httpx>=0.27",
 ]
 [project.optional-dependencies]
+dev = ["pytest", "pytest-asyncio", "pytest-cov"]
 mcp = ["langchain-mcp-adapters>=0.1.0", "mcp>=1.24,<2"]
 postgres = ["asyncpg", "langgraph-checkpoint-postgres"]
 sqlite = ["aiosqlite"]
 aiosandbox = ["agent-sandbox", "docker"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: 需要真实 LLM / 网络 / 外部服务的用例,PR 默认排除",
+]
+asyncio_mode = "auto"
 
 [build-system]
 requires = ["setuptools>=75.0"]
