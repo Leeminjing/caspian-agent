@@ -76,6 +76,7 @@ class DecisionTableVerdict(BaseModel):
     action: DecisionTableAction = DecisionTableAction.COMMIT
     conflicts: list[DecisionTableConflict] = Field(default_factory=list)
     reasons: list[str] = Field(default_factory=list)
+    recommendation: str | None = None
 
     @property
     def require_confirm(self) -> bool:
@@ -160,9 +161,19 @@ def _adjudicate_conflicts(
         reasons.append(
             f"候选条目 '{conflict.get('requirement')}' 与已有条目 '{conflict.get('table_requirement')}' 等级冲突（升级/同级/未声明）"
         )
+    recommendation = None
+    if downgrades and not escc:
+        recommendation = "检测到降级,建议保留旧表"
+    elif escc and not downgrades:
+        recommendation = "检测到升级/未声明冲突,建议人工判断"
+    elif downgrades and escc:
+        recommendation = "检测到降级与升级冲突并存,建议人工判断"
     reasons.append("存在冲突，需用户二选一决定最终等级表")
     return DecisionTableVerdict(
-        action=DecisionTableAction.CONFIRM, conflicts=conflicts, reasons=reasons
+        action=DecisionTableAction.CONFIRM,
+        conflicts=conflicts,
+        reasons=reasons,
+        recommendation=recommendation,
     )
 
 
@@ -259,6 +270,32 @@ def _deterministic_collisions(
     return conflicts
 
 
+def _deterministic_priority_diffs(
+    candidate: list[DecisionRow],
+    existing: list[DecisionRow],
+) -> list[DecisionTableConflict]:
+    """确定性同名优先级差检测:身份一致(归一化文本相同)且 priority 不同 → explicit 冲突边(不依赖 LLM)。"""
+    conflicts: list[DecisionTableConflict] = []
+    by_norm: dict[str, DecisionRow] = {}
+    for row in existing:
+        by_norm[_normalize_text(row.requirement)] = row
+    for crow in candidate:
+        norm = _normalize_text(crow.requirement)
+        erow = by_norm.get(norm)
+        if erow is None or crow.priority == erow.priority:
+            continue
+        direction = "降级" if crow.priority < erow.priority else "升级"
+        conflicts.append(
+            DecisionTableConflict(
+                candidate=crow.requirement,
+                existing=erow.requirement,
+                relation="explicit",
+                explanation=f"同名优先级{direction}:{erow.priority}→{crow.priority}",
+            )
+        )
+    return conflicts
+
+
 def _fail_closed_verdict(reason: str) -> DecisionTableVerdict:
     """构造 fail-closed 的 CONFIRM 裁决（受保护 helper）。"""
     return DecisionTableVerdict(
@@ -283,6 +320,11 @@ async def detect_decision_table(
     """
     if not existing:
         return _adjudicate_conflicts([], existing, candidate)
+
+    # 确定性同名优先级差:身份一致但 priority 变化,无需 LLM
+    priority_diffs = _deterministic_priority_diffs(candidate, existing)
+    if priority_diffs:
+        return _adjudicate_conflicts(priority_diffs, existing, candidate)
 
     # 确定性底线：归一化文本碰撞，无需 LLM
     deterministic = _deterministic_collisions(candidate, existing)

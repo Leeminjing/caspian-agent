@@ -55,8 +55,13 @@ def _commit_table(
     )
 
 
-def _confirm_interrupt(candidate: list[DecisionRow], existing: list[DecisionRow], reasons: list[str]) -> dict:
-    """构造中断载荷并返回用户裁定 dict（受保护 helper，供默认 interrupt_fn 使用）。"""
+def _confirm_interrupt(
+    candidate: list[DecisionRow],
+    existing: list[DecisionRow],
+    reasons: list[str],
+    recommendation: str | None = None,
+) -> dict:
+    """构造中断载荷(供 do_interrupt 调用),返回 payload dict。"""
     payload = {
         "type": "decision_table_adjudication",
         "candidate": [
@@ -68,9 +73,10 @@ def _confirm_interrupt(candidate: list[DecisionRow], existing: list[DecisionRow]
             for row in existing
         ],
         "conflicts": reasons,
+        "recommendation": recommendation,
         "allowed_decisions": ["keep", "adopt"],
     }
-    return interrupt(payload)
+    return payload
 
 
 async def submit_decision_table(
@@ -113,7 +119,7 @@ async def submit_decision_table(
     do_interrupt: Callable[[dict], dict] = interrupt_fn or interrupt
     if verdict.action == DecisionTableAction.CONFIRM:
         # 任一明确冲突 → 中断待机，用户二选一（保留旧表 / 采纳新表）
-        choice = do_interrupt(_confirm_interrupt(candidate, existing, verdict.reasons))
+        choice = do_interrupt(_confirm_interrupt(candidate, existing, verdict.reasons, verdict.recommendation))
         if choice.get("decision") == "adopt":
             version = _commit_table(str(thread_id), candidate, user_id=user_id, expected_version=expected_version)
             if version is None:
