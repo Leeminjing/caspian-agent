@@ -121,7 +121,10 @@ langgraph_store:
 
 database:
   backend: postgres
-  url: postgresql+asyncpg://caspian:qweasdzxc123@127.0.0.1:7221/caspian
+  # 数据库 URL 由环境变量 DATABASE_URL 提供（配置系统原生支持 $ENV_VAR 引用）。
+  # 本机开发示例: postgresql+asyncpg://caspian:<pwd>@127.0.0.1:7221/caspian
+  # Compose 部署示例: postgresql+asyncpg://caspian:caspian@postgres:5432/caspian
+  url: $DATABASE_URL
   echo: false
   pool_size: 5
   max_overflow: 10

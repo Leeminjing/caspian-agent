@@ -30,8 +30,8 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend.app.gateway.auth.config import AuthConfig
@@ -116,6 +116,53 @@ app.mount("/assets", StaticFiles(directory=static_dir), name="assets")
 @app.get("/", include_in_schema=False)
 async def frontend() -> FileResponse:
     return FileResponse(static_dir / "index.html")
+
+
+@app.get("/healthz", include_in_schema=False)
+async def healthz() -> JSONResponse:
+    """存活探针：进程可响应即返回 ok。"""
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/readyz", include_in_schema=False)
+async def readyz(request: Request) -> JSONResponse:
+    """就绪探针：PostgreSQL / checkpointer / LangGraph Store 均可达才返回就绪（200），
+    任一不可达返回非就绪（503）。供 docker compose healthcheck 使用。"""
+    checks: dict[str, str] = {}
+
+    try:
+        from caspian.persistence.engine import get_session
+        from sqlalchemy import text
+
+        async with get_session() as session:
+            await session.execute(text("SELECT 1"))
+        checks["postgres"] = "ok"
+    except Exception:
+        checks["postgres"] = "unavailable"
+
+    try:
+        checkpointer = getattr(request.app.state, "checkpointer", None)
+        if checkpointer is None:
+            raise RuntimeError("checkpointer 未初始化")
+        await checkpointer.aget_tuple({"configurable": {"thread_id": "__readyz_probe__"}})
+        checks["checkpointer"] = "ok"
+    except Exception:
+        checks["checkpointer"] = "unavailable"
+
+    try:
+        store = getattr(request.app.state, "store", None)
+        if store is None:
+            raise RuntimeError("store 未初始化")
+        await store.aget(("__readyz_probe__",), "__readyz_probe__")
+        checks["langgraph_store"] = "ok"
+    except Exception:
+        checks["langgraph_store"] = "unavailable"
+
+    ready = all(value == "ok" for value in checks.values())
+    return JSONResponse(
+        {"status": "ready" if ready else "not_ready", "checks": checks},
+        status_code=200 if ready else 503,
+    )
 
 # 注册中间件（AuthMiddleware 先于 CSRFMiddleware）
 from backend.app.gateway.middleware.auth import AuthMiddleware

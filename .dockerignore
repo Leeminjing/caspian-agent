@@ -1,0 +1,46 @@
+# 不把仓库的非运行时内容烤进镜像：既大幅减小镜像，也避免 .env 密钥进镜像。
+# 保留：backend/、skills/（去掉下方案该目录）、config.yaml、run_dev.py、Dockerfile、docker/、
+#        extensions_config.json、.mcp.json、plugins/、docker-compose.yml、.env.example。
+# 说明：skills/docx/scripts/office/schemas 是 OOXML 校验 XSD（约 1GB，懒用；docx 转换走 LibreOffice，
+#       不依赖它）。如需严格 OOXML 校验，请从排除清单移除该行。
+
+# 版本控制 / 工具链
+.git
+.gitignore
+.tools
+.agents
+.claude
+.codex
+.trae
+
+# 用户数据 / 规划产物 / 测试 / 知识文档（运行时不需要）
+.caspian
+openspec
+tests
+artifacts
+knowledge
+requirements
+
+# 体积巨大且仅按需使用的 OOXML 校验 schema
+skills/docx/scripts/office/schemas
+
+# 依赖与缓存（注意：Docker 的 .venv 只匹配根级，嵌套 venv 需显式或 ** 匹配）
+.venv
+**/.venv
+backend/packages/harness/.venv
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+node_modules
+
+# 敏感文件（密钥不进镜像）
+.env
+
+# 开发/一次性脚本与日志
+verify_aio_sandbox_live.py
+benchmark-*.md
+*.log
+.gateway-*.log
+.caspian-*.log
+caspian-run.log

@@ -1,0 +1,90 @@
+# Caspian 一键部署（Mechanism A：app 与沙箱 daemon 分离，但共享同一网络命名空间）。
+#
+# 架构：
+#   postgres (pgvector)        —— 数据库 + 向量
+#   sandbox-docker (docker:dind) —— 沙箱 daemon（privileged，仅监听本机回环 2375）
+#   caspian (应用)             —— network_mode: service:sandbox-docker 与之共享 netns，
+#                                 经 DOCKER_HOST=tcp://127.0.0.1:2375 控制 dind，
+#                                 仍用现有 localhost:host_port 访问沙箱 AIO 控制端口。
+#
+# 安全：app 不挂宿主 /var/run/docker.sock；dind 为接受折中（需要在容器内跑自身 daemon）。
+# 数据：caspian_data 卷在 caspian 与 sandbox-docker 同一路径 /app/.caspian 挂载，
+#       保证沙箱 bind mount source 在 daemon 侧真实存在。
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: caspian
+      POSTGRES_PASSWORD: caspian
+      POSTGRES_DB: caspian
+    # 说明：库表使用 vector 扩展（store_vectors 为 pgvector(1024)）。该镜像自带扩展，
+    #       迁移脚本需执行 CREATE EXTENSION IF NOT EXISTS vector；若未执行，请在启动前
+    #       手动启用，或在本 change 的检查任务（§7）中确认。
+    ports:
+      - "7221:5432"   # 便于宿主机连库调试；生产可去掉
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U caspian -d caspian"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Docker-in-Docker sidecar：承载沙箱 daemon。app 与其共享 netns，不直接持有宿主 docker.sock。
+  sandbox-docker:
+    image: docker:dind
+    privileged: true
+    # 关闭 TLS 后，docker:dind 的 dockerd-entrypoint 默认绑定 tcp://0.0.0.0:2375。
+    # app 与其共享 netns，故经本机回环 127.0.0.1:2375 访问即可达该 daemon。
+    # 注意：此处不要再传额外的 -H 参数，否则与 entrypoint 默认的 0.0.0.0:2375 冲突绑定失败。
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    volumes:
+      # 与 caspian 同路径，使沙箱 bind mount source（/app/.caspian/...）在 daemon 侧存在
+      - caspian_data:/app/.caspian
+      # public skills 只读，与宿主 skills/ 一致；custom skills 落在 .caspian 卷内
+      - ./skills:/app/skills:ro
+    ports:
+      # app 用 network_mode:service 无法自行发布端口，HTTP 由 sandbox-docker 转发
+      - "8000:8000"
+
+  caspian:
+    # image 可用环境变量切换：默认在本地 build；要直接用预构建镜像时设
+    #   CASPIAN_IMAGE=ghcr.io/<你>/caspian:latest
+    # 然后 docker compose pull && docker compose up --no-build（跳过构建）。
+    image: ${CASPIAN_IMAGE:-latest-wumao-caspian:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # 与 dind 共享网络命名空间：沙箱控制端口、DOCKER_HOST、AIO 端口均经共享回环可达
+    network_mode: "service:sandbox-docker"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://caspian:caspian@postgres:5432/caspian
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
+      CASPIAN_SANDBOX: caspian.community.aio_sandbox.aio_sandbox:AioSandbox
+      DOCKER_HOST: tcp://127.0.0.1:2375
+      CASPIAN_HOST: 0.0.0.0
+    volumes:
+      # 与 sandbox-docker 同路径挂载，保证 /app/.caspian 两侧一致
+      - caspian_data:/app/.caspian
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=3).status == 200 else 1)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+volumes:
+  postgres_data:
+  caspian_data:

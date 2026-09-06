@@ -19,6 +19,7 @@
 """
 
 import asyncio
+import os
 import selectors
 import sys
 
@@ -27,9 +28,12 @@ import uvicorn
 
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
+    # 监听地址可由环境变量 CASPIAN_HOST 覆盖（Compose 容器内设为 0.0.0.0），
+    # 默认绑定本机回环，本机开发无需改动。
+    host = os.getenv("CASPIAN_HOST", "127.0.0.1")
     config = uvicorn.Config(
         "backend.app.gateway.app:app",
-        host="127.0.0.1",
+        host=host,
         port=port,
         loop="none",
     )

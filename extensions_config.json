@@ -44,7 +44,7 @@
       "description": "PostgreSQL database access"
     },
     "playwright": {
-      "enabled": true,
+      "enabled": false,
       "type": "stdio",
       "command": "npx",
       "args": [
@@ -54,7 +54,7 @@
         "core,network"
       ],
       "env": {},
-      "description": "Playwright MCP browser automation (navigate/click/fill/snapshot/screenshot + network)"
+      "description": "Playwright MCP browser automation (navigate/click/fill/snapshot/screenshot + network)。需 Node.js/npx；容器镜像无 Node，故默认关闭，需用时在镜像安装 Node 后置 enabled=true。"
     }
   }
 }
