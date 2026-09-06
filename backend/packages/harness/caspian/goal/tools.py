@@ -87,10 +87,8 @@ def build_goal_tools(blocked_after_consecutive_rounds: int) -> list:
         objective: str,
         runtime: ToolRuntime,
     ) -> str:
-        """Create one persisted same-session completion goal when the current direct human request is
-        a long-running objective that should continue across autonomous goal rounds. You may infer that
-        intent without requiring the user to say 'create a goal'. Do not use this for trivial
-        single-turn work. Execution rejects non-human and subagent authority.
+        """Create one persisted same-session completion goal for a long-running objective that should
+        continue across autonomous goal rounds. Execution rejects non-human and subagent authority.
 
         Args:
             objective: The concrete completion objective inferred from the direct human request.
@@ -112,10 +110,8 @@ def build_goal_tools(blocked_after_consecutive_rounds: int) -> list:
         blocked_reason: Annotated[str | None, "Concrete blocking condition; required only with action blocked."] = None,
         tool_call_id: Annotated[str, InjectedToolCallId] = None,
     ) -> str:
-        """Update the exact current goal revision. edit, pause, and resume require a direct top-level
-        human request. During an automatic continuation of the current goal, complete and blocked are
-        also allowed. blocked is rejected before the configured minimum round count; report the concrete
-        condition in blocked_reason.
+        """Update the exact current goal revision (compare-and-set on goal_id and revision).
+        blocked_reason is required only for action blocked.
 
         Args:
             goal_id: Exact id returned by get_goal.

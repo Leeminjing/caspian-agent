@@ -66,13 +66,13 @@ def _sanitize_present_error(error: Exception, runtime: ToolRuntime) -> str:
     except Exception:
         pass
     msg = msg.replace("\\", "/")
-    return f"present_files 失败: {msg}"
+    return f"present_file_tool 失败: {msg}"
 
 
 def _normalize_presented_filepath(filepath: str, runtime: ToolRuntime) -> str:
     thread_id = _get_thread_id(runtime)
     if thread_id is None:
-        raise ValueError("无法获取当前线程 ID，present_files 只能在 Agent 运行上下文中使用")
+        raise ValueError("无法获取当前线程 ID，present_file_tool 只能在 Agent 运行上下文中使用")
 
     user_id = None
     try:
@@ -82,7 +82,7 @@ def _normalize_presented_filepath(filepath: str, runtime: ToolRuntime) -> str:
     except Exception:
         pass
     if user_id is None:
-        raise ValueError("无法获取 user_id，present_files 只能在 Agent 运行上下文中使用")
+        raise ValueError("无法获取 user_id，present_file_tool 只能在 Agent 运行上下文中使用")
 
     outputs_path = os.path.join(REAL_ROOT.format(user_id=user_id, thread_id=thread_id), "outputs")
     outputs_path_abs = os.path.abspath(outputs_path)
@@ -112,13 +112,13 @@ def present_file_tool(
 ) -> Command:
     """Make files visible to the user for viewing and rendering in the client interface.
 
-When to use the present_files tool:
+When to use the present_file_tool tool:
 
 - Making any file available for the user to view, download, or interact with
 - Presenting multiple related files at once
 - After creating files that should be presented to the user
 
-When NOT to use the present_files tool:
+When NOT to use the present_file_tool tool:
 - When you only need to read file contents for your own processing
 - For temporary or intermediate files not meant for user viewing
 
