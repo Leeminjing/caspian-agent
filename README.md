@@ -199,6 +199,58 @@ Chat history is persisted via `checkpointer.type: postgres` (PostgresSaver) and 
 ### 本地网页登录账户 / Local login
 - Email: `2656226581@qq.com` (password stored only as SHA-256 + bcrypt hash; not recorded in any repo file).
 
+### Docker 一键部署 / One-click Docker deploy（推荐给新用户）
+
+只需 Git + Docker，一条命令拉起数据库 + 应用 + 沙箱 sidecar，应用自动迁移、自动就绪：
+
+```bash
+git clone <你的仓库> && cd <目录>
+cp .env.example .env         # 填下面 3 个必填 key
+docker compose up -d         # 首次约 3–5 分钟（构建应用镜像），之后秒起
+# 打开 http://localhost:8000 → 登录（首次启动前请先建账号，见下）
+```
+
+`.env` 必填（其余有默认）：
+| 变量 | 说明 |
+|---|---|
+| `OPENAI_API_KEY` | 模型调用（DeepSeek） |
+| `JWT_SECRET` | 登录 token 签名密钥 |
+| `DASHSCOPE_API_KEY` | 知识库向量嵌入 |
+
+> 注意：
+> - **`DATABASE_URL` 只对本机开发（`run_dev.py`）生效**；Docker 部署里 compose 已内置指向 `postgres:5432`，无需改。
+> - 首次 `up` 会**构建**应用镜像（默认最小档 ~1.25GB）。完成后自动执行 `alembic upgrade head`、`/readyz` 就绪、healthcheck 通过。
+> - **首次使用前先建一个登录账号**（还没有注册界面）。在项目根执行（自动往 compose 的 postgres 里建用户）：
+>   ```bash
+>   docker compose exec -T caspian python - <<'PY'
+>   import asyncio, uuid
+>   from backend.app.gateway.auth.security import hash_password
+>   from backend.app.gateway.models.user import User
+>   from caspian.persistence.engine import init_engine, get_session
+>   from caspian.config import get_app_config
+>   EMAIL = "you@example.com"       # 改成你的邮箱
+>   PASSWORD = "your-password"      # 改成你的密码
+>   async def main():
+>       init_engine(get_app_config("config.yaml"))
+>       async with get_session() as s:
+>           u = User(id=uuid.uuid4(), email=EMAIL, password_hash=hash_password(PASSWORD), token_version=0)
+>           s.add(u); await s.commit()
+>           print("user created:", u.id)
+>   asyncio.run(main())
+>   PY
+>   ```
+> - **docx/pptx 转换 / OCR**：默认关闭以得到最小镜像。需要时用
+>   ```bash
+>   docker compose build --build-arg INSTALL_DOC_TOOLS=1 caspian && docker compose up -d
+>   ```
+> - **沙箱（bash/文件）**：`ghcr.io/agent-infra/sandbox:latest`（**~13.1GB**，all-in-one）为**懒加载**——只在真跑沙箱命令时才由 AioSandbox 拉取；纯聊天/`/commit` 不触发，不影响启动。
+
+**用预构建镜像（不用本地构建）**：把 `caspian` 镜像推到镜像仓库后，用 `CASPIAN_IMAGE` 指向它：
+```bash
+CASPIAN_IMAGE=ghcr.io/<你>/caspian:latest docker compose pull && \
+CASPIAN_IMAGE=ghcr.io/<你>/caspian:latest docker compose up --no-build
+```
+
 ---
 
 ## 目录结构 / Repo Layout

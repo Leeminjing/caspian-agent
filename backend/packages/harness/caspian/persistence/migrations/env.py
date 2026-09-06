@@ -29,6 +29,7 @@ Alembic 迁移环境配置。
 """
 
 import asyncio
+import os
 from logging.config import fileConfig
 
 from alembic import context
@@ -70,7 +71,9 @@ async def run_migrations_online():
     输入: 无（从 alembic.ini 读取配置）
     输出: None
     """
-    url = config.get_main_option("sqlalchemy.url")
+    # 优先使用环境变量 DATABASE_URL（compose / 运行时与 config.yaml 保持一致），
+    # 未设置时回退到 alembic.ini 的 sqlalchemy.url（本机开发默认）。
+    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
 
     engine = create_async_engine(url)
 

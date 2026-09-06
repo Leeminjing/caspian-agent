@@ -121,7 +121,9 @@ langgraph_store:
 
 database:
   backend: postgres
-  url: postgresql+asyncpg://caspian:qweasdzxc123@127.0.0.1:7221/caspian
+  # 数据库 URL：优先取环境变量 DATABASE_URL（compose 内为 postgres:5432，本机开发为 127.0.0.1:7221）；
+  # 未设置时（如 CI/测试）回落到一个本机默认值，避免配置加载抛 KeyError。
+  url: ${DATABASE_URL:-postgresql+asyncpg://caspian:qweasdzxc123@127.0.0.1:7221/caspian}
   echo: false
   pool_size: 5
   max_overflow: 10

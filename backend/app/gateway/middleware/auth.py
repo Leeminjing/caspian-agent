@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 _AUTH_WHITELIST_PATHS = {
     "/",
+    "/healthz",
+    "/readyz",
     "/api/auth/login",
     "/api/auth/logout",
 }

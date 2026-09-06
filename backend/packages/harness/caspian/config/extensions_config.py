@@ -125,6 +125,11 @@ def _resolve_env_item(value):
 
 def _resolve_env_vars(data):
     if isinstance(data, dict):
+        # 显式 disabled 的条目（如 mcpServers/plugins 中的 enabled:false 项）不解析其 env，
+        # 避免"未启用的 feature 缺少环境变量"(如 disabled github server 的 $GITHUB_TOKEN)
+        # 导致整个配置加载抛 KeyError。env 仅在条目实际启用时才会被使用。
+        if data.get("enabled") is False:
+            return dict(data)
         return {key: _resolve_env_vars(value) for key, value in data.items()}
     if isinstance(data, list):
         return [_resolve_env_vars(item) for item in data]
