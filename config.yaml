@@ -143,7 +143,15 @@ auth:
 knowledge:
   level_policy:
     # 域名 → 等级：3=官方文档/官方公告，2=官方工程博客/论文，1=普通博客/社区，0=低质量。
-    # 未列出的域名一律按"未评级"处理（不参与压制）。入库时 level 由该策略确定性派生。
+    # 未列出的域名一律按"未评级"处理（不参与压制）。
+    # 现在该表是评级器的参考特征（source_type/matched_domain）与 L0 黑名单：
+    # 命中 0 的域名被硬裁决为 L0（跳过评级）；1/2/3 仅作参考输入，不直接决定等级。
     domains:
       "docs.example.com": 3
       "blog.example.com": 1
+  rating:
+    # 入库等级由软评级 + 硬映射产生；model=null 用默认模型（生产建议钉死以减小漂移）。
+    enabled: true
+    model: null
+    confidence_threshold: 0.5
+    timeout_seconds: 60

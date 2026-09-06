@@ -79,6 +79,7 @@ def _entry_dict(item) -> dict:
         "source": str(value.get("source", "")),
         "source_url": value.get("source_url"),
         "provenance": value.get("provenance"),
+        "level_basis": value.get("level_basis"),
         "created_at": getattr(item, "created_at", None),
         "updated_at": getattr(item, "updated_at", None),
     }

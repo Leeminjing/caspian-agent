@@ -13,7 +13,10 @@
 """
 
 import unittest
+from unittest.mock import patch
 
+from caspian.config.knowledge_config import RatingConfig
+from caspian.knowledge import store_client
 from caspian.knowledge.provenance import classify_level, extract_domain
 from caspian.knowledge.store_client import (
     ProvenanceUpdateStatus,
@@ -64,6 +67,15 @@ class ProvenanceTests(unittest.TestCase):
 
 class StoreClientTests(unittest.IsolatedAsyncioTestCase):
 
+    def setUp(self):
+        # 评级关闭：put_knowledge 确定性返回未评级，不再依赖模型/配置（等级生产已改由 rating.py 负责，
+        # 其行为由 test_knowledge_store_client.py 覆盖）。本文件聚焦去重/CAS/not-found。
+        patcher = patch.object(
+            store_client, "_load_rating_config", return_value=RatingConfig(enabled=False)
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     async def test_内容哈希去重同内容upsert(self):
         store = _FakeStore()
         key1, level1 = await put_knowledge(
@@ -74,16 +86,15 @@ class StoreClientTests(unittest.IsolatedAsyncioTestCase):
             store, "u1", "功能 A 已废弃。", source="官方2",
             source_url="https://blog.example.com/x", domains=_DOMAINS,
         )
-        self.assertEqual(key1, key2)
-        self.assertEqual(level1, 3)
-        self.assertEqual(level2, 2)  # upsert 更新等级
-        self.assertEqual(len(store._data), 1)
+        self.assertEqual(key1, key2)  # 同内容去重 → 同 key
+        self.assertIsNone(level1)      # rating 关闭 → 未评级
+        self.assertIsNone(level2)
+        self.assertEqual(len(store._data), 1)  # 同 key upsert，仅一条
 
     async def test_CAS修改成功(self):
         store = _FakeStore()
-        key, _ = await put_knowledge(
-            store, "u1", "内容 X", source_url="https://docs.example.com/x", domains=_DOMAINS,
-        )
+        key = "k1"
+        await store.aput(("knowledge", "u1"), key, {"content": "内容 X", "level": 3})
         status = await update_provenance(store, "u1", key, level_override=1, expected_level=3)
         self.assertIs(status, ProvenanceUpdateStatus.OK)
         item = await store.aget(("knowledge", "u1"), key)
@@ -91,9 +102,8 @@ class StoreClientTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_CAS冲突拒绝(self):
         store = _FakeStore()
-        key, _ = await put_knowledge(
-            store, "u1", "内容 X", source_url="https://docs.example.com/x", domains=_DOMAINS,
-        )
+        key = "k1"
+        await store.aput(("knowledge", "u1"), key, {"content": "内容 X", "level": 3})
         status = await update_provenance(store, "u1", key, level_override=1, expected_level=2)
         self.assertIs(status, ProvenanceUpdateStatus.CONFLICT)
         item = await store.aget(("knowledge", "u1"), key)
