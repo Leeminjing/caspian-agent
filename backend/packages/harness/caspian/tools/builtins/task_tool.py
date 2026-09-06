@@ -145,30 +145,16 @@ async def task_tool(
     subagent_type: str,
     tool_call_id: Annotated[str, InjectedToolCallId],
 ) -> str | Command:
-    """把有界任务委托给专用 subagent，在其独立上下文中执行。
+    """Delegate a bounded task to a subagent that runs in an isolated context and returns a result.
 
-    仅在预期收益明显超过委托开销时委托。有用收益：
-    - 独立并行工作带来的实际墙钟时间节省
-    - 专用工具、技能、模型或领域指令
-    - 有界、异常上下文密集调查的上下文隔离
-
-    不要委托的场景：
-    - 仅因为任务复杂、多步、冗长或涉及大仓库
-    - 跨 subagent 拆分相互依赖的步骤（保持链条完整）
-    - 重叠文件、共享可变状态或外部副作用
-    - 需要用户交互或澄清的任务
-
-    委托代价：多个上下文重复仓库发现、结果协调验证与综合、父可更便宜完成的直接工具调用。
-
-    内置 subagent 类型:
-    - **general-purpose**: 通用推理与执行 agent，适合有界探索与执行
-    - **bash**: 沙箱命令行执行专家，仅限有界 shell 工作流
-    其他类型可在 config.yaml subagents.custom_agents 定义。
+    Follow the delegation policy in your system instructions (<subagent_delegation>): delegate
+    only when the benefit clearly exceeds the overhead, and never for tasks requiring user
+    interaction, dependent steps, or shared mutable state.
 
     Args:
-        description: 任务的简短（3-5 词）描述，用于日志/展示。ALWAYS PROVIDE FIRST.
-        prompt: 交给 subagent 的任务描述，须具体明确。ALWAYS PROVIDE SECOND.
-        subagent_type: 使用的 subagent 类型。ALWAYS PROVIDE THIRD.
+        description: A short (3-5 word) label for the task (logging/display). ALWAYS PROVIDE FIRST.
+        prompt: The task description for the subagent — be specific. ALWAYS PROVIDE SECOND.
+        subagent_type: The subagent type to use. ALWAYS PROVIDE THIRD.
     """
     app_config = get_app_config("config.yaml")
     available_names = get_available_subagent_names(app_config=app_config)

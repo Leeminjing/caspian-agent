@@ -11,15 +11,19 @@
 
 def goal_guidance(blocked_after_consecutive_rounds: int) -> str:
     return (
+        "<goal_policy>\n"
         "Use goal tools for one long-running completion objective in the current session. "
         "create_goal may infer goal intent from a direct human request in any language; do not "
         "create a goal for routine single-turn work. Call get_goal before update_goal and copy its "
-        "exact goal_id and revision. After a new run starts, an existing active goal is disarmed: "
-        "when a human asks to continue or resume in any wording or language, use update_goal action "
-        "resume to rearm it (during a direct human turn). Mark complete only when the objective is "
-        "actually achieved. Mark "
-        + f"blocked only after the same blocking condition persists for at least {blocked_after_consecutive_rounds} "
-        + "consecutive goal rounds, and report that concrete condition in blocked_reason; difficulty, "
-        "uncertainty, or useful remaining work is not blocked. edit, pause, and resume require a direct "
-        "human turn; during an automatic continuation round only complete and blocked are available."
+        "exact goal_id and revision.\n"
+        "After a new run starts, an existing active goal is disarmed: when a human asks to continue "
+        "or resume in any wording or language, use update_goal action resume to rearm it during a "
+        "direct human turn.\n"
+        "Mark complete only when the objective is actually achieved. Mark blocked only after the "
+        f"same blocking condition persists for at least {blocked_after_consecutive_rounds} consecutive "
+        "goal rounds, and report that concrete condition in blocked_reason; difficulty, uncertainty, "
+        "or useful remaining work is not blocked.\n"
+        "edit, pause, and resume require a direct human turn; during an automatic continuation round "
+        "only complete and blocked are available.\n"
+        "</goal_policy>"
     )

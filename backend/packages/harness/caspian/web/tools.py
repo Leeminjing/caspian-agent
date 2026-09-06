@@ -139,11 +139,17 @@ def _format_search_results(results: list[dict[str, str]]) -> str:
 
 @tool
 async def web_search_tool(query: str, max_results: int = 5) -> str:
-    """通过 DuckDuckGo 搜索网页并返回结构化结果（标题/URL/摘要），无需 API key。
+    """Search the web via DuckDuckGo and return numbered results (title / URL / snippet). No API key required.
+
+    When you use these results, cite them:
+    - Add an inline citation [citation:Title](URL) immediately after each claim you base on a result.
+    - Collect every cited source in a "Sources" section at the end of your response, using
+      markdown links in the form [Title](URL) - short description.
+    - Never present search-derived claims as your own knowledge without a citation.
 
     Args:
-        query: 搜索关键词
-        max_results: 返回结果条数（自动钳制到 1-10）
+        query: search keywords.
+        max_results: number of results (clamped to 1-10).
     """
     if not isinstance(query, str) or not query.strip():
         return "搜索失败: query 不能为空。"
@@ -162,11 +168,14 @@ async def web_search_tool(query: str, max_results: int = 5) -> str:
 
 @tool
 async def web_fetch_tool(url: str, max_tokens: int | None = None) -> str:
-    """通过 Jina Reader 抓取单页 URL 内容，返回可读性提取后的 Markdown 文本，无需 API key。
+    """Fetch a single page via Jina Reader and return readability-extracted markdown. No API key required.
+
+    Cite fetched content the same way as search results: inline [citation:Title](URL) after
+    each claim, and a "Sources" section at the end.
 
     Args:
-        url: 目标页面 URL（仅支持 http:// 与 https://）
-        max_tokens: 可选，限制返回内容的最大 token 数
+        url: target page URL (http:// or https:// only).
+        max_tokens: optional cap on returned content tokens.
     """
     if not isinstance(url, str) or not url.strip():
         return "抓取失败: url 不能为空。"
