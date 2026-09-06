@@ -12,6 +12,7 @@ _load_yaml 读取 YAML 文件 → _resolve_env_vars 解析 $ENV_VAR 环境变量
 """
 
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -104,13 +105,30 @@ def _resolve_env_vars(data: dict) -> dict:
     return resolved
 
 
+_ENV_WITH_DEFAULT_RE = re.compile(
+    r"^\$\{([A-Z_][A-Z0-9_]*):-(.*)\}$|^\$([A-Z_][A-Z0-9_]*):-(.*)$"
+)
+_BARE_ENV_RE = re.compile(r"^\$\{([A-Z_][A-Z0-9_]*)\}$|^\$([A-Z_][A-Z0-9_]*)$")
+
+
 def _resolve_env_item(value):
     if isinstance(value, str) and len(value) > 1 and value.startswith("$"):
-        env_var = value[1:]
-        env_value = os.environ.get(env_var)
-        if env_value is None:
-            raise KeyError(f"环境变量未设置: {env_var}")
-        return env_value
+        # 支持 ${VAR:-default} 或 $VAR:-default：未设置时回落默认值，不抛错。
+        m = _ENV_WITH_DEFAULT_RE.match(value)
+        if m:
+            var_name = m.group(1) or m.group(3)
+            default = m.group(2) or m.group(4)
+            env_value = os.environ.get(var_name)
+            return env_value if env_value is not None else default
+        # 纯 ${VAR} 或 $VAR：缺失则抛 KeyError（保持既有严格行为）。
+        m = _BARE_ENV_RE.match(value)
+        if m:
+            var_name = m.group(1) or m.group(2)
+            env_value = os.environ.get(var_name)
+            if env_value is None:
+                raise KeyError(f"环境变量未设置: {var_name}")
+            return env_value
+        return value
     return value
 
 
