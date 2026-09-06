@@ -27,11 +27,11 @@
 import asyncio
 import json
 import logging
-import re
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from caspian.knowledge.json_parsing import parse_fenced_or_raw
 from caspian.knowledge.schemas import (
     ConflictRelation,
     EvidenceEntry,
@@ -55,17 +55,6 @@ _JUDGE_SYSTEM_PROMPT = """你是知识证据的冲突判定器。给定用户查
    scope="full" 仅用于整条证据整体与对方对立的情况（此时 claim 留空）。
 6. 输出必须是一个 JSON 对象，格式：
 {"conflicts": [{"a": "<id>", "b": "<id>", "relation": "explicit|potential", "scope": "full|partial", "claim_a": "...", "claim_b": "...", "claim_a_span": [起,止], "claim_b_span": [起,止]}]}"""
-
-_FENCED_JSON_RE = re.compile(r"```(?:json)?\s*(\{.*\})\s*```", re.DOTALL)
-
-
-def _parse_fenced_or_raw(text: str) -> dict | None:
-    """从模型文本中提取 JSON 对象（fenced 优先，其次整段解析）。"""
-    fenced = _FENCED_JSON_RE.search(text)
-    if fenced:
-        return json.loads(fenced.group(1))
-    return json.loads(text)
-
 
 def _anchor(
     content: str, claim: str, span: tuple[int, int] | None
@@ -223,7 +212,7 @@ async def judge_conflicts(
                         HumanMessage(content="只返回上述 JSON，不要解释、不要 Markdown。"),
                     ]
                 )
-            data = _parse_fenced_or_raw(str(raw.content))
+            data = parse_fenced_or_raw(str(raw.content))
             conflicts = data.get("conflicts") if isinstance(data, dict) else None
             if not isinstance(conflicts, list):
                 raise ValueError("兜底解析结果缺少 conflicts 数组")

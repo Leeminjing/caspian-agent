@@ -12,8 +12,8 @@
 import unittest
 from langchain_core.messages import AIMessage
 
+from caspian.knowledge.json_parsing import parse_fenced_or_raw
 from caspian.knowledge.judge import (
-    _parse_fenced_or_raw,
     _validated_conflicts,
     judge_conflicts,
 )
@@ -54,11 +54,11 @@ class _ModelStub:
 class JudgePureHelperTests(unittest.TestCase):
 
     def test_解析fenced_json(self):
-        data = _parse_fenced_or_raw('```json\n{"conflicts": []}\n```')
+        data = parse_fenced_or_raw('```json\n{"conflicts": []}\n```')
         self.assertEqual(data, {"conflicts": []})
 
     def test_解析raw_json(self):
-        data = _parse_fenced_or_raw('{"conflicts": [{"a": "x", "b": "y"}]}')
+        data = parse_fenced_or_raw('{"conflicts": [{"a": "x", "b": "y"}]}')
         self.assertEqual(data["conflicts"][0]["a"], "x")
 
     def test_过滤非法关系(self):

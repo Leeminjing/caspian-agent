@@ -25,11 +25,15 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 
-from backend.app.gateway.routers.knowledge import query_knowledge, QueryRequest
+from backend.app.gateway.routers.knowledge import (
+    get_knowledge_list,
+    query_knowledge,
+    QueryRequest,
+)
 
 
 class _FakeItem:
-    def __init__(self, key: str, content: str, level: int):
+    def __init__(self, key: str, content: str, level: int, level_basis: dict | None = None):
         self.key = key
         self.value = {
             "content": content,
@@ -37,6 +41,8 @@ class _FakeItem:
             "source": "",
             "source_url": None,
         }
+        if level_basis is not None:
+            self.value["level_basis"] = level_basis
         self.score = None
 
 
@@ -105,6 +111,24 @@ class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("notes", result["result"])
         for item in result["ledger"]:
             self.assertEqual(item["status"], "retained")
+
+    async def test_列表响应包含level_basis(self):
+        store = _FakeStore([
+            _FakeItem("k1", "c", 2, level_basis={
+                "rated_by": "test-model",
+                "rated_at": "2026-09-06T00:00:00+00:00",
+                "confidence": 0.9,
+                "reason": "r",
+                "claim_domain": "PostgreSQL",
+                "dimensions": {"primary_source": 3, "domain_fit": 3, "evidence": 3, "specificity": 3},
+                "mapping_rule": "no cap → L3",
+                "unrated_reason": None,
+            }),
+        ])
+        result = await get_knowledge_list(_request(store))
+        entry = result["entries"][0]
+        self.assertEqual(entry["level_basis"]["rated_by"], "test-model")
+        self.assertEqual(entry["level_basis"]["mapping_rule"], "no cap → L3")
 
 
 if __name__ == "__main__":

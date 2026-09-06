@@ -122,3 +122,43 @@ class GovernanceResult(BaseModel):
     notes: list[str] = Field(default_factory=list)
     status: Literal["governed", "unadjudicated", "empty"] = "governed"
     candidates: list[EvidenceEntry] = Field(default_factory=list)
+
+
+class RatingDimensions(BaseModel):
+    """入库评级器输出的四个维度分（各 1..3）。
+
+    仅这四个维度被硬映射消费；recency 等其余信号只进 level_basis 展示、不参与映射。
+    1..3 语义见 design.md D3 的 rubric 表。
+    """
+
+    primary_source: int = Field(ge=1, le=3)
+    domain_fit: int = Field(ge=1, le=3)
+    evidence: int = Field(ge=1, le=3)
+    specificity: int = Field(ge=1, le=3)
+
+
+class RatingOutput(BaseModel):
+    """评级器结构化输出根 schema。
+
+    LLM 只产出维度分 + 信心 + 理由，不直接给最终 level；最终 level 由
+    map_dimensions_to_level 确定性映射得出。unrated_reason 非空表示"信息不足"。
+    """
+
+    claim_domain: str = ""
+    dimensions: RatingDimensions
+    confidence: float = Field(ge=0.0, le=1.0)
+    reason: str = ""
+    unrated_reason: str | None = None
+
+
+class LevelBasis(BaseModel):
+    """入库评级 provenance：等级为什么是它、由谁在何时评出。"""
+
+    rated_by: str
+    rated_at: str
+    confidence: float | None = None
+    reason: str = ""
+    claim_domain: str = ""
+    dimensions: RatingDimensions | None = None
+    mapping_rule: str = ""
+    unrated_reason: str | None = None
