@@ -241,14 +241,12 @@ summary:focus-visible,
 .trace-panel,
 .review-panel,
 .knowledge-panel,
-.tool-item,
 .compaction-summary {
   border-radius: var(--radius-md);
 }
 
 .trace-panel,
 .knowledge-panel,
-.tool-item,
 .compaction-summary {
   border-color: #e1e5e5;
   background: #fafbfb;
@@ -256,7 +254,6 @@ summary:focus-visible,
 
 .trace-panel > summary,
 .knowledge-panel > summary,
-.tool-item summary,
 .compaction-summary summary {
   min-height: 38px;
   align-items: center;

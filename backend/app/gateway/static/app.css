@@ -640,6 +640,7 @@ textarea:focus-visible {
   display: flex;
   gap: 6px;
   align-items: baseline;
+  min-height: 24px;
   color: #8b9195;
   font-size: 12.5px;
   user-select: none;
@@ -1610,47 +1611,97 @@ textarea:focus-visible {
   color: var(--teal);
 }
 
-.tool-item {
-  margin: 4px 0 4px 48px;
-  padding: 6px 10px;
-  border-left: 2px solid var(--line);
+/* 工具步骤：紧凑单行 transcript 条目（调用 + 结果）。折叠态仅显示一行，点击展开「技术详情」 */
+.tool-step {
+  margin: 3px 0 3px 48px;
   border-radius: 4px;
-  background: var(--soft);
-  font-size: 13px;
 }
 
-/* 工具调用项挂进 agent 消息 body 时不再左缩进（body 已由 avatar 缩进） */
-.message-body .tool-item {
+/* 工具步骤挂进 agent 消息 body 时不再左缩进（body 已由 avatar 缩进） */
+.message-body .tool-step {
   margin-left: 0;
 }
 
-.tool-item summary {
+.tool-step > summary {
   cursor: pointer;
-  color: var(--muted);
   display: flex;
   gap: 6px;
   align-items: baseline;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1.5;
+  user-select: none;
   overflow: hidden;
   white-space: nowrap;
+  border-radius: 4px;
+}
+.tool-step > summary::-webkit-details-marker {
+  display: none;
+}
+.tool-step > summary:hover {
+  background: var(--soft);
 }
 
-.tool-item summary strong {
+.tool-icon {
+  flex: 0 0 auto;
+  width: 1.4em;
+  text-align: center;
   color: var(--ink);
-  font-weight: 600;
-  flex-shrink: 0;
 }
-
-.tool-item summary span {
+.tool-name {
+  flex: 0 0 auto;
+  color: var(--ink);
+}
+.tool-arg {
   overflow: hidden;
   text-overflow: ellipsis;
+  color: var(--muted);
+}
+.tool-status {
+  flex: 0 0 auto;
+  margin-left: auto;
+  color: var(--line);
+  font-size: 13px;
+  white-space: nowrap;
+}
+.tool-status.is-running {
+  color: var(--teal);
+  animation: tool-pulse 1.1s ease-in-out infinite;
+}
+.tool-status.is-done {
+  color: var(--teal);
+}
+.tool-status.is-error {
+  color: var(--danger);
 }
 
-.tool-item pre {
-  margin: 6px 0 0;
+@keyframes tool-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+
+.tool-detail {
+  margin: 4px 0 4px 0;
+}
+.tool-detail-label {
+  color: var(--muted);
+  font-size: 11.5px;
+  margin: 0 0 4px;
+}
+.tool-detail pre {
+  margin: 0;
+  padding: 8px 12px;
+  overflow-x: auto;
+  border-left: 3px solid #cdd6d9;
+  border-radius: 6px;
+  color: #5b6368;
+  background: #f4f7f7;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
-  font-family: ui-monospace, Consolas, monospace;
-  font-size: 12px;
   max-height: 300px;
   overflow-y: auto;
 }

@@ -57,7 +57,7 @@ const state = {
   activeStreamId: 0,
   uploads: [],
   renderedMessageIds: new Set(),
-  renderedToolIds: new Set(),
+  toolEntries: new Map(),
   commitmentMessageIds: new Set(),
   commitmentTraceItems: new Map(),
   tracePanel: null,
@@ -414,7 +414,7 @@ function selectThread(id) {
   state.interruptedByUser = false;
   state.uploads = [];
   state.renderedMessageIds.clear();
-  state.renderedToolIds.clear();
+  state.toolEntries.clear();
   state.commitmentMessageIds.clear();
   state.commitmentTraceItems.clear();
   // msgAcc 缓存了指向旧 DOM 节点的渲染句柄，切换会话清空消息区后必须一并清掉，
@@ -948,40 +948,129 @@ function toolCallsText(message) {
   }).join("\n");
 }
 
+// —— 工具步骤：紧凑单行 transcript 条目 ——
+// 调用与结果共用同一行骨架（图标 + 名称 + 截断参数 + 状态徽标），点击展开「技术详情」看完整载荷。
+// 结果经 tool:<callId> 注册表路由回调用行做原位更新，不再另起卡片。
+function iconFor(name) {
+  const n = String(name || "").toLowerCase();
+  if (/bash|powershell|cmd|sh|shell/.test(n)) return { glyph: ">_", title: "shell" };
+  if (/write_file|write-file|writefile/.test(n)) return { glyph: "📄", title: "write file" };
+  if (/read_file|read-file|readfile|list_files|list-files|ls/.test(n)) return { glyph: "📁", title: "file" };
+  if (/web_search|web_fetch|browse|search|fetch|crawl/.test(n)) return { glyph: "🌐", title: "web" };
+  return { glyph: "🔧", title: "tool" };
+}
+
+function toolStatusInfo(status) {
+  const map = {
+    running: { glyph: "◌", label: "运行中", cls: "is-running" },
+    done: { glyph: "✔", label: "完成", cls: "is-done" },
+    error: { glyph: "✖", label: "失败", cls: "is-error" },
+  };
+  return map[status] || map.running;
+}
+
+function argsToExcerpt(args) {
+  let s = "";
+  try {
+    s = JSON.stringify(args ?? {});
+  } catch {
+    s = String(args ?? "");
+  }
+  if (s.length > 120) s = `${s.slice(0, 120)}…`;
+  return s;
+}
+
+// 构建单行工具步骤行。返回 { el, status, pre } 供原位更新状态与完整内容。
+function renderToolStep(entry) {
+  const status = toolStatusInfo(entry.status);
+  const details = document.createElement("details");
+  details.className = "tool-step";
+  if (entry.id) details.dataset.toolId = entry.id;
+
+  const summary = document.createElement("summary");
+  const icon = document.createElement("span");
+  icon.className = "tool-icon";
+  icon.textContent = entry.icon.glyph;
+  icon.title = entry.icon.title;
+  const name = document.createElement("span");
+  name.className = "tool-name";
+  name.textContent = entry.name;
+  const arg = document.createElement("span");
+  arg.className = "tool-arg";
+  arg.textContent = entry.excerpt || "";
+  const badge = document.createElement("span");
+  badge.className = `tool-status ${status.cls}`;
+  badge.textContent = status.glyph;
+  badge.title = status.label;
+  badge.setAttribute("aria-label", status.label);
+  summary.append(icon, name, arg, badge);
+
+  const detail = document.createElement("div");
+  detail.className = "tool-detail";
+  const label = document.createElement("div");
+  label.className = "tool-detail-label";
+  label.textContent = "技术详情";
+  const pre = document.createElement("pre");
+  pre.textContent = entry.full || "";
+  detail.append(label, pre);
+
+  details.append(summary, detail);
+  return { el: details, status: badge, pre };
+}
+
 function renderToolCallItem(call, messageId, article) {
   if (!call || !call.name) return;
-  const key = `toolcall:${messageId || ""}:${call.id || ""}:${call.name}`;
-  if (state.renderedToolIds.has(key)) return;
-  state.renderedToolIds.add(key);
+  const callId = call.id || call.name;
+  const key = `tool:${callId}`;
+  if (state.toolEntries.has(key)) return;
   removeEmptyState();
-  const details = document.createElement("details");
-  details.className = "tool-item tool-call-item";
-  details.innerHTML = "<summary><strong></strong></summary><pre></pre>";
-  $("summary strong", details).textContent = `调用工具 ${call.name}`;
-  let argsText = "";
+  let argsFull = "";
   try {
-    argsText = JSON.stringify(call.args ?? {}, null, 2);
+    argsFull = JSON.stringify(call.args ?? {}, null, 2);
   } catch {
-    argsText = String(call.args ?? "");
+    argsFull = String(call.args ?? "");
   }
-  $("pre", details).textContent = argsText;
-  (article || $("#messages")).append(details);
+  const row = renderToolStep({
+    id: callId,
+    name: call.name,
+    icon: iconFor(call.name),
+    excerpt: argsToExcerpt(call.args),
+    full: argsFull,
+    status: "running",
+  });
+  state.toolEntries.set(key, { row, callId });
+  (article || $("#messages")).append(row.el);
   scrollMessages();
 }
 
 function renderToolResultItem(message) {
-  const key = `toolresult:${message.id || ""}:${message.name || ""}`;
-  if (state.renderedToolIds.has(key)) return;
-  state.renderedToolIds.add(key);
   removeEmptyState();
-  const brief = contentText(message.content).replace(/\s+/g, " ").slice(0, 80);
-  const details = document.createElement("details");
-  details.className = "tool-item tool-result-item";
-  details.innerHTML = "<summary><strong></strong><span></span></summary><pre></pre>";
-  $("summary strong", details).textContent = message.name ? `工具结果 ${message.name}` : "工具结果";
-  $("summary span", details).textContent = brief ? ` — ${brief}` : "";
-  $("pre", details).textContent = contentText(message.content);
-  $("#messages").append(details);
+  const callId = message?.tool_call_id || message?.id || message?.name || "";
+  const key = `tool:${callId}`;
+  const full = contentText(message.content) || "";
+  const found = state.toolEntries.get(key);
+  if (found) {
+    // 原位更新：把调用行的状态翻为 done，并填充「技术详情」完整输出
+    const status = toolStatusInfo("done");
+    found.row.status.textContent = status.glyph;
+    found.row.status.className = `tool-status ${status.cls}`;
+    found.row.status.title = status.label;
+    found.row.status.setAttribute("aria-label", status.label);
+    found.row.pre.textContent = full;
+    found.row.el.classList.add("is-complete");
+    return;
+  }
+  // 兜底：没有匹配的调用行（结果先到/独立到达），追加一次紧凑结果行
+  const row = renderToolStep({
+    id: callId,
+    name: message.name || "tool",
+    icon: iconFor(message.name),
+    excerpt: full.replace(/\s+/g, " ").slice(0, 80),
+    full,
+    status: "done",
+  });
+  state.toolEntries.set(key, { row, callId });
+  $("#messages").append(row.el);
   scrollMessages();
 }
 
