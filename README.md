@@ -151,7 +151,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 
 - **承诺层 (Commitment)**: `/commit <指令>` 触发 9 阶段;Worker–Evaluator 审核;人工节点在阶段 3/5/6/7 强制暂停;输出 `task-contract` + 决策等级表。Context7 仅为该流程懒加载(普通对话零依赖)。
 - **决策等级表**: 版本化、内容寻址、跨 run 注入 + 单调仲裁;`update_decision_table` 内置工具受机械校验约束。
-- **分层压制RAG**: `add_knowledge` 带权威等级入库(官方文档=3/官方博客=2/普通博客=1/未定级=最低),`knowledge_query` 返回已治理证据。
+- **分层压制RAG**: `add_knowledge` 入库时由 LLM 对(正文、来源名、来源链接)做 claim 相对四维软评级(一手程度/领域契合/证据/命题针对性)+ 确定性硬映射产生 L1/L2/L3(或未评级),`knowledge_query` 返回已治理证据。
 - **目标模式 (Goal)**: 持久目标 + 自动跨 run 推进(`<goal_round>`);compare-and-set 修订;`active/paused/blocked/complete` 生命周期;authority 边界(直接人类回合 vs 精确 goal 回合)。
 - **计划模式 (Plan)**: `/plan` 软引导 + `exit_plan_mode` 评审卡(Approve / Keep planning / Chat about it);刻意不强制、不隔离。
 - **子代理 (Subagents)**: `task` 委托;委托账本从消息流确定性重建;并发/总额硬上限截断;状态契约枚举 + 结果 sha256。

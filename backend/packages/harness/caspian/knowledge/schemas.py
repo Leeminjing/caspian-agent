@@ -127,7 +127,7 @@ class GovernanceResult(BaseModel):
 class RatingDimensions(BaseModel):
     """入库评级器输出的四个维度分（各 1..3）。
 
-    仅这四个维度被硬映射消费；recency 等其余信号只进 level_basis 展示、不参与映射。
+    仅这四个维度被硬映射消费。
     1..3 语义见 design.md D3 的 rubric 表。
     """
 

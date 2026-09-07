@@ -20,7 +20,7 @@
 
 具体工作流:
     (1) 组装 payload 与 system prompt
-    (2) 结构化输出（json_mode）单次批量调用；失败回退纯文本解析（复用 judge 的 fenced JSON 解析）
+    (2) 结构化输出（function_calling）单次批量调用；失败回退纯文本解析（复用 judge 的 fenced JSON 解析）
     (3) 两条路径都失败 → 抛异常，由调用方降级为未评级（fail-safe，不猜）
 
 设计依据见 design.md D3/D4/D8；结构对齐 judge.py 的两段式。
@@ -163,7 +163,7 @@ async def rate_level(
     try:
         structured_model = bound_model.with_structured_output(
             RatingOutput,
-            method="json_mode",
+            method="function_calling",
         )
         async with asyncio.timeout(timeout_seconds):
             parsed = await structured_model.ainvoke(
