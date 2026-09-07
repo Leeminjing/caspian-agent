@@ -54,7 +54,8 @@ _JUDGE_SYSTEM_PROMPT = """你是知识证据的冲突判定器。给定用户查
    与 span，则只能标 relation="potential"。
    scope="full" 仅用于整条证据整体与对方对立的情况（此时 claim 留空）。
 6. 输出必须是一个 JSON 对象，格式：
-{"conflicts": [{"a": "<id>", "b": "<id>", "relation": "explicit|potential", "scope": "full|partial", "claim_a": "...", "claim_b": "...", "claim_a_span": [起,止], "claim_b_span": [起,止]}]}"""
+{"conflicts": [{"a": "<id>", "b": "<id>", "relation": "explicit|potential|temporal_disjoint", "scope": "full|partial", "claim_a": "...", "claim_b": "...", "claim_a_span": [起,止], "claim_b_span": [起,止]}]}
+7. 若两条证据针对同一主题但分别针对不同的时间点或版本（例如 React 16 与 React 19 的同一特性、某 API 的 2019 版与 2026 版），它们并不冲突：不得标 explicit 或 potential。你可以省略该对（按规则 4），或标 relation="temporal_disjoint" 以便系统说明版本差异；二者皆可。"""
 
 def _anchor(
     content: str, claim: str, span: tuple[int, int] | None
@@ -111,7 +112,7 @@ def _validated_conflicts(
             continue
         relation = item.get("relation")
         scope = item.get("scope", "full")
-        if relation not in ("explicit", "potential"):
+        if relation not in ("explicit", "potential", "temporal_disjoint"):
             logger.warning("judge 输出非法 relation，已丢弃: %s", item)
             continue
         if scope not in ("full", "partial"):

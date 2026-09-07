@@ -85,6 +85,7 @@ def govern(
     order: dict[str, int] = {c.id: i for i, c in enumerate(candidates)}
 
     explicit: list[ConflictRelation] = []
+    temporal: list[ConflictRelation] = []
     potential: list[ConflictRelation] = []
     for rel in conflicts:
         if rel.a not in by_id or rel.b not in by_id or rel.a == rel.b:
@@ -92,6 +93,8 @@ def govern(
             continue
         if rel.relation == "explicit":
             explicit.append(rel)
+        elif rel.relation == "temporal_disjoint":
+            temporal.append(rel)
         else:
             potential.append(rel)
 
@@ -182,6 +185,10 @@ def govern(
     for rel in potential:
         notes.append(
             f"证据 {rel.a} 与证据 {rel.b} 可能存在冲突，当前检索结果存在潜在分歧。"
+        )
+    for rel in temporal:
+        notes.append(
+            f"证据 {rel.a} 与证据 {rel.b} 针对不同时间/版本，非同一命题冲突，均保留。"
         )
 
     # (6) 组装 ledger 与 final_evidence_set（按等级降序）

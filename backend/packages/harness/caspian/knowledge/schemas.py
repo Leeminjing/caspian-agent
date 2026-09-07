@@ -66,14 +66,15 @@ class EvidenceEntry(BaseModel):
 class ConflictRelation(BaseModel):
     """judge 输出的两两冲突关系。
 
-    relation: explicit=明确冲突（可触发等级压制）；potential=可能冲突（不压制）
+    relation: explicit=明确冲突（可触发等级压制）；potential=可能冲突（不压制）；
+              temporal_disjoint=同主题但分属不同时间/版本（非冲突，双方保留）
     scope: full=整体冲突；partial=仅 claim_a/claim_b 所述命题冲突
     claim_a/claim_b: 冲突命题原文；claim_a_span/claim_b_span 为其在对应证据中的锚
     """
 
     a: str
     b: str
-    relation: Literal["explicit", "potential"]
+    relation: Literal["explicit", "potential", "temporal_disjoint"]
     scope: Literal["full", "partial"] = "full"
     claim_a: str = ""
     claim_b: str = ""
