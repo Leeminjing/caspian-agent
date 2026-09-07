@@ -56,7 +56,7 @@ async def add_knowledge(
     Args:
         content: 知识正文，一句话到一段话。
         source: 来源名称，如"官方文档"。
-        source_url: 来源链接，系统会依据它（及正文）自动评级，可省略（省略则按未评级处理）。
+        source_url: 来源链接，系统会依据它（及正文）自动评级，可省略（省略时仍会尝试评级，信息不足则未评级）。
     """
     store = getattr(runtime, "store", None)
     ctx = getattr(runtime, "context", None)

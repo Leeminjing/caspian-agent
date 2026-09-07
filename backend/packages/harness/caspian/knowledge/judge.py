@@ -16,7 +16,7 @@
 
 具体工作流:
     (1) 组装 candidates JSON 与判定 system prompt（含用户查询）
-    (2) 结构化输出（json_mode）单次批量调用，解析失败回退纯文本 json.loads
+    (2) 结构化输出（function_calling）单次批量调用，解析失败回退纯文本 json.loads
     (3) _validated_conflicts 过滤非法关系并校验 partial 命题锚定原文（claim ⊆ content）
     (4) 全部失败 → 抛异常，由调用方降级为"未治理"
 
@@ -188,7 +188,7 @@ async def judge_conflicts(
     try:
         structured_model = bound_model.with_structured_output(
             JudgeConflictOutput,
-            method="json_mode",
+            method="function_calling",
         )
         async with asyncio.timeout(timeout_seconds):
             parsed = await structured_model.ainvoke(
