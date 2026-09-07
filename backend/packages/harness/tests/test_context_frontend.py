@@ -68,7 +68,7 @@ class ContextFrontendTests(unittest.TestCase):
         self.assertIn("if (!/ai|assistant/i.test(tokenType)) return;", script)
         css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
         self.assertIn(".message-body", css)
-        self.assertIn(".message-body .tool-item", css)
+        self.assertIn(".message-body .tool-step", css)
         self.assertIn(".think-line", css)
         self.assertIn(".think-badge", css)
 
