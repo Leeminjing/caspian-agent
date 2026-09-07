@@ -124,7 +124,7 @@ Every governed thing is collapsed into a **discrete token**; the code owns the *
 |---|---|---|---|
 | Commitment | `stage 1..9` | advance / reject jump | stage content |
 | Decision table | `priority 1/2/3` | compare + arbitrate | semantic full-scan of conflicts |
-| Knowledge RAG | `L0..L3` | suppress by level | detect conflict edges |
+| Knowledge RAG | `L0..L3` | map dims + suppress by level | rate dims + detect conflict edges |
 | Goal mode | `phase` + `revision` | CAS + transition | propose / declare done |
 | Subagents | `status` enum | validate + ledger + caps | describe / analyze |
 | Sandbox | path/shell verdict | whitelist + block/warn/pass | the command itself |
