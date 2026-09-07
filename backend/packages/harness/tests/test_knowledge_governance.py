@@ -232,6 +232,17 @@ class GovernanceSpecMatrixTests(unittest.TestCase):
         # c 只与被压制的 b 冲突，不被 b 反向压制
         self.assertEqual(_status(result, "c").status, "retained")
 
+    def test_时间版本不匹配双方保留(self):
+        result = govern(
+            [_entry("a", "React 19 中 forwardRef 已弃用。", 3),
+             _entry("b", "React 16 中 forwardRef 用于转发 ref。", 3)],
+            [ConflictRelation(a="a", b="b", relation="temporal_disjoint", scope="full")],
+        )
+        self.assertEqual(_status(result, "a").status, "retained")
+        self.assertEqual(_status(result, "b").status, "retained")
+        self.assertEqual(len(result.final_evidence_set), 2)
+        self.assertTrue(any("时间/版本" in note for note in result.notes))
+
 
 class KnowledgeToolFormatTests(unittest.TestCase):
     """knowledge_query 工具的模型文本组装：被压制证据不进模型文本、部分压制带注解。"""

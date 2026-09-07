@@ -85,6 +85,14 @@ class JudgePureHelperTests(unittest.TestCase):
         self.assertIsNone(conflicts[0].claim_a_span)
         self.assertIsNone(conflicts[0].claim_b_span)
 
+    def test_接受temporal_disjoint(self):
+        conflicts = _validated_conflicts(
+            [{"a": "x", "b": "y", "relation": "temporal_disjoint", "scope": "full"}],
+            {"x", "y"},
+        )
+        self.assertEqual(len(conflicts), 1)
+        self.assertEqual(conflicts[0].relation, "temporal_disjoint")
+
 
 class JudgeTests(unittest.IsolatedAsyncioTestCase):
 
