@@ -42,7 +42,8 @@ class SlashSkillsBackendTests(unittest.TestCase):
         root = Path(self.temp.name)
         write_skill(root / "skills", "zeta", "zeta", "Z desc", "Z body")
         write_skill(root / "skills", "disabled", "disabled", "D desc", "D body")
-        write_skill(root / ".caspian/users/u1/skills", "alpha", "alpha", "A desc", "A body")
+        # custom skill 现按 CASPIAN_HOME/users/{user}/skills 发现（home 化）
+        write_skill(Path(os.environ["CASPIAN_HOME"]) / "users" / "u1" / "skills", "alpha", "alpha", "A desc", "A body")
         Path("extensions_config.json").write_text(
             json.dumps({
                 "skills": {
