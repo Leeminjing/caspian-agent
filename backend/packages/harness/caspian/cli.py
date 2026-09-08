@@ -81,13 +81,34 @@ def _missing_provider_keys() -> list[str]:
     return [key for key in _PROVIDER_KEYS if not merged.get(key)]
 
 
+def _key_block_lines(platform: str | None = None) -> list[str]:
+    """按平台返回 key 设置提示行：Windows 用 setx，Unix 用 export（写入 shell profile）。
+
+    输入:
+        platform: str | None — 目标平台（默认取当前 sys.platform），供测试注入
+    """
+    plat = platform if platform is not None else sys.platform
+    if plat == "win32":
+        return [
+            "Set them once like this (then open a NEW terminal and re-run `caspian`):",
+            'setx OPENAI_API_KEY      "<your DeepSeek key>"',
+            'setx DASHSCOPE_API_KEY   "<your DashScope key>"',
+            'setx OPENAI_BASE_URL     "https://api.deepseek.com"   # optional',
+            'setx OPENAI_MODEL        "deepseek-v4-flash-vision-exp"   # optional',
+        ]
+    return [
+        "Add them to your shell profile (e.g. ~/.zshrc) like this, then open a NEW terminal and re-run `caspian`:",
+        'export OPENAI_API_KEY="<your DeepSeek key>"',
+        'export DASHSCOPE_API_KEY="<your DashScope key>"',
+        'export OPENAI_BASE_URL="https://api.deepseek.com"   # optional',
+        'export OPENAI_MODEL="deepseek-v4-flash-vision-exp"   # optional',
+    ]
+
+
 def _print_setx_block(missing: list[str]) -> None:
     print("Missing required API key(s): " + ", ".join(missing))
-    print("Set them once like this (then open a NEW terminal and re-run `caspian`):")
-    print('setx OPENAI_API_KEY      "<your DeepSeek key>"')
-    print('setx DASHSCOPE_API_KEY   "<your DashScope key>"')
-    print('setx OPENAI_BASE_URL     "https://api.deepseek.com"   # optional')
-    print('setx OPENAI_MODEL        "deepseek-v4-flash-vision-exp"   # optional')
+    for line in _key_block_lines():
+        print(line)
     print("")
 
 
