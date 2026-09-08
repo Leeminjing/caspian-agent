@@ -82,6 +82,15 @@ _STREAM_MODE_MAP: dict[str, str] = {
 # 与 values 不兼容的 mode，需要跳过
 _SKIP_MODES: frozenset = frozenset({"events"})
 
+# 承诺子图(Supervisor)的节点名：这些节点产生的消息(token 或完整 AIMessage)属于
+# 承诺层内部，不应渲染进主聊天(仅由 trace 面板经 commitment_messages 展示)。
+# 覆盖 supervisor 的三个节点；子图节点改名时同步更新。
+_COMMITMENT_STREAM_NODES: frozenset = frozenset({
+    "prepare_call",
+    "delegate_with_review",
+    "human_review",
+})
+
 
 def _map_stream_modes(stream_modes: list[str] | str | None) -> list[str] | str | None:
     """将前端/SSE 名称翻译为 LangGraph 内部 stream_mode 名称。
@@ -287,6 +296,12 @@ async def _stream_one_round(
                 # messages 模式：逐 token chunk（AIMessageChunk + metadata），
                 # 以独立 "stream" 事件转发，供前端就地增量展示推理/正文。
                 if isinstance(serialized_chunk, (list, tuple)) and len(serialized_chunk) == 2:
+                    # 承诺子图（delegate_with_review 节点）的 token 属内部消息，
+                    # 仅由 trace 面板展示，不渲染进主聊天 → 跳过转发。
+                    metadata = serialized_chunk[1] if len(serialized_chunk) > 1 else None
+                    node = metadata.get("langgraph_node") if isinstance(metadata, dict) else None
+                    if node in _COMMITMENT_STREAM_NODES:
+                        continue
                     token_dict = serialized_chunk[0]
                     bridge.publish(
                         record.run_id,
