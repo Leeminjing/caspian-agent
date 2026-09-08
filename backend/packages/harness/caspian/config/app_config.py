@@ -132,10 +132,36 @@ def _resolve_env_item(value):
     return value
 
 
+def _resolve_config_path(yaml_path: str) -> str:
+    """解析 config.yaml 路径，使其不依赖进程工作目录。
+
+    输入:
+        yaml_path: str — 配置路径（可为相对/绝对）
+
+    输出:
+        str — 解析后的绝对路径
+
+    工作流:
+        (1) 传入路径已存在 → 原样返回（保持既有行为，cwd 优先）
+        (2) 相对路径且 cwd 不存在 → 回退到 CASPIAN_HOME 托管 app 目录下的 config.yaml
+        (3) 均不存在 → 原样返回，由调用方抛 FileNotFoundError
+    """
+    p = Path(yaml_path)
+    if p.exists():
+        return yaml_path
+    if not p.is_absolute():
+        raw_home = os.environ.get("CASPIAN_HOME")
+        base = Path(raw_home).expanduser() if raw_home else (Path.home() / ".caspian")
+        alt = base / "app" / p
+        if alt.exists():
+            return str(alt)
+    return yaml_path
+
+
 def get_app_config(yaml_path: str) -> AppConfig:
     global _app_config
     if _app_config is None:
-        raw = _load_yaml(yaml_path)
+        raw = _load_yaml(_resolve_config_path(yaml_path))
         resolved = _resolve_env_vars(raw)
         _app_config = AppConfig.model_validate(resolved)
     return _app_config
@@ -143,7 +169,7 @@ def get_app_config(yaml_path: str) -> AppConfig:
 
 def reload_app_config(yaml_path: str) -> AppConfig:
     global _app_config
-    raw = _load_yaml(yaml_path)
+    raw = _load_yaml(_resolve_config_path(yaml_path))
     resolved = _resolve_env_vars(raw)
     _app_config = AppConfig.model_validate(resolved)
     return _app_config

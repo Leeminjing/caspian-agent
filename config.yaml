@@ -2,9 +2,9 @@ models:
   - name: deepseek-v4-flash-vision-exp
     display_name: Other OpenAI-compatible / deepseek-v4-flash-vision-exp
     use: caspian.models.deepseek:DeepSeekChatOpenAI
-    model: deepseek-v4-flash-vision-exp
+    model: ${OPENAI_MODEL:-deepseek-v4-flash-vision-exp}
     api_key: $OPENAI_API_KEY
-    base_url: https://api.deepseek.com
+    base_url: ${OPENAI_BASE_URL:-https://api.deepseek.com}
     vision: true
 
 agent:
@@ -49,7 +49,8 @@ sandbox:
   # 沙箱后端由环境变量 CASPIAN_SANDBOX 决定（.env / .env.example 提供）：
   #   容器沙箱(默认): CASPIAN_SANDBOX=caspian.community.aio_sandbox.aio_sandbox:AioSandbox
   #   本机沙箱(开发): CASPIAN_SANDBOX=caspian.sandbox.local:LocalSandbox
-  use: $CASPIAN_SANDBOX
+  # 未显式设置时默认回落 LocalSandbox（无 OS 隔离，仅路径/shell/regex 守卫；需容器隔离请设置如上）。
+  use: ${CASPIAN_SANDBOX:-caspian.sandbox.local:LocalSandbox}
   image: ghcr.io/agent-infra/sandbox:latest
   port: 8080
   replicas: 3
@@ -117,7 +118,7 @@ langgraph_store:
   embed: qwen3.7-text-embedding
   dims: 1024
   fields: ["$"]
-  embed_base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+  embed_base_url: ${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
   embed_api_key: $DASHSCOPE_API_KEY
 
 database:

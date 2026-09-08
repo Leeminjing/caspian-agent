@@ -90,7 +90,12 @@ def _ocr_pdf_page(real_path: str, page_index: int) -> str:
 
 
 def _read_docx(real_path: str) -> str:
-    from docx import Document
+    try:
+        from docx import Document
+    except ImportError:
+        raise RuntimeError(
+            "读取 .docx 需要 python-docx；请安装 Caspian 的 [full] 扩展：`pip install -e .[full]`。"
+        )
 
     doc = Document(real_path)
     parts = []
@@ -120,7 +125,7 @@ def _read_doc(real_path: str) -> str:
             pass
 
     raise RuntimeError(
-        "无法读取 .doc 文件。请安装 LibreOffice 或将文件转换为 .docx 格式。"
+        "无法读取 .doc 文件。请安装 Caspian 的 [full] 扩展（olefile 或 LibreOffice），或将文件转换为 .docx 格式。"
     )
 
 

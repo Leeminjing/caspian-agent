@@ -155,24 +155,22 @@ class TestWriteReadRoundTrip(unittest.TestCase):
 
 class TestContractWritesDecisionTable(unittest.TestCase):
     def test_contract_with_stage_results_writes_decision_table(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch(
-                "caspian.agents.commitment.artifacts._PROJECT_ROOT",
-                Path(temp_dir),
-            ):
-                contract, contract_ref = _write_contract(
-                    "thread-1",
-                    {"contract_markdown": "# Contract"},
-                    STAGE_TWO,
-                    STAGE_THREE,
-                )
-                self.assertEqual(contract, "# Contract")
-                self.assertTrue((Path(temp_dir) / contract_ref).is_file())
+        from caspian.runtime.home import caspian_users
 
-                table = read_decision_table("thread-1", root=Path(temp_dir))
-                self.assertIsNotNone(table)
-                self.assertEqual(len(table.rows), 3)
-                self.assertEqual(table.rows[0].priority, 3)
+        contract, contract_ref = _write_contract(
+            "thread-1",
+            {"contract_markdown": "# Contract"},
+            STAGE_TWO,
+            STAGE_THREE,
+        )
+        self.assertEqual(contract, "# Contract")
+        # 合同与决策表落在隔离的 CASPIAN_HOME/users 下（conftest 已隔离）
+        self.assertTrue((caspian_users() / contract_ref).is_file())
+
+        table = read_decision_table("thread-1")
+        self.assertIsNotNone(table)
+        self.assertEqual(len(table.rows), 3)
+        self.assertEqual(table.rows[0].priority, 3)
 
     def test_contract_without_stage_results_skips_decision_table(self):
         with tempfile.TemporaryDirectory() as temp_dir:

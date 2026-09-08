@@ -46,6 +46,13 @@ from caspian.agents.commitment.stage_rules import _safe_segment, _slug_segment
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[6]
 
+
+def _users_root() -> Path:
+    """用户数据落盘根：`~/.caspian/users`（程序代码与用户数据硬分隔，见 caspian/runtime/home.py）。"""
+    from caspian.runtime.home import caspian_users
+
+    return caspian_users()
+
 def _write_knowledge(result: dict[str, Any]) -> list[str]:
     files: list[str] = []
     for item in result.get("knowledge", []):
@@ -59,7 +66,7 @@ def _write_knowledge(result: dict[str, Any]) -> list[str]:
         if not source.startswith("http") or not content:
             raise ValueError("knowledge 项必须包含官方 source_url 和 content")
         relative_path = Path("knowledge") / f"{technology_slug}-{version}.md"
-        path = _PROJECT_ROOT / relative_path
+        path = _users_root() / relative_path
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             f"# {technology} {version}\n\nSource: {source}\n\n{content}\n",
@@ -85,7 +92,7 @@ def _write_contract(
         relative_path = Path("requirements") / str(user_id) / safe_thread_id / "task-contract.md"
     else:
         relative_path = Path("requirements") / safe_thread_id / "task-contract.md"
-    path = _PROJECT_ROOT / relative_path
+    path = _users_root() / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contract + "\n", encoding="utf-8")
     if stage_two_result is not None and stage_three_result is not None:
@@ -94,14 +101,13 @@ def _write_contract(
             stage_two_result,
             stage_three_result,
             user_id=user_id,
-            root=_PROJECT_ROOT,
         )
     return contract, relative_path.as_posix()
 
 def _build_final_message(contract: str, knowledge_files: list[str]) -> str:
     sections = [f"<task_contract>\n{contract}\n</task_contract>"]
     for name in knowledge_files:
-        content = (_PROJECT_ROOT / name).read_text(encoding="utf-8")
+        content = (_users_root() / name).read_text(encoding="utf-8")
         sections.append(
             f'<theoretical foundation source="{name}">\n'
             f"{content}\n"

@@ -176,6 +176,28 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 
 ## 快速开始 / Quick Start
 
+### 一键使用（推荐：陌生人与自己同一套）
+
+- **首次安装**（只需 Git/Python/Docker）：
+  ```powershell
+  irm https://raw.githubusercontent.com/Leeminjing/caspian-agent/main/install.ps1 | iex
+  ```
+- **之后只用两条命令**（升级自动 `git reset --hard` 到最新 main + 同步依赖）：
+  ```powershell
+  caspian          # 检查 Python/Docker → 启动 PostgreSQL(pgvector) → alembic upgrade → 启动网关
+  caspian update   # git fetch + reset --hard origin/main + pip 同步依赖
+  ```
+- **Key 用 Claude Code 同款 `setx` 持久环境变量**（安装后照抄，然后**重开终端**）：
+  ```powershell
+  setx OPENAI_API_KEY     "<your DeepSeek key>"
+  setx DASHSCOPE_API_KEY  "<your DashScope key>"
+  setx OPENAI_BASE_URL    "https://api.deepseek.com"   # optional
+  setx OPENAI_MODEL       "deepseek-v4-flash-vision-exp"   # optional
+  ```
+- **默认路径**：`LocalSandbox`（**无 OS 隔离**，仅虚拟路径白名单 + shell 守卫 + regex 审计）+ PostgreSQL（**仅 Docker 负责**）。要容器隔离时 `setx CASPIAN_SANDBOX "caspian.community.aio_sandbox.aio_sandbox:AioSandbox"` 或走下方完整 `docker-compose` 路径。
+- **安全提示**：`irm ... | iex` 会执行远程 PowerShell 脚本，请先审阅来源；更稳妥可先 `irm <url>`（仅下载）校验哈希后再执行。
+- **目录契约**：`~/.caspian/` 下 `app/` 只放程序代码（`caspian update` 的 `git reset --hard` 安全），用户数据（决策表/任务合同/沙箱数据）在 `users/`，`config/.env` 存机器本地运行时默认，`runtime/.venv` 为依赖虚拟环境。
+
 ### 本地数据库 / Local database
 - PostgreSQL container: `desktop-postgres-1` (PostgreSQL 17 + pgvector).
 - Host/port: `127.0.0.1:7221`. App database: `caspian`; app role: `caspian`. Required extension: `vector`.
