@@ -51,6 +51,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 
 from caspian.sandbox.base import Sandbox
 from caspian.sandbox.path_utils import (
@@ -65,12 +66,29 @@ from caspian.sandbox.readers import _read_pdf, _read_docx, _read_doc
 
 logger = logging.getLogger(__name__)
 
-SHELL_MAP = {
-    "bash":       ("bash",            ["-c"]),
-    "sh":         ("sh",              ["-c"]),
-    "cmd":        ("cmd.exe",         ["/c"]),
-    "powershell": ("powershell.exe",  ["-Command"]),
-}
+
+def _shell_map(platform: str | None = None) -> dict[str, tuple[str, list[str]]]:
+    """按平台返回可用的 shell 集合：bash/sh 恒有；cmd/powershell 仅 Windows。
+
+    输入:
+        platform: str | None — 目标平台（默认取当前 sys.platform），供测试注入
+
+    输出:
+        dict[str, tuple[str, list[str]]] — shell_type -> (可执行文件, 参数列表)
+    """
+    plat = platform if platform is not None else sys.platform
+    available: dict[str, tuple[str, list[str]]] = {
+        "bash": ("bash", ["-c"]),
+        "sh": ("sh", ["-c"]),
+    }
+    if plat == "win32":
+        available["cmd"] = ("cmd.exe", ["/c"])
+        available["powershell"] = ("powershell.exe", ["-Command"])
+    return available
+
+
+SHELL_MAP = _shell_map()
+
 
 class LocalSandbox(Sandbox):
 

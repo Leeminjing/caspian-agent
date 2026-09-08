@@ -65,3 +65,19 @@ jobs:
         run: pip install -e "backend/packages/harness[dev,aiosandbox]"
       - name: Run sandbox / path-security / tool-loading tests
         run: python -m pytest backend/packages/harness/tests -m "not live" -q -k "sandbox or aio_sandbox or path_security or tool_loading"
+
+  unix-install:
+    name: unix-install (syntax check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # install.sh 的完整安装需真实网络/venv，且 macOS runner 无 Docker；这里先用 bash 校验脚本语法，
+      # 平台守卫（bash/sh 恒有 / cmd+powerShell 仅 Windows）由 python-unit 里的 test_unix_install.py 覆盖。
+      - name: install.sh syntax check
+        run: bash -n install.sh
+      - name: python3-version guard logic sanity
+        run: |
+          set -e
+          python3 -c 'import sys; raise SystemExit(not (sys.version_info >= (3, 11)))' \
+            && echo "python3 >= 3.11 OK" \
+            || { echo "python3 < 3.11 (guard will reject)"; exit 1; }

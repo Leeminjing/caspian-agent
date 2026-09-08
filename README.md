@@ -197,6 +197,14 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 - **默认路径**：`LocalSandbox`（**无 OS 隔离**，仅虚拟路径白名单 + shell 守卫 + regex 审计）+ PostgreSQL（**仅 Docker 负责**）。要容器隔离时 `setx CASPIAN_SANDBOX "caspian.community.aio_sandbox.aio_sandbox:AioSandbox"` 或走下方完整 `docker-compose` 路径。
 - **安全提示**：`irm ... | iex` 会执行远程 PowerShell 脚本，请先审阅来源；更稳妥可先 `irm <url>`（仅下载）校验哈希后再执行。
 - **目录契约**：`~/.caspian/` 下 `app/` 只放程序代码（`caspian update` 的 `git reset --hard` 安全），用户数据（决策表/任务合同/沙箱数据）在 `users/`，`config/.env` 存机器本地运行时默认，`runtime/.venv` 为依赖虚拟环境。
+- **macOS / Linux**（无 PowerShell / `setx`）：用同款 `install.sh`，key 改用 `export` 写入 shell profile：
+  ```bash
+  curl -fsSL https://raw.githubusercontent.com/Leeminjing/caspian-agent/main/install.sh | sh
+  # 然后把下面的 export 写进 ~/.zshrc（macOS）或 ~/.bashrc（Linux），重开终端：
+  export OPENAI_API_KEY="<your DeepSeek key>"
+  export DASHSCOPE_API_KEY="<your DashScope key>"
+  ```
+  之后同样用 `caspian` / `caspian update`。沙箱在 macOS/Linux 仅暴露 `bash`/`sh`（无 `cmd`/`powershell`）；需 python3 ≥ 3.11（macOS 系统自带常为 3.9，可 `brew install python@3.11`）。
 
 ### 本地数据库 / Local database
 - PostgreSQL container: `desktop-postgres-1` (PostgreSQL 17 + pgvector).
