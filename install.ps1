@@ -9,11 +9,11 @@
 $ErrorActionPreference = "Stop"
 
 $RepoUrl = "https://github.com/Leeminjing/caspian-agent.git"
-$Home = Join-Path $env:USERPROFILE ".caspian"
-$App = Join-Path $Home "app"
-$Venv = Join-Path $Home "runtime\.venv"
-$Bin = Join-Path $Home "bin"
-$ConfigDir = Join-Path $Home "config"
+$CaspHome = Join-Path $env:USERPROFILE ".caspian"
+$App = Join-Path $CaspHome "app"
+$Venv = Join-Path $CaspHome "runtime\.venv"
+$Bin = Join-Path $CaspHome "bin"
+$ConfigDir = Join-Path $CaspHome "config"
 $EnvFile = Join-Path $ConfigDir ".env"
 
 function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan }
@@ -33,8 +33,8 @@ if ($missing.Count -gt 0) {
 }
 
 # 2) 家目录
-Write-Step "Creating $Home"
-New-Item -ItemType Directory -Force -Path $Home, $ConfigDir, $Bin | Out-Null
+Write-Step "Creating $CaspHome"
+New-Item -ItemType Directory -Force -Path $CaspHome, $ConfigDir, $Bin | Out-Null
 
 # 3) git clone
 Write-Step "Cloning $RepoUrl -> $App"
