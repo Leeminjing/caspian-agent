@@ -193,12 +193,13 @@ class ThreadLifecycleService:
                     logger.warning(
                         "删除会话: store goal 清理失败 tid=%s", thread_id, exc_info=True
                     )
-        # 文件系统：线程目录（含 user-data 与压缩存档）+ requirements 目录
+        # 文件系统：线程目录（含 user-data 与压缩存档）+ requirements 目录（home 化，cwd 无关）
         from caspian.sandbox.path_utils import REAL_ROOT
+        from caspian.runtime.home import caspian_users
 
         thread_dir = Path(REAL_ROOT.format(user_id=str(user_id), thread_id=str(thread_id))).parent
         shutil.rmtree(thread_dir, ignore_errors=True)
-        shutil.rmtree(Path("requirements") / str(thread_id), ignore_errors=True)
+        shutil.rmtree(caspian_users() / "requirements" / str(thread_id), ignore_errors=True)
 
     async def delete(self, user_id: str, thread_id: str) -> dict[str, Any]:
         """级联硬删除会话及其全部派生后裔，不可恢复。

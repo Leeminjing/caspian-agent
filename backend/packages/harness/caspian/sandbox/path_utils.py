@@ -6,10 +6,10 @@
 常量：
     VRROOT: 虚拟路径前缀常量 "/mnt/user-data"
     SKILLS_VROOT: skills 虚拟路径前缀常量 "/mnt/skills"
-    REAL_ROOT: 真实路径根模板 ".caspian/users/{user_id}/threads/{thread_id}/user-data"
+    REAL_ROOT: 真实路径根模板（基于 CASPIAN_HOME/users 的绝对路径）"{user_id}/threads/{thread_id}/user-data"
     SUBDIRS: 预创子目录列表 ["workspace", "uploads", "outputs"]
     SKILLS_PUBLIC_REAL_ROOT: public skills 宿主机存储路径 "skills"
-    SKILLS_CUSTOM_REAL_ROOT: custom skills 宿主机存储路径模板 ".caspian/users/{user_id}/skills"
+    SKILLS_CUSTOM_REAL_ROOT: custom skills 宿主机存储路径模板（基于 CASPIAN_HOME/users 的绝对路径）"{user_id}/skills"
 
 shell 命令安全三维防护常量：
     _ABSOLUTE_PATH_PATTERN: 匹配 Unix 和 Windows 绝对路径
@@ -50,13 +50,13 @@ shell 命令安全三维防护常量：
 
 示例:
     resolve_path("/mnt/user-data/workspace/script.py", "uuid-xxx", "abc123")
-    → ".caspian/users/uuid-xxx/threads/abc123/user-data/workspace/script.py"
+    → "<CASPIAN_HOME>/users/uuid-xxx/threads/abc123/user-data/workspace/script.py"
 
     resolve_skill_path("/mnt/skills/public/pdf/SKILL.md", user_id="u-1")
     → "skills/public/pdf/SKILL.md" 的绝对路径
 
     resolve_skill_path("/mnt/skills/custom/my-skill/SKILL.md", user_id="u-1")
-    → ".caspian/users/u-1/skills/custom/my-skill/SKILL.md" 的绝对路径
+    → "<CASPIAN_HOME>/users/u-1/skills/custom/my-skill/SKILL.md" 的绝对路径
 
     validate_shell_command("cat /etc/passwd")  → SecurityError
     validate_shell_command("cat /mnt/user-data/workspace/foo.py")  → None
@@ -69,12 +69,20 @@ from pathlib import Path, PurePosixPath
 
 logger = logging.getLogger(__name__)
 
+def _users_dir() -> str:
+    """家目录 users 根：`CASPIAN_HOME/users`（或 `~/.caspian`/users），绝对路径、cwd 无关。"""
+    raw = os.environ.get("CASPIAN_HOME")
+    base = Path(raw).expanduser() if raw else (Path.home() / ".caspian")
+    return str(base / "users")
+
+
 VRROOT = "/mnt/user-data"
 SKILLS_VROOT = "/mnt/skills"
-REAL_ROOT = ".caspian/users/{user_id}/threads/{thread_id}/user-data"
+# 沙箱与用户数据根：home 化（绝对路径，不依赖进程 cwd），见 caspian/runtime/home.py。
+REAL_ROOT = os.path.join(_users_dir(), "{user_id}/threads/{thread_id}/user-data")
 SUBDIRS = ["workspace", "uploads", "outputs"]
 SKILLS_PUBLIC_REAL_ROOT = "skills"
-SKILLS_CUSTOM_REAL_ROOT = ".caspian/users/{user_id}/skills"
+SKILLS_CUSTOM_REAL_ROOT = os.path.join(_users_dir(), "{user_id}/skills")
 
 
 class SecurityError(Exception):

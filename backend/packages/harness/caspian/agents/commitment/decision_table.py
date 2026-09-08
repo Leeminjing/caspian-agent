@@ -326,7 +326,13 @@ def rewrite_decision_table(
         str | None — 写入成功返回 version；CAS 冲突或任何失败返回 None 并记录日志
     """
     try:
-        base = root if root is not None else _PROJECT_ROOT
+        # 默认基址 = ~/.caspian/users（用户数据与程序代码硬分隔）；root 为测试/迁移显式指定时按其解析。
+        if root is not None:
+            base = root
+        else:
+            from caspian.runtime.home import caspian_users
+
+            base = caspian_users()
         path = _table_path(base, user_id, thread_id)
 
         if expected_version is not None:
@@ -397,16 +403,25 @@ def read_decision_table(
     输出:
         DecisionTable | None — 解析成功返回实例；文件不存在、格式非法或解析异常返回 None
     """
-    base = root if root is not None else _PROJECT_ROOT
-    path = _table_path(base, user_id, thread_id)
-    try:
-        content = path.read_text(encoding="utf-8")
-        return _parse_decision_table(content)
-    except FileNotFoundError:
-        return None
-    except Exception:
-        logger.warning("解析决策等级表失败 (thread_id=%s)", thread_id, exc_info=True)
-        return None
+    # 默认基址 = ~/.caspian/users；root 为测试/迁移显式指定时按其解析。
+    if root is not None:
+        candidates = [root]
+    else:
+        from caspian.runtime.home import caspian_users
+
+        # home 优先读取；旧仓库根 requirements/{thread} 作为兼容回退（数据迁移期间不丢失）。
+        candidates = [caspian_users(), _PROJECT_ROOT]
+    for base in candidates:
+        path = _table_path(base, user_id, thread_id)
+        try:
+            content = path.read_text(encoding="utf-8")
+            return _parse_decision_table(content)
+        except FileNotFoundError:
+            continue
+        except Exception:
+            logger.warning("解析决策等级表失败 (thread_id=%s)", thread_id, exc_info=True)
+            return None
+    return None
 
 
 def _parse_v2_rows(data: dict) -> list[DecisionRow]:

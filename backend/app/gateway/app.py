@@ -34,6 +34,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
+from caspian.runtime.home import caspian_env_file
+
 from backend.app.gateway.auth.config import AuthConfig
 from backend.app.gateway.deps import langgraph_runtime
 
@@ -41,8 +43,13 @@ from backend.app.gateway.deps import langgraph_runtime
 import backend.app.gateway.models  # noqa: F401
 import backend.app.gateway.context.models  # noqa: F401
 
-# 在所有配置加载之前注入 .env 环境变量
-load_dotenv()
+# 在所有配置加载之前注入环境变量。优先从 ~/.caspian/config/.env 读取（不覆盖已 setx 的真环境变量）；
+# 文件不存在时回退到进程工作目录的 .env。
+home_env_file = caspian_env_file()
+if home_env_file.exists():
+    load_dotenv(home_env_file, override=False)
+else:
+    load_dotenv()
 
 # psycopg 异步驱动要求 SelectorEventLoop（Windows 默认 ProactorEventLoop 不兼容）
 # 必须在 uvicorn 创建事件循环之前设置

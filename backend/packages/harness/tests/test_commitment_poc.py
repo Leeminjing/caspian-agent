@@ -62,6 +62,7 @@ from caspian.agents.commitment import (
 from caspian.agents.commitment.tracing import emit_commitment_messages
 from caspian.config.commitment_config import CommitmentConfig
 from caspian.mcp.tools import get_context7_tools
+from caspian.runtime.home import caspian_users
 from caspian.runtime.runs.schemas import RunStatus
 from caspian.runtime.runs.worker import _extract_interrupts, run_agent
 
@@ -1783,7 +1784,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         ):
             first = await supervisor.ainvoke(initial_state, config=config)
             contract_path = (
-                Path(temp_dir)
+                caspian_users()
                 / "requirements"
                 / "contract-review-thread"
                 / "task-contract.md"
@@ -2252,8 +2253,8 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                     "thread-1", {"contract_markdown": "# Contract"}
                 )
                 message = _build_final_message(contract, files)
-                self.assertTrue((Path(temp_dir) / files[0]).is_file())
-                self.assertTrue((Path(temp_dir) / contract_ref).is_file())
+                self.assertTrue((caspian_users() / files[0]).is_file())
+                self.assertTrue((caspian_users() / contract_ref).is_file())
                 self.assertIn("<task_contract>", message)
                 self.assertIn("<theoretical foundation", message)
 
@@ -2290,7 +2291,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertIn(
                     "# shadcn/ui 3.5.0",
-                    (Path(temp_dir) / files[1]).read_text(encoding="utf-8"),
+                    (caspian_users() / files[1]).read_text(encoding="utf-8"),
                 )
 
     async def test_middleware_only_runs_for_explicit_commit_command(self):
