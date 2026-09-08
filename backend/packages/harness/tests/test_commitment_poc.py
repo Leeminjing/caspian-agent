@@ -2657,6 +2657,45 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(bridge.events[-2][1].data["actor"], "worker")
         self.assertTrue(bridge.ended)
 
+    async def test_stream_one_round_filters_commitment_subgraph_tokens(self):
+        from caspian.runtime.runs.worker import _stream_one_round
+
+        class MsgAgent:
+            async def astream(self, *_args, **_kwargs):
+                yield "messages", (
+                    AIMessageChunk(content="子图内部"),
+                    {"langgraph_node": "delegate_with_review"},
+                )
+                yield "messages", (
+                    AIMessageChunk(content="Lead公开"),
+                    {"langgraph_node": "model"},
+                )
+                yield "values", {"messages": [AIMessage(content="done")]}
+
+        record = SimpleNamespace(
+            run_id="run-1",
+            abort_event=asyncio.Event(),
+            _usage_seen_ids=set(),
+            prompt_input_tokens=0,
+            prompt_cache_hit_tokens=0,
+        )
+        bridge = FakeBridge()
+        await _stream_one_round(
+            MsgAgent(),
+            {"messages": [HumanMessage(content="x")]},
+            {"configurable": {"thread_id": "t"}},
+            ["messages", "values"],
+            None,
+            record,
+            bridge,
+        )
+        streamed = [
+            ev[1].data.get("message", {}).get("content")
+            for ev in bridge.events
+            if ev[1].event == "stream"
+        ]
+        self.assertEqual(streamed, ["Lead公开"])
+
 
 class CommitInstructionSkillTokenTests(unittest.TestCase):
     def test_leading_skill_tokens_do_not_block_commit_trigger(self):
