@@ -46,6 +46,33 @@ from caspian.runtime.stream_bridge.base import StreamBridge
 logger = logging.getLogger(__name__)
 
 
+def _resolve_model_config(app_config: Any, model_name: str | None) -> Any:
+    """按 name 解析模型配置；未指定 name 时取配置第一项。"""
+    if model_name is None:
+        if not app_config.models:
+            raise HTTPException(status_code=500, detail="未配置任何模型")
+        return app_config.models[0]
+    for m in app_config.models:
+        if m.name == model_name:
+            return m
+    if app_config.models:
+        return app_config.models[0]
+    raise HTTPException(status_code=500, detail="未配置任何模型")
+
+
+def _messages_contain_image(messages: list | None) -> bool:
+    """检查请求消息中是否含 OpenAI 兼容的 image_url 内容块。"""
+    for message in messages or []:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "image_url":
+                    return True
+    return False
+
+
 def _validated_selected_skills(body: Any, user_id: str) -> list[str]:
     from caspian.agents.lead.agent import (
         build_enabled_skill_catalog,
@@ -157,6 +184,15 @@ async def start_run(
     model_name = None
     if hasattr(body, "context") and body.context:
         model_name = body.context.get("model_name") if isinstance(body.context, dict) else getattr(body.context, "model_name", None)
+
+    # (2.6) 多模态守卫：user 消息携带 image_url 内容块但模型不支持视觉 → 明确 4xx
+    resolved_model = _resolve_model_config(app_config, model_name)
+    raw_messages = body.input.get("messages") if isinstance(getattr(body, "input", None), dict) else None
+    if _messages_contain_image(raw_messages) and not getattr(resolved_model, "vision", False):
+        raise HTTPException(
+            status_code=422,
+            detail=f"模型 {resolved_model.name} 不支持图片输入，请切换到 vision 模型后重试",
+        )
 
     record = run_manager.create(
         thread_id=thread_id,

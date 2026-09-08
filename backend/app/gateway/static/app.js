@@ -56,6 +56,7 @@ const state = {
   streamSeq: 0,
   activeStreamId: 0,
   uploads: [],
+  pastedImages: [],
   renderedMessageIds: new Set(),
   toolEntries: new Map(),
   commitmentMessageIds: new Set(),
@@ -740,10 +741,10 @@ function scheduleContentRender(h) {
   }, STREAM_MD_THROTTLE_MS);
 }
 
-function addMessage(role, content, id = "") {
+function addMessage(role, content, id = "", images = []) {
   const text = String(content || "").trim();
-  if (!text) return;
-  const key = id || `${role}:${text}`;
+  if (!text && !images.length) return;
+  const key = id || `${role}:${text}:${images.length}`;
   if (state.renderedMessageIds.has(key)) return;
   state.renderedMessageIds.add(key);
   removeEmptyState();
@@ -761,6 +762,19 @@ function addMessage(role, content, id = "") {
     }
   } else {
     body.textContent = text;
+  }
+  // 粘贴图片缩略图：仅来自用户自己粘贴的 base64 data URL，安全渲染
+  if (images && images.length) {
+    const div = document.createElement("div");
+    div.className = "message-images";
+    images.forEach((img) => {
+      const el = document.createElement("img");
+      el.className = "message-image";
+      el.src = img.dataUrl;
+      el.alt = img.name || "粘贴的图片";
+      div.append(el);
+    });
+    body.append(div);
   }
   message.append(body);
   $("#messages").append(message);
@@ -1864,7 +1878,7 @@ function renderGoalBadge(goal) {
 async function submitTask(content, selectedSkills = []) {
   const thread = currentThread();
   if (thread && thread.title === "新会话") {
-    const autoTitle = content.replace(/\s+/g, " ").slice(0, 32);
+    const autoTitle = (content.trim() || "图片任务").replace(/\s+/g, " ").slice(0, 32);
     thread.title = autoTitle;
     thread.updatedAt = Date.now();
     saveThreads();
@@ -1874,15 +1888,23 @@ async function submitTask(content, selectedSkills = []) {
     renameThread(thread.id, autoTitle).catch(() => {});
   }
   state.followMessages = true;
-  addMessage("user", content);
+  const text = content.trim();
+  const pasted = state.pastedImages;
   const files = state.uploads.map(({ filename, size }) => ({ filename, size }));
+  // 组装用户消息：粘贴图片 → image_url 内容块；纯文本保持字符串（向后兼容）
+  const messageContent = window.CaspianImagePaste
+    ? window.CaspianImagePaste.buildUserMessageContent(text, pasted)
+    : (pasted.length ? [{ type: "text", text }, ...pasted.map((img) => ({ type: "image_url", image_url: { url: img.dataUrl } }))] : text);
+  state.pastedImages = [];
   state.uploads = [];
   renderAttachments();
+  renderPastedImages();
+  addMessage("user", text, "", pasted);
   await streamRun({
     input: {
       messages: [{
         role: "user",
-        content,
+        content: messageContent,
         additional_kwargs: files.length ? { files } : undefined,
       }],
     },
@@ -2000,6 +2022,69 @@ function renderAttachments() {
     container.append(item);
   });
   container.hidden = state.uploads.length === 0;
+}
+
+// 粘贴图片（视觉模型）：读剪贴板图片 → base64 data URL → 进入 state.pastedImages
+const PASTE_IMAGE_MAX_BYTES = 8 * 1024 * 1024;
+
+function readAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+function selectedModelVision() {
+  const model = state.models.find((m) => m.name === state.modelName);
+  return Boolean(model && model.vision);
+}
+
+function renderPastedImages() {
+  const container = $("#pasted-images");
+  if (!container) return;
+  container.replaceChildren();
+  state.pastedImages.forEach((img, index) => {
+    const item = document.createElement("span");
+    item.className = "pasted-image";
+    const thumb = document.createElement("img");
+    thumb.src = img.dataUrl;
+    thumb.alt = img.name || "粘贴的图片";
+    const label = document.createElement("span");
+    label.className = "pasted-image-name";
+    label.textContent = img.name || "图片";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "pasted-image-remove";
+    remove.setAttribute("aria-label", "移除图片");
+    remove.textContent = "×";
+    remove.addEventListener("click", () => {
+      state.pastedImages.splice(index, 1);
+      renderPastedImages();
+    });
+    item.append(thumb, label, remove);
+    container.append(item);
+  });
+  container.hidden = state.pastedImages.length === 0;
+}
+
+async function addPastedImages(files) {
+  for (const file of files) {
+    if (file.size > PASTE_IMAGE_MAX_BYTES) {
+      addMessage("error", `图片「${file.name || "粘贴的图片"}」过大（${Math.round(file.size / 1024 / 1024)} MB），已忽略，上限 ${Math.round(PASTE_IMAGE_MAX_BYTES / 1024 / 1024)} MB`);
+      continue;
+    }
+    const dataUrl = await readAsDataUrl(file);
+    const ext = String(file.type.split("/")[1] || "png").replace(/[^a-z0-9]/gi, "");
+    state.pastedImages.push({
+      dataUrl,
+      name: file.name || `paste-${Date.now()}.${ext}`,
+      mimeType: file.type,
+      size: file.size,
+    });
+  }
+  renderPastedImages();
 }
 
 function handleError(error) {
@@ -2174,12 +2259,32 @@ $("#message-input").addEventListener("keydown", (event) => {
   }
 });
 
+// 粘贴图片：仅当当前模型支持视觉时捕获剪贴板图片 → 缩略图 chip；否则忽略并提示
+$("#message-input").addEventListener("paste", (event) => {
+  const items = event.clipboardData?.items;
+  if (!items) return;
+  const imageFiles = [];
+  for (const item of items) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) imageFiles.push(file);
+    }
+  }
+  if (!imageFiles.length) return;
+  event.preventDefault();
+  if (!selectedModelVision()) {
+    addMessage("error", "当前模型不支持图片输入，已忽略粘贴的图片");
+    return;
+  }
+  addPastedImages(imageFiles);
+});
+
 $("#composer").addEventListener("submit", async (event) => {
   event.preventDefault();
   const input = $("#message-input");
   const selectedSkills = window.CaspianSkills?.selectedNames(input.value) || [];
   const content = window.CaspianSkills?.messageText(input.value) || input.value.trim();
-  if (!content || state.running || state.pendingInterrupt) return;
+  if ((!content && !state.pastedImages.length) || state.running || state.pendingInterrupt) return;
   state.activeSelectedSkills = selectedSkills;
   input.value = "";
   resizeComposer();

@@ -29,7 +29,7 @@ async def list_models() -> dict:
     cfg = get_app_config("config.yaml")
     return {
         "models": [
-            {"name": m.name, "display_name": m.display_name}
+            {"name": m.name, "display_name": m.display_name, "vision": m.vision}
             for m in cfg.models
         ]
     }
