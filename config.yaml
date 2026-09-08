@@ -1,10 +1,11 @@
 models:
-  - name: deepseek-v4-flash
-    display_name: Other OpenAI-compatible / deepseek-v4-flash
+  - name: deepseek-v4-flash-vision-exp
+    display_name: Other OpenAI-compatible / deepseek-v4-flash-vision-exp
     use: caspian.models.deepseek:DeepSeekChatOpenAI
-    model: deepseek-v4-flash
+    model: deepseek-v4-flash-vision-exp
     api_key: $OPENAI_API_KEY
     base_url: https://api.deepseek.com
+    vision: true
 
 agent:
   recursion_limit: 300

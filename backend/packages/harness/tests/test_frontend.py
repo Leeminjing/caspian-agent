@@ -231,6 +231,37 @@ class FrontendTests(unittest.TestCase):
         self.assertIn('"models"', router)
 
 
+    def test_image_paste_wiring(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        pure = (STATIC_DIR / "image-paste.js").read_text(encoding="utf-8")
+        css = (STATIC_DIR / "app.css").read_text(encoding="utf-8")
+        router = (ROUTERS_DIR / "models.py").read_text(encoding="utf-8")
+
+        # 资源注册与加载顺序：image-paste.js 先于 app.js
+        self.assertIn("/assets/image-paste.js", html)
+        self.assertLess(html.index("image-paste.js"), html.index("app.js"))
+
+        # 粘贴图片状态与粘贴监听
+        self.assertIn("pastedImages: []", script)
+        self.assertIn('addEventListener("paste"', script)
+        self.assertIn("getAsFile", script)
+        self.assertIn("selectedModelVision", script)
+        self.assertIn('type.startsWith("image/")', script)
+
+        # 内容块构造（复用纯函数模块）与纯函数定义
+        self.assertIn("CaspianImagePaste.buildUserMessageContent", script)
+        self.assertIn("function buildUserMessageContent", pure)
+        self.assertIn('type: "image_url"', pure)
+        self.assertIn("image_url: { url: img.dataUrl }", pure)
+
+        # 视觉模型门控：/api/models 输出 vision 标志
+        self.assertIn('"vision": m.vision', router)
+
+        # 粘贴缩略图样式
+        self.assertIn(".pasted-image {", css)
+        self.assertIn(".message-image {", css)
+
     def test_plan_review_surface_and_wiring(self):
         markup = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
         script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")

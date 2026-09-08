@@ -215,7 +215,12 @@ class UploadsMiddleware(AgentMiddleware):
         if tag is None:
             return None
 
-        new_content = (last_msg.content or "") + "\n\n" + tag
+        # 消息 content 可能是多模态内容块列表（如粘贴图片产生的 image_url 块），
+        # 此时不能做字符串拼接（会冲掉整份列表），改为追加一个 text 内容块。
+        if isinstance(last_msg.content, list):
+            new_content = list(last_msg.content) + [{"type": "text", "text": tag}]
+        else:
+            new_content = (last_msg.content or "") + "\n\n" + tag
         new_msg = HumanMessage(
             content=new_content,
             id=last_msg.id,

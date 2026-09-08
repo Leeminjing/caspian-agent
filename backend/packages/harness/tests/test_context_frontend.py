@@ -8,6 +8,7 @@ from pathlib import Path
 
 STATIC_DIR = Path(__file__).resolve().parents[3] / "app" / "gateway" / "static"
 NODE_TEST = Path(__file__).resolve().with_name("context-editor.test.cjs")
+NODE_IMAGE_PASTE_TEST = Path(__file__).resolve().with_name("image-paste.test.cjs")
 E2E_SCRIPT = Path(__file__).resolve().with_name("context-ui.e2e.mjs")
 
 
@@ -91,8 +92,8 @@ class ContextFrontendTests(unittest.TestCase):
         # 缓存指纹 bump（防旧前端缓存，曾导致"处理中几秒后突然完整渲染"）。
         # 指纹随前端迭代递增;此处仅断言当前仍在用带指纹的缓存破坏版本。
         html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
-        self.assertIn('href="/assets/app.css?v=config-edit-1"', html)
-        self.assertIn('src="/assets/app.js?v=f65-recency-2"', html)
+        self.assertIn('href="/assets/app.css?v=image-paste-1"', html)
+        self.assertIn('src="/assets/app.js?v=image-paste-1"', html)
 
     def test_context_ui包含rail编辑器与拖拽(self):
         script = (STATIC_DIR / "context-ui.js").read_text(encoding="utf-8")
@@ -144,6 +145,21 @@ class ContextFrontendTests(unittest.TestCase):
             f"context-editor.test.cjs 失败:\n{result.stdout}\n{result.stderr}",
         )
         self.assertIn("context editor checks passed", result.stdout)
+
+    @unittest.skipUnless(shutil.which("node"), "node 不可用，跳过 JS 纯函数测试")
+    def test_image_paste_pure_functions(self):
+        result = subprocess.run(
+            ["node", str(NODE_IMAGE_PASTE_TEST)],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        self.assertEqual(
+            result.returncode,
+            0,
+            f"image-paste.test.cjs 失败:\n{result.stdout}\n{result.stderr}",
+        )
+        self.assertIn("image paste checks passed", result.stdout)
 
     @unittest.skipUnless(
         os.environ.get("CASPIAN_E2E") == "1" and shutil.which("node"),
