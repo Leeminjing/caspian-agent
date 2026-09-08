@@ -21,14 +21,22 @@ function Write-Step([string]$msg) { Write-Host "==> $msg" -ForegroundColor Cyan 
 # 1) 检查前置
 Write-Step "Checking prerequisites..."
 $missing = @()
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $missing += "Git" }
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) { $missing += "git" }
 if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
-    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { $missing += "Python" }
+    if (-not (Get-Command py -ErrorAction SilentlyContinue)) { $missing += "python (or py)" }
 }
-if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { $missing += "Docker" }
+if (-not (Get-Command docker -ErrorAction SilentlyContinue)) { $missing += "docker" }
 if ($missing.Count -gt 0) {
+    Write-Host ""
     Write-Host "Missing prerequisites: $($missing -join ', ')" -ForegroundColor Red
-    Write-Host "Please install them and re-run the installer." -ForegroundColor Red
+    Write-Host ""
+    Write-Host "Install the missing prerequisites, then re-run the installer:" -ForegroundColor Yellow
+    if ($missing -match 'git')    { Write-Host "  git:    winget install Git.Git   (or https://git-scm.com/downloads)" -ForegroundColor Yellow }
+    if ($missing -match 'python') { Write-Host "  python: winget install Python.Python.3.12   (or https://www.python.org/downloads)" -ForegroundColor Yellow }
+    if ($missing -match 'docker') { Write-Host "  docker: https://www.docker.com/products/docker-desktop/" -ForegroundColor Yellow }
+    Write-Host ""
+    Write-Host "Re-run after installing:  irm https://raw.githubusercontent.com/Leeminjing/caspian-agent/main/install.ps1 | iex" -ForegroundColor Cyan
+    Read-Host "Press Enter to close" | Out-Null
     exit 1
 }
 
