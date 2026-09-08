@@ -210,8 +210,8 @@ cd backend/packages/harness/caspian/persistence/migrations
 ```
 
 ### 本地启动 / Local start
-- 沙箱后端由 `$CASPIAN_SANDBOX` 决定（`.env` / `.env.example`。默认 `AioSandbox` **需要 Docker**；无 Docker 的本地开发设为 `caspian.sandbox.local:LocalSandbox`）。
-- **注意**：`CASPIAN_SANDBOX` 是**必填**环境变量（`config.yaml` 的 `sandbox.use: $CASPIAN_SANDBOX` 引用它）。未设置时配置加载会抛 `KeyError`、应用无法启动——务必先 `cp .env.example .env` 并确保 `.env` 里有该值。
+- 沙箱后端由 `$CASPIAN_SANDBOX` 决定：`config.yaml` 用 `${CASPIAN_SANDBOX:-caspian.sandbox.local:LocalSandbox}` 回落，**默认 LocalSandbox**（无 OS 隔离，仅路径/shell/regex 守卫）；显式设 `CASPIAN_SANDBOX=caspian.community.aio_sandbox.aio_sandbox:AioSandbox` 走容器隔离。
+- 模型/嵌入关键项可从环境变量覆盖且带缺省回落（`OPENAI_BASE_URL` / `OPENAI_MODEL` / `DASHSCOPE_BASE_URL`）；key 首选通过 `setx` 持久化（见“一键使用”），缺省不强制、不会因未设而抛 `KeyError`。
 - Windows psycopg requires a `SelectorEventLoop`; do not run `uvicorn` directly. Use the entry script:
 ```powershell
 python run_dev.py
@@ -221,7 +221,9 @@ Chat history is persisted via `checkpointer.type: postgres` (PostgresSaver) and 
 ### 本地网页登录账户 / Local login
 - Email: `2656226581@qq.com` (password stored only as SHA-256 + bcrypt hash; not recorded in any repo file).
 
-### Docker 一键部署 / One-click Docker deploy（推荐给新用户）
+### Docker 一键部署（可选：全容器隔离路径）/ One-click Docker deploy (optional: full container isolation)
+
+> 默认推荐的一键路径见上部“一键使用”（LocalSandbox + PostgreSQL 仅 Docker）。此处为想要**全容器隔离（含沙箱 sidecar）**的进阶部署。
 
 只需 Git + Docker，一条命令拉起数据库 + 应用 + 沙箱 sidecar，应用自动迁移、自动就绪：
 
@@ -232,7 +234,7 @@ docker compose up -d         # 首次约 3–5 分钟（构建应用镜像），
 # 打开 http://localhost:8000 → 登录（首次启动前请先建账号，见下）
 ```
 
-`.env` 必填（其余有默认）：
+配置（`.env`，或经 `setx` 持久化的环境变量；缺省项有回落）：
 | 变量 | 说明 |
 |---|---|
 | `OPENAI_API_KEY` | 模型调用（DeepSeek） |
@@ -265,7 +267,7 @@ docker compose up -d         # 首次约 3–5 分钟（构建应用镜像），
 >   ```bash
 >   docker compose build --build-arg INSTALL_DOC_TOOLS=1 caspian && docker compose up -d
 >   ```
-> - **沙箱（bash/文件）**：`ghcr.io/agent-infra/sandbox:latest`（**~13.1GB**，all-in-one）为**懒加载**——只在真跑沙箱命令时才由 AioSandbox 拉取；纯聊天/`/commit` 不触发，不影响启动。
+> - **沙箱（bash/文件）**：本 Docker 路径走 `AioSandbox`（容器隔离，`ghcr.io/agent-infra/sandbox:latest` **~13.1GB**，懒加载——只在真跑沙箱命令时才拉取）；而上面“一键使用”的默认 `caspian` 路径用 **LocalSandbox**（无 OS 隔离）。两套按需二选一。
 
 **用预构建镜像（不用本地构建）**：把 `caspian` 镜像推到镜像仓库后，用 `CASPIAN_IMAGE` 指向它：
 ```bash
