@@ -134,14 +134,6 @@ database:
   pool_recycle: -1
   isolation_level: READ COMMITTED
 
-auth:
-  jwt_secret: $JWT_SECRET
-  token_expiry_days: 7
-  cookie_name: access_token
-  csrf_cookie_name: csrf_token
-  login_limit_window: 60
-  login_limit_max_attempts: 5
-
 knowledge:
   level_policy:
     # 域名 → 等级：3=官方文档/官方公告，2=官方工程博客/论文，1=普通博客/社区，0=低质量。

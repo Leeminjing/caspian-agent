@@ -68,15 +68,9 @@ log "Installing Python dependencies ([runtime,postgres])..."
 "${VENV_PY}" -m pip install --upgrade pip
 "${VENV_PY}" -m pip install -e "${APP}/backend/packages/harness[runtime,postgres]"
 
-# 6) 最小 config/.env（随机 JWT_SECRET，不覆盖已存在值）
-log "Writing minimal config/.env (JWT_SECRET only; API keys via export)"
-if [ -f "${ENV_FILE}" ]; then
-  grep -v '^[[:space:]]*JWT_SECRET=' "${ENV_FILE}" > "${ENV_FILE}.tmp" || true
-  mv "${ENV_FILE}.tmp" "${ENV_FILE}"
-fi
-JWT="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-if [ -n "${JWT_SECRET}" ]; then JWT="${JWT_SECRET}"; fi
-printf 'JWT_SECRET=%s\n' "${JWT}" >> "${ENV_FILE}"
+# 6) 最小 config/.env（本地单用户，无需 JWT_SECRET；API keys 经 export）
+log "Ensuring minimal config/.env (local single-user; API keys via export)"
+: > "${ENV_FILE}"
 
 # 7) PATH shim
 log "Writing ${BIN}/caspian"

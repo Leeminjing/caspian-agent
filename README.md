@@ -41,7 +41,7 @@ Caspian is a **parent-graph-with-child-graph** LangGraph system; the `lead_agent
 ```
 ┌────────────────────────────── FastAPI Gateway ──────────────────────────────┐
 │  router (access)  →  services (orchestrate)  →  worker (execute)             │
-│  AuthMiddleware · CSRFMiddleware · RunManager · StreamBridge · checkpointer   │
+│  AuthMiddleware(本地单用户) · RunManager · StreamBridge · checkpointer   │
 └──────────────────────────────────┬───────────────────────────────────────────┘
                                    │ SSE (metadata / events / interrupt /
                                    │  goal_state / commitment_messages / error)
@@ -226,8 +226,8 @@ python run_dev.py
 ```
 Chat history is persisted via `checkpointer.type: postgres` (PostgresSaver) and restored from `GET /api/threads/{thread_id}/messages` on refresh / session switch.
 
-### 本地网页登录账户 / Local login
-- Email: `2656226581@qq.com` (password stored only as SHA-256 + bcrypt hash; not recorded in any repo file).
+### 本地单用户 / Single-user local identity
+Caspian 面向单机单用户（每人在自己机器上运行后端，无多租户），网页无需注册/登录。首次启动自动采纳（或创建）唯一一个本地用户作为 `user_id`；全部数据（会话、知识、目标、上传、决策表、任务合同）按 `(user_id, thread_id)` 持久化，重启后保留。
 
 ### Docker 一键部署（可选：全容器隔离路径）/ One-click Docker deploy (optional: full container isolation)
 
@@ -237,40 +237,21 @@ Chat history is persisted via `checkpointer.type: postgres` (PostgresSaver) and 
 
 ```bash
 git clone <你的仓库> && cd <目录>
-cp .env.example .env         # 填下面 3 个必填 key
+cp .env.example .env         # 填下面 2 个必填 key
 docker compose up -d         # 首次约 3–5 分钟（构建应用镜像），之后秒起
-# 打开 http://localhost:8000 → 登录（首次启动前请先建账号，见下）
+# 打开 http://localhost:8000 → 直接进入（本地单用户，无需登录）
 ```
 
 配置（`.env`，或经 `setx` 持久化的环境变量；缺省项有回落）：
 | 变量 | 说明 |
 |---|---|
 | `OPENAI_API_KEY` | 模型调用（DeepSeek） |
-| `JWT_SECRET` | 登录 token 签名密钥 |
 | `DASHSCOPE_API_KEY` | 知识库向量嵌入 |
 
 > 注意：
 > - **`DATABASE_URL` 只对本机开发（`run_dev.py`）生效**；Docker 部署里 compose 已内置指向 `postgres:5432`，无需改。
 > - 首次 `up` 会**构建**应用镜像（默认最小档 ~1.25GB）。完成后自动执行 `alembic upgrade head`、`/readyz` 就绪、healthcheck 通过。
-> - **首次使用前先建一个登录账号**（还没有注册界面）。在项目根执行（自动往 compose 的 postgres 里建用户）：
->   ```bash
->   docker compose exec -T caspian python - <<'PY'
->   import asyncio, uuid
->   from backend.app.gateway.auth.security import hash_password
->   from backend.app.gateway.models.user import User
->   from caspian.persistence.engine import init_engine, get_session
->   from caspian.config import get_app_config
->   EMAIL = "you@example.com"       # 改成你的邮箱
->   PASSWORD = "your-password"      # 改成你的密码
->   async def main():
->       init_engine(get_app_config("config.yaml"))
->       async with get_session() as s:
->           u = User(id=uuid.uuid4(), email=EMAIL, password_hash=hash_password(PASSWORD), token_version=0)
->           s.add(u); await s.commit()
->           print("user created:", u.id)
->   asyncio.run(main())
->   PY
->   ```
+> - **本地单用户，无需注册/登录**：首次启动会自动采纳（或创建）唯一一个本地用户作为 `user_id`，全部数据按 `(user_id, thread_id)` 持久化，重启后保留。
 > - **docx/pptx 转换 / OCR**：默认关闭以得到最小镜像。需要时用
 >   ```bash
 >   docker compose build --build-arg INSTALL_DOC_TOOLS=1 caspian && docker compose up -d
@@ -289,7 +270,7 @@ CASPIAN_IMAGE=ghcr.io/<你>/caspian:latest docker compose up --no-build
 
 ```
 backend/
-  app/gateway/            FastAPI shell (auth/CSRF, routers, services, static frontend)
+  app/gateway/            FastAPI shell (local single-user, routers, services, static frontend)
   packages/harness/
     caspian/
       agents/             lead agent, commitment (9-stage), middlewares, plan, goal

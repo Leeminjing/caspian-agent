@@ -91,13 +91,9 @@ Write-Step "Installing Python dependencies ([runtime,postgres])..."
 $harness = Join-Path $App "backend\packages\harness"
 & $Python -m pip install -e "$harness[runtime,postgres]" | Out-Host
 
-# 6) 最小 config/.env（随机 JWT_SECRET，不覆盖已存在值）
-Write-Step "Writing minimal config/.env (JWT_SECRET only; API keys via setx)"
-$lines = @()
-if (Test-Path $EnvFile) { $lines = @(Get-Content $EnvFile -ErrorAction SilentlyContinue | Where-Object { $_ -notmatch '^\s*JWT_SECRET=' }) }
-$jwt = if ($env:JWT_SECRET) { $env:JWT_SECRET } else { -join ((48..57 + 97..122) | Get-Random -Count 64 | ForEach-Object { [char]$_ }) }
-$lines += "JWT_SECRET=$jwt"
-Set-Content -Path $EnvFile -Value $lines -Encoding UTF8
+# 6) 最小 config/.env（本地单用户，无需 JWT_SECRET；API keys 经 setx/export）
+Write-Step "Ensuring minimal config/.env (local single-user; API keys via setx/export)"
+Set-Content -Path $EnvFile -Value @() -Encoding UTF8
 
 # 7) PATH shim
 Write-Step "Writing $Bin\caspian.cmd"

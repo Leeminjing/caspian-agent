@@ -5,8 +5,8 @@
     config_router: APIRouter — 已注册 GET /api/config 配置查看路由与 PUT /api/config 配置保存路由的 FastAPI Router，供 app 挂载
 
 输入:
-    GET /api/config 请求，经 AuthMiddleware 校验 JWT Cookie 后进入本端点
-    PUT /api/config 请求，经 AuthMiddleware（JWT）+ CSRFMiddleware（X-CSRF-Token）双重校验后进入本端点
+    GET /api/config 请求，经 AuthMiddleware（注入本地单用户身份）后进入本端点
+    PUT /api/config 请求，经 AuthMiddleware（注入本地单用户身份）后进入本端点
 
 输出:
     GET → PlainTextResponse — 仓库根 config.yaml 的脱敏后文本；文件缺失时返回 404
@@ -273,7 +273,7 @@ async def update_config(request: Request) -> JSONResponse:
 
     输入:
         request: Request — 请求体为编辑后的 config.yaml 文本（text/plain）
-        （鉴权：AuthMiddleware 要求 JWT Cookie；CSRFMiddleware 要求 X-CSRF-Token 与 cookie 一致）
+        （鉴权：AuthMiddleware 注入本地单用户身份）
 
     输出:
         JSONResponse — {"ok": true, "detail": "...生效说明..."}

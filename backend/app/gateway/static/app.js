@@ -1,11 +1,12 @@
 /*
 本文件对外提供网关前端主控制器：会话列表、聊天流式渲染、承诺层评审卡、决策等级表、
-目标徽章与登录态管理，是 index.html 的主脚本。
+目标徽章与本地单用户身份，是 index.html 的主脚本。
 
 输入为用户交互事件与 /api/threads/{id}/runs/stream 的 SSE 事件；输出为 DOM 渲染与对
-后端 REST 接口的调用。具体工作流为：登录后 loadThreads() 以 GET /api/contexts/tree
-为事实源装载会话全集，经 CaspianThreadList 合并本地未入库会话并按最近活跃倒序渲染；
-提交任务后逐帧消费 SSE，按事件类型分派到正文、推理、工具卡与中断评审面板。
+后端 REST 接口的调用。具体工作流为：restoreSession() 以 GET /api/auth/me 取本地单用户
+身份，loadThreads() 以 GET /api/contexts/tree 为事实源装载会话全集，经 CaspianThreadList
+合并本地未入库会话并按最近活跃倒序渲染；提交任务后逐帧消费 SSE，按事件类型分派到正文、
+推理、工具卡与中断评审面板。
 
 会话列表的事实源是服务端；localStorage["caspian.threads"] 仅作离线降级缓存（保存前
 先排序再截断最近 20 条），localStorage["caspian.current_thread"] 记住当前选中会话。
@@ -73,13 +74,6 @@ const state = {
   compactionArchived: [],
   compactionSummaryText: "",
 };
-
-function csrfToken() {
-  const item = document.cookie
-    .split("; ")
-    .find((part) => part.startsWith("csrf_token="));
-  return item ? decodeURIComponent(item.split("=").slice(1).join("=")) : "";
-}
 
 function threadId() {
   return crypto.randomUUID
@@ -255,7 +249,7 @@ function renameThread(id, title) {
   const url = `/api/contexts/${encodeURIComponent(id)}`;
   return fetch(url, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrfToken() },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title }),
     credentials: "same-origin",
   })
@@ -286,7 +280,6 @@ async function apiFetch(url, options = {}) {
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      "X-CSRF-Token": csrfToken(),
       ...(options.headers || {}),
     },
   });
@@ -466,10 +459,6 @@ async function loadThreadHistory() {
     const response = await fetch(`/api/threads/${encodeURIComponent(threadId)}/messages`, {
       credentials: "same-origin",
     });
-    if (response.status === 401) {
-      showLogin();
-      return;
-    }
     if (!response.ok) return;
     const data = await response.json();
     if (state.threadId !== threadId) return;
@@ -1734,15 +1723,10 @@ async function streamRun(body) {
     credentials: "same-origin",
     headers: {
       "Content-Type": "application/json",
-      "X-CSRF-Token": csrfToken(),
     },
     body: JSON.stringify({ ...body, stream_mode: ["messages", "values"] }),
   });
 
-  if (response.status === 401) {
-    showLogin();
-    throw new Error("登录已失效");
-  }
   if (!response.ok || !response.body) {
     const detail = await response.json().catch(() => ({}));
     if (detail?.code === "context_projection_blocked") {
@@ -1940,7 +1924,6 @@ async function interruptRun() {
     response = await fetch(url, {
       method: "POST",
       credentials: "same-origin",
-      headers: { "X-CSRF-Token": csrfToken() },
     });
   } catch (error) {
     handleError(error);
@@ -1995,7 +1978,6 @@ async function uploadFiles(files) {
   const response = await fetch(`/api/threads/${encodeURIComponent(state.threadId)}/uploads`, {
     method: "POST",
     credentials: "same-origin",
-    headers: { "X-CSRF-Token": csrfToken() },
     body: form,
   });
   if (!response.ok) {
@@ -2160,18 +2142,9 @@ function resizeComposer() {
 }
 
 
-function showLogin() {
-  window.CaspianSkills?.clearCache();
-  window.CaspianSkills?.clearSelection();
-  state.activeSelectedSkills = [];
-  $("#login-view").hidden = false;
-  $("#app-view").hidden = true;
-}
-
 async function showApp(user) {
   if (state.user?.id !== user.id) window.CaspianSkills?.clearCache();
   state.user = user;
-  $("#login-view").hidden = true;
   $("#app-view").hidden = false;
   const name = user.display_name || user.email;
   $("#user-name").textContent = name;
@@ -2184,46 +2157,22 @@ async function showApp(user) {
 }
 
 async function restoreSession() {
-  const response = await fetch("/api/auth/me", { credentials: "same-origin" });
-  if (!response.ok) {
-    showLogin();
-    return;
-  }
-  const result = await response.json();
-  await showApp(result.user);
-}
-
-$("#login-form").addEventListener("submit", async (event) => {
-  event.preventDefault();
-  $("#login-error").textContent = "";
-  const button = $("button[type=submit]", event.currentTarget);
-  button.disabled = true;
+  let user = null;
   try {
-    const response = await fetch("/api/auth/login", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        email: $("#email").value,
-        password: $("#password").value,
-      }),
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(result.detail || `登录失败 (${response.status})`);
+    const response = await fetch("/api/auth/me", { credentials: "same-origin" });
+    if (response.ok) {
+      const result = await response.json();
+      user = result.user;
     }
-    await showApp(result.user);
-  } catch (error) {
-    $("#login-error").textContent = error.message;
-  } finally {
-    button.disabled = false;
+  } catch {
+    user = null;
   }
-});
-
-$("#logout").addEventListener("click", async () => {
-  await fetch("/api/auth/logout", { method: "POST", credentials: "same-origin" });
-  showLogin();
-});
+  if (!user) {
+    // 后端不可达时的本地兜底身份（本地单用户）
+    user = { id: "local", display_name: "Local User", email: "local@caspian.local" };
+  }
+  await showApp(user);
+}
 
 $("#interrupt-button").addEventListener("click", () => {
   interruptRun();

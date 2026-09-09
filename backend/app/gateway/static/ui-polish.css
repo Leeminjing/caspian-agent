@@ -69,36 +69,6 @@ summary:focus-visible,
   outline-color: var(--focus);
 }
 
-.login-view {
-  padding: clamp(20px, 5vw, 48px);
-  background: var(--soft);
-}
-
-.login-panel {
-  padding: clamp(28px, 5vw, 38px);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-raised);
-}
-
-.login-panel h1 {
-  margin: 38px 0 22px;
-  letter-spacing: -0.02em;
-}
-
-.login-panel input {
-  border-radius: var(--radius-md);
-  transition: border-color 140ms ease, box-shadow 140ms ease;
-}
-
-.login-panel input:hover {
-  border-color: #adb4b8;
-}
-
-.login-panel input:focus-visible {
-  border-color: var(--teal);
-  box-shadow: 0 0 0 3px rgb(8 127 115 / 10%);
-}
-
 .button,
 .icon-button,
 .send-button {

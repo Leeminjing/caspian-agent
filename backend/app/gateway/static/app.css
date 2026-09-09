@@ -50,23 +50,6 @@ textarea:focus-visible {
   display: none !important;
 }
 
-.login-view {
-  display: grid;
-  min-height: 100vh;
-  place-items: center;
-  padding: 24px;
-  background: #eef0f1;
-}
-
-.login-panel {
-  width: min(390px, 100%);
-  padding: 34px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  box-shadow: 0 12px 36px rgb(25 30 34 / 8%);
-}
-
 .brand {
   display: flex;
   align-items: center;
@@ -74,10 +57,6 @@ textarea:focus-visible {
   min-width: 0;
   font-size: 16px;
   font-weight: 700;
-}
-
-.brand-login {
-  color: var(--ink);
 }
 
 .brand-mark {
@@ -90,34 +69,6 @@ textarea:focus-visible {
   color: white;
   background: var(--teal);
   font-weight: 800;
-}
-
-.login-panel h1 {
-  margin: 42px 0 24px;
-  font-size: 24px;
-  font-weight: 650;
-}
-
-.login-panel form {
-  display: grid;
-  gap: 9px;
-}
-
-.login-panel label {
-  margin-top: 8px;
-  color: #464b4f;
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.login-panel input {
-  width: 100%;
-  height: 42px;
-  padding: 0 12px;
-  border: 1px solid #cfd3d6;
-  border-radius: 6px;
-  color: var(--ink);
-  background: white;
 }
 
 .form-error,

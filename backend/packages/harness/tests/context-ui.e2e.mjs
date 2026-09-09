@@ -12,8 +12,6 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 const ROOT = "C:/tmp/caspian/change49";
-const EMAIL = `e2e-${Date.now()}@test.local`;
-const PASSWORD = "e2e-pass-123";
 const USER_ID = crypto.randomUUID();
 const THREAD_A = `e2e-a-${USER_ID.slice(0, 8)}`;
 const THREAD_B = `e2e-b-${USER_ID.slice(0, 8)}`;
@@ -33,7 +31,6 @@ sys.path.insert(0, r"${ROOT}")
 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from dotenv import load_dotenv
 load_dotenv(".env")
-from backend.app.gateway.auth.security import hash_password
 from backend.app.gateway.models.user import User
 from backend.app.gateway.context.service import ContextService
 from backend.app.gateway.context.models import WebThread
@@ -41,16 +38,16 @@ from caspian.persistence.engine import init_engine, get_session, dispose_engine
 from caspian.config import get_app_config
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langchain_core.messages import HumanMessage
+from sqlalchemy import select
 
 async def main():
     init_engine(get_app_config("config.yaml"))
     async with get_session() as session:
-        session.add(User(id="${USER_ID}", email="${EMAIL}", password_hash=hash_password("${PASSWORD}"), token_version=0))
-        await session.commit()
+        local_id = str((await session.execute(select(User).limit(1))).scalar_one().id)
     async with AsyncPostgresSaver.from_conn_string("postgresql://caspian:qweasdzxc123@127.0.0.1:7221/caspian") as saver:
         service = ContextService(saver)
         for tid, contents in (("${THREAD_A}", ["消息甲", "消息乙"]), ("${THREAD_B}", ["消息丙"])):
-            await service.register_main_run("${USER_ID}", tid)
+            await service.register_main_run(local_id, tid)
             await saver.aput({"configurable": {"thread_id": tid, "checkpoint_ns": ""}}, {
                 "v": 4, "ts": "2026-08-16T00:00:00+00:00", "id": "cp-" + tid,
                 "channel_values": {"messages": [HumanMessage(content=c, id=f"e2e-{tid}-{i}") for i, c in enumerate(contents)]},
@@ -84,9 +81,6 @@ const order = () => page.evaluate(() =>
 );
 
 await page.goto("http://127.0.0.1:8000/");
-await page.fill("#email", EMAIL);
-await page.fill("#password", PASSWORD);
-await page.click('button[type="submit"]');
 await page.waitForSelector("#app-view:not([hidden])", { timeout: 15000 });
 await page.evaluate((ids) => {
   localStorage.setItem("caspian.threads", JSON.stringify([
@@ -170,10 +164,9 @@ assert(railMeta.includes("缓存 —"), `A 显示“缓存 —”（实际 ${rai
 
 // 场景 6：受阻 Context 从 rail 重进决断
 blockedContextId = await page.evaluate(async (rootThread) => {
-  const csrf = document.cookie.split("; ").find((p) => p.startsWith("csrf_token=")).split("=").slice(1).join("=");
   const resp = await fetch("/api/contexts/derive", {
     method: "POST",
-    headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       title: "受阻场景",
       sources: [{ context_id: rootThread, checkpoint_id: "cp-" + rootThread }],
@@ -202,7 +195,6 @@ sys.path.insert(0, r"${ROOT}")
 asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from dotenv import load_dotenv
 load_dotenv(".env")
-from backend.app.gateway.models.user import User
 from backend.app.gateway.context.models import WebThread, WebContextSource, WebContextDefinition
 from caspian.persistence.engine import init_engine, get_session, dispose_engine
 from caspian.config import get_app_config
@@ -222,7 +214,6 @@ async def main():
             await session.execute(delete(WebContextDefinition).where(WebContextDefinition.context_id == tid))
         for tid in ids:
             await session.execute(delete(WebThread).where(WebThread.thread_id == tid))
-        await session.execute(delete(User).where(User.id == "${USER_ID}"))
         await session.commit()
     dispose_engine()
 

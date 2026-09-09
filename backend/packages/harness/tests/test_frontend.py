@@ -29,7 +29,6 @@ class FrontendTests(unittest.TestCase):
         parser.feed((STATIC_DIR / "index.html").read_text(encoding="utf-8"))
         self.assertTrue(
             {
-                "login-form",
                 "messages",
                 "composer",
                 "commitment-progress",
@@ -38,6 +37,19 @@ class FrontendTests(unittest.TestCase):
                 "trace-template",
             }.issubset(parser.ids)
         )
+
+    def test_no_login_surface(self):
+        html = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
+        script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")
+        # 无登录页/登录表单/退出按钮
+        self.assertNotIn('id="login-view"', html)
+        self.assertNotIn('id="login-form"', html)
+        self.assertNotIn('id="logout"', html)
+        self.assertNotIn("/api/auth/login", script)
+        self.assertNotIn("/api/auth/logout", script)
+        self.assertNotIn("X-CSRF-Token", script)
+        # 首屏直接为应用视图（不再 hidden）
+        self.assertIn('<div id="app-view" class="app-shell">', html)
 
     def test_frontend_uses_existing_stream_and_resume_protocol(self):
         script = (STATIC_DIR / "app.js").read_text(encoding="utf-8")

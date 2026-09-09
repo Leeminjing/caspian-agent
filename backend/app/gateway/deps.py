@@ -75,6 +75,13 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
             stack.callback(dispose_engine)
             logger.info("数据库引擎已初始化 (backend=%s)", app_config.database.backend)
 
+        # (3.1) 本地单用户身份引导：采纳已有唯一用户，否则自动创建；user_id 稳定不变。
+        from backend.app.gateway.auth.local import ensure_local_user
+
+        local_user = await ensure_local_user()
+        app.state.local_user = local_user
+        logger.info("本地单用户身份已就绪: user_id=%s", getattr(local_user, "id", None))
+
         # (3.5) Checkpointer 资源初始化
         from caspian.runtime.checkpointer import create_checkpointer, dispose_checkpointer
 

@@ -66,7 +66,6 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://caspian:caspian@postgres:5432/caspian
       OPENAI_API_KEY: ${OPENAI_API_KEY}
-      JWT_SECRET: ${JWT_SECRET}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY}
       CASPIAN_SANDBOX: caspian.community.aio_sandbox.aio_sandbox:AioSandbox
       DOCKER_HOST: tcp://127.0.0.1:2375

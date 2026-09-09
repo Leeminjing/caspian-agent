@@ -14,25 +14,7 @@
 </head>
 <body>
   <p id="ui-status-announcer" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
-  <section id="login-view" class="login-view">
-    <main class="login-panel">
-      <div class="brand brand-login">
-        <span class="brand-mark" aria-hidden="true">C</span>
-        <span>Caspian</span>
-      </div>
-      <h1>继续工作</h1>
-      <form id="login-form">
-        <label for="email">邮箱</label>
-        <input id="email" name="email" type="email" autocomplete="email" required>
-        <label for="password">密码</label>
-        <input id="password" name="password" type="password" autocomplete="current-password" required>
-        <p id="login-error" class="form-error" role="alert"></p>
-        <button class="button button-primary button-wide" type="submit">登录</button>
-      </form>
-    </main>
-  </section>
-
-  <div id="app-view" class="app-shell" hidden>
+  <div id="app-view" class="app-shell">
     <aside class="sidebar">
       <header class="sidebar-header">
         <div class="brand">
@@ -53,9 +35,6 @@
         <div id="settings-menu" class="settings-menu" role="menu" hidden>
           <button id="open-settings" class="settings-menu-item" type="button" role="menuitem">设置</button>
         </div>
-        <button id="logout" class="icon-button icon-button-muted" type="button" title="退出登录" aria-label="退出登录">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 17l5-5-5-5M15 12H3M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/></svg>
-        </button>
       </footer>
     </aside>
 
