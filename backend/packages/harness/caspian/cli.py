@@ -31,6 +31,12 @@ import subprocess
 import sys
 from pathlib import Path
 
+# 中文 Windows 的 locale 是 GBK/cp936；alembic 会以编码 "locale" 读取 alembic.ini（UTF-8 含中文注释），
+# 造成 UnicodeDecodeError。强制本 CLI 派生的 Python 子进程（alembic/pip/server）以 UTF-8 模式运行，
+# 使配置/脚本按 UTF-8 读取与输出。
+os.environ.setdefault("PYTHONUTF8", "1")
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+
 from caspian.runtime.home import caspian_app, caspian_env_file, caspian_home, caspian_users, ensure_home
 
 # 首启必需、缺失时提示 setx 的 provider key
