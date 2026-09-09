@@ -2,7 +2,7 @@
 name = "caspian-harness"
 version = "0.1.0"
 description = "Caspian agent harness — caspian core runtime"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "pydantic>=2.0",
     "langchain>=0.3.0",

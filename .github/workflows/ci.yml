@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -29,7 +29,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.11", "3.12"]
+        python-version: ["3.12", "3.13"]
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -78,6 +78,6 @@ jobs:
       - name: python3-version guard logic sanity
         run: |
           set -e
-          python3 -c 'import sys; raise SystemExit(not (sys.version_info >= (3, 11)))' \
-            && echo "python3 >= 3.11 OK" \
-            || { echo "python3 < 3.11 (guard will reject)"; exit 1; }
+          python3 -c 'import sys; raise SystemExit(not (sys.version_info >= (3, 12)))' \
+            && echo "python3 >= 3.12 OK" \
+            || { echo "python3 < 3.12 (guard will reject)"; exit 1; }
