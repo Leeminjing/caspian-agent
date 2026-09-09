@@ -178,6 +178,11 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
+def _docker_daemon_running() -> bool:
+    """检测 Docker 守护进程（daemon）是否真的在运行（`docker info` 成功）。"""
+    return _run(["docker", "info"], check=False).returncode == 0
+
+
 def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
     """检测 host:port 是否已有服务在监听（用于复用已有数据库 / 避免端口冲突）。"""
     import socket
@@ -189,21 +194,36 @@ def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
         return False
 
 
+def _start_container_or_fail(cmd: list[str]) -> None:
+    """`docker start/run` 并检查失败，给出可读原因（不静默吞掉）。"""
+    result = _run(cmd, check=False)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        raise RuntimeError(
+            f"启动 PostgreSQL 容器失败：{detail or '未知错误（请检查 Docker 是否运行）'}"
+        )
+
+
 def _ensure_postgres() -> None:
     """幂等确保 PostgreSQL(pgvector) 可用；优先复用已有服务，避免端口冲突。
 
     工作流:
-        (1) 无 Docker → 抛 RuntimeError
-        (2) 已有 `caspian-postgres` 托管容器 → 管理它：运行则等待；停止但端口被外部占用则清掉改用
-            现有服务；否则 start
-        (3) 无托管容器但 127.0.0.1:7221 已有服务监听（如用户本机已有 postgres）→ 复用，不新建容器
-        (4) 否则创建容器
-        (5) 等待就绪 + （容器存在时）启用 vector 扩展
+        (1) 无 Docker CLI → 抛 RuntimeError
+        (2) Docker daemon 未运行 → 抛 RuntimeError（提示启动 Docker Desktop）
+        (3) 已有 `caspian-postgres` 托管容器 → 管理它：运行则等待；停止但端口被外部占用则清掉改用
+            现有服务；否则 start（失败给可读报错）
+        (4) 无托管容器但 127.0.0.1:7221 已有服务监听（如用户本机已有 postgres）→ 复用，不新建容器
+        (5) 否则创建容器（失败给可读报错）
+        (6) 等待就绪 + （容器存在时）启用 vector 扩展
     """
     if not _docker_available():
         raise RuntimeError(
             "未检测到 Docker。Caspian 需要 Docker 来运行 PostgreSQL(pgvector) 数据库。"
-            "请安装 Docker 后重试，或自行启动一个位于 127.0.0.1:7221 且含 vector 扩展的 PostgreSQL。"
+            "请安装 Docker Desktop 后重试（https://www.docker.com/products/docker-desktop/）。"
+        )
+    if not _docker_daemon_running():
+        raise RuntimeError(
+            "Docker 守护进程（daemon）未运行。请先启动 Docker Desktop，再重试 `caspian`。"
         )
     has_container = _run(["docker", "inspect", _PG_NAME]).returncode == 0
     if has_container:
@@ -216,12 +236,13 @@ def _ensure_postgres() -> None:
             print(f"127.0.0.1:{_PG_PORT} 已有服务在监听，移除旧的 caspian-postgres 容器并复用现有服务。")
             return
         else:
-            _run(["docker", "start", _PG_NAME], check=False)
+            _start_container_or_fail(["docker", "start", _PG_NAME])
     elif _port_open("127.0.0.1", _PG_PORT):
         print(f"127.0.0.1:{_PG_PORT} 已有服务在监听，直接复用作为数据库（不新建容器）。")
         return
     else:
-        _run(
+        print("正在启动 PostgreSQL 容器（首次可能需拉取镜像，请稍候）...")
+        _start_container_or_fail(
             [
                 "docker", "run", "-d",
                 "--name", _PG_NAME,
@@ -230,8 +251,7 @@ def _ensure_postgres() -> None:
                 "-e", f"POSTGRES_DB={_PG_DB}",
                 "-p", f"127.0.0.1:{_PG_PORT}:5432",
                 _PG_IMAGE,
-            ],
-            check=False,
+            ]
         )
     _wait_postgres()
     # 启用 vector 扩展（幂等；仅当托管容器存在时执行）
@@ -246,16 +266,23 @@ def _ensure_postgres() -> None:
         )
 
 
-def _wait_postgres(timeout_seconds: int = 60) -> None:
-    """等待 PostgreSQL 容器就绪（轮询 `pg_isready`）。"""
+def _wait_postgres(timeout_seconds: int = 180) -> None:
+    """等待 PostgreSQL 容器就绪（轮询 `pg_isready`）；超时给出排查指引。"""
     import time
 
+    print(f"等待 PostgreSQL 容器 {_PG_NAME} 就绪（最多 {timeout_seconds}s）...")
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
         if _run(["docker", "exec", _PG_NAME, "pg_isready", "-U", _PG_USER, "-d", _PG_DB]).returncode == 0:
             return
-        time.sleep(1)
-    raise RuntimeError(f"PostgreSQL 容器 {_PG_NAME} 在 {timeout_seconds}s 内未就绪")
+        if not _docker_daemon_running():
+            raise RuntimeError("等待期间 Docker 守护进程停止工作，请检查 Docker Desktop。")
+        time.sleep(2)
+    raise RuntimeError(
+        f"PostgreSQL 容器 {_PG_NAME} 在 {timeout_seconds}s 内未就绪。请排查："
+        f"1) 确认 Docker 正在运行；2) 首次使用可先手动拉取镜像 `docker pull {_PG_IMAGE}`；"
+        f"3) 查看容器日志 `docker logs {_PG_NAME}` 以定位原因。"
+    )
 
 
 def _run_start() -> int:
