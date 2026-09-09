@@ -31,7 +31,7 @@ full = [
 ]
 dev = ["pytest", "pytest-asyncio", "pytest-cov", "fastapi"]
 mcp = ["langchain-mcp-adapters>=0.1.0", "mcp>=1.24,<2"]
-postgres = ["asyncpg", "langgraph-checkpoint-postgres"]
+postgres = ["asyncpg", "langgraph-checkpoint-postgres", "psycopg[binary]"]
 sqlite = ["aiosqlite"]
 aiosandbox = ["agent-sandbox", "docker"]
 
