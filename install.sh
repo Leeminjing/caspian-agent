@@ -33,12 +33,12 @@ if [ -n "$missing" ]; then
   fail "Missing prerequisites:$missing .  Please install them and re-run the installer."
 fi
 
-# python3 版本 >= 3.11
+# python3 版本 >= 3.12
 PY3_VERSION="$(python3 -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "0.0")"
-if python3 -c 'import sys; raise SystemExit(not (sys.version_info >= (3, 11)))' 2>/dev/null; then
+if python3 -c 'import sys; raise SystemExit(not (sys.version_info >= (3, 12)))' 2>/dev/null; then
   :
 else
-  fail "python3 ${PY3_VERSION} 低于 3.11，请安装更高版本（macOS 可用: brew install python@3.11；Linux 用发行版 python3.11+）。"
+  fail "python3 ${PY3_VERSION} 低于 3.12，请安装更高版本（macOS 可用: brew install python@3.12；Linux 用发行版 python3.12+）。"
 fi
 
 # 2) 家目录

@@ -65,19 +65,22 @@ if (-not (Test-Path $Python)) {
     Write-Host ""
     Write-Host "创建 Python 虚拟环境失败：$Python 不存在。" -ForegroundColor Red
     Write-Host "这通常是 python 指向了 Microsoft Store 的占位别名（并不是真正的 Python）。" -ForegroundColor Yellow
-    Write-Host "请先安装真正的 Python 3.11+，然后关闭占位别名并重开终端：" -ForegroundColor Yellow
+    Write-Host "请先安装真正的 Python 3.12+，然后关闭占位别名并重开终端：" -ForegroundColor Yellow
     Write-Host "  winget install Python.Python.3.12   或 https://www.python.org/downloads" -ForegroundColor Yellow
     Write-Host "  设置 > 管理应用执行别名 → 关闭 'python.exe' / 'python3.exe'" -ForegroundColor Yellow
     Write-Host ""
     Read-Host "Press Enter to close" | Out-Null
     exit 1
 }
-# python >= 3.11（harness 需要）
+# python >= 3.12（harness 需要；run_dev.py 用了 asyncio.run(loop_factory=...)）
 $pyVer = (& $Python -c "import sys; print('%d.%d' % sys.version_info[:2])").Trim()
 $pyOk = $false
-try { $pyOk = ([version]$pyVer -ge [version]"3.11") } catch { $pyOk = $false }
+try { $pyOk = ([version]$pyVer -ge [version]"3.12") } catch { $pyOk = $false }
 if (-not $pyOk) {
-    Write-Host "python 版本过低：$pyVer（需要 >= 3.11）。请安装 Python 3.11+ 后重试（winget install Python.Python.3.12）。" -ForegroundColor Yellow
+    Write-Host "python 版本过低：$pyVer（需要 >= 3.12）。请安装 Python 3.12+，并删除旧虚拟环境后重跑安装器以用 3.12 重建：" -ForegroundColor Yellow
+    Write-Host "  winget install Python.Python.3.12" -ForegroundColor Yellow
+    Write-Host "  Remove-Item -Recurse -Force \"$env:USERPROFILE\.caspian\runtime\.venv\"" -ForegroundColor Yellow
+    Write-Host "  然后重跑本安装器" -ForegroundColor Yellow
     Read-Host "Press Enter to close" | Out-Null
     exit 1
 }

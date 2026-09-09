@@ -204,7 +204,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
   export OPENAI_API_KEY="<your DeepSeek key>"
   export DASHSCOPE_API_KEY="<your DashScope key>"
   ```
-  之后同样用 `caspian` / `caspian update`。沙箱在 macOS/Linux 仅暴露 `bash`/`sh`（无 `cmd`/`powershell`）；需 python3 ≥ 3.11（macOS 系统自带常为 3.9，可 `brew install python@3.11`）。
+  之后同样用 `caspian` / `caspian update`。沙箱在 macOS/Linux 仅暴露 `bash`/`sh`（无 `cmd`/`powershell`）；需 python3 ≥ 3.12（macOS 系统自带常为 3.9，可 `brew install python@3.12`）。
 
 ### 本地数据库 / Local database
 - PostgreSQL container: `desktop-postgres-1` (PostgreSQL 17 + pgvector).
