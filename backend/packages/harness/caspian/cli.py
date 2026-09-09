@@ -161,7 +161,10 @@ def _migrate_legacy_requirements() -> int:
     return migrated
 
 
-def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None, check: bool = False) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None, check: bool = False, capture: bool = True) -> subprocess.CompletedProcess:
+    """运行子进程；默认捕获 stdout/stderr（便于读取 .stdout/.stderr），capture=False 时继承 stdio。"""
+    if capture:
+        return subprocess.run(cmd, cwd=cwd, env=env, check=check, capture_output=True, text=True)
     return subprocess.run(cmd, cwd=cwd, env=env, check=check)
 
 
@@ -277,7 +280,7 @@ def _run_start() -> int:
             return 1
 
     print("Starting Caspian Gateway at http://127.0.0.1:8000  (Ctrl+C to stop)")
-    _run([_venv_python(), "run_dev.py"], cwd=str(app_dir))
+    _run([_venv_python(), "run_dev.py"], cwd=str(app_dir), capture=False)
     return 0
 
 
