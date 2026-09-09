@@ -161,8 +161,8 @@ def _migrate_legacy_requirements() -> int:
     return migrated
 
 
-def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, cwd=cwd, env=env, check=False)
+def _run(cmd: list[str], cwd: str | None = None, env: dict[str, str] | None = None, check: bool = False) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, cwd=cwd, env=env, check=check)
 
 
 def _docker_available() -> bool:
