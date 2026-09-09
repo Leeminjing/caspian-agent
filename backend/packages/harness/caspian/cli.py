@@ -169,8 +169,28 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
+def _port_open(host: str, port: int, timeout: float = 1.0) -> bool:
+    """检测 host:port 是否已有服务在监听（用于复用已有数据库 / 避免端口冲突）。"""
+    import socket
+
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def _ensure_postgres() -> None:
-    """幂等启动 PostgreSQL(pgvector) 容器；返回 None（失败抛 RuntimeError）。"""
+    """幂等确保 PostgreSQL(pgvector) 可用；优先复用已有服务，避免端口冲突。
+
+    工作流:
+        (1) 无 Docker → 抛 RuntimeError
+        (2) 已有 `caspian-postgres` 托管容器 → 管理它：运行则等待；停止但端口被外部占用则清掉改用
+            现有服务；否则 start
+        (3) 无托管容器但 127.0.0.1:7221 已有服务监听（如用户本机已有 postgres）→ 复用，不新建容器
+        (4) 否则创建容器
+        (5) 等待就绪 + （容器存在时）启用 vector 扩展
+    """
     if not _docker_available():
         raise RuntimeError(
             "未检测到 Docker。Caspian 需要 Docker 来运行 PostgreSQL(pgvector) 数据库。"
@@ -181,8 +201,16 @@ def _ensure_postgres() -> None:
         state = _run(["docker", "inspect", "-f", "{{.State.Running}}", _PG_NAME]).stdout.strip()
         if state == "true":
             _wait_postgres()
+        elif _port_open("127.0.0.1", _PG_PORT):
+            # 容器存在但没运行，且端口被其它服务占用 → 这个容器起不来，清掉改用现有服务
+            _run(["docker", "rm", "-f", _PG_NAME], check=False)
+            print(f"127.0.0.1:{_PG_PORT} 已有服务在监听，移除旧的 caspian-postgres 容器并复用现有服务。")
             return
-        _run(["docker", "start", _PG_NAME], check=False)
+        else:
+            _run(["docker", "start", _PG_NAME], check=False)
+    elif _port_open("127.0.0.1", _PG_PORT):
+        print(f"127.0.0.1:{_PG_PORT} 已有服务在监听，直接复用作为数据库（不新建容器）。")
+        return
     else:
         _run(
             [
@@ -197,15 +225,16 @@ def _ensure_postgres() -> None:
             check=False,
         )
     _wait_postgres()
-    # 启用 vector 扩展（幂等）
-    _run(
-        [
-            "docker", "exec", _PG_NAME,
-            "psql", "-U", _PG_USER, "-d", _PG_DB,
-            "-c", "CREATE EXTENSION IF NOT EXISTS vector;",
-        ],
-        check=False,
-    )
+    # 启用 vector 扩展（幂等；仅当托管容器存在时执行）
+    if _run(["docker", "inspect", _PG_NAME]).returncode == 0:
+        _run(
+            [
+                "docker", "exec", _PG_NAME,
+                "psql", "-U", _PG_USER, "-d", _PG_DB,
+                "-c", "CREATE EXTENSION IF NOT EXISTS vector;",
+            ],
+            check=False,
+        )
 
 
 def _wait_postgres(timeout_seconds: int = 60) -> None:
