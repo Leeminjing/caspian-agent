@@ -298,9 +298,12 @@ def _run_update() -> int:
         return 1
 
     try:
-        _run(["git", "-C", str(app_dir), "fetch", _UPSTREAM], check=True)
+        # fetch 需要 远程名 + 分支（或只远程名）；传 `origin/main` 会被当作远程名而报
+        # `'origin/main' does not appear to be a git repository`。
+        _run(["git", "-C", str(app_dir), "fetch", "origin", "main"], check=True)
     except subprocess.CalledProcessError as exc:
-        print("git fetch 失败:", exc, file=sys.stderr)
+        detail = (exc.stderr or "").strip() or str(exc)
+        print("git fetch 失败:", detail, file=sys.stderr)
         return 1
     old = _run(["git", "-C", str(app_dir), "rev-parse", "HEAD"]).stdout.strip()
     _run(["git", "-C", str(app_dir), "reset", "--hard", _UPSTREAM], check=False)
