@@ -106,6 +106,10 @@ Knowledge retrieval is three-stage: **recall** (vector, level-blind) → **judge
 
 > 知识检索分三段:**召回**(向量,等级不参与)→ **judge**(LLM 检冲突)→ **govern**(确定性压制)。一旦存在等级差,高权威证据在*该命题*上**否决**低权威证据——**相似度、来源数量、任何 rerank 分数都不能翻盘**。同等级不裁决(`conflict_same_level`),potential 冲突不压制。压制是查询级、命题级、可解释、且**零持久化**(不改动知识库)。
 
+The stored and governed object is an **Evidence Unit**, not an arbitrary fixed-size chunk. Document ingestion preserves Markdown structure, asks the model only for exact source spans when a block is not clearly atomic, enforces zero body overlap and a 600-token hard maximum, then rates every unit independently. `content` remains the exact source substring; only `retrieval_text` (title/section/version/time + content) is embedded; level, provenance, and rating rationale remain governance-only metadata. Existing records remain readable as legacy entries, and all IDs returned by the API are opaque.
+
+> 知识库的最小对象是 **Evidence Unit（证据单元）**，不是固定 token 文本块。文档入口先保留 Markdown 天然结构；只有不明确原子的候选才让模型返回原文 span，代码再机械验证。正文 overlap 为 0，hard max 为 600 tokens，不设硬性最小长度；每个单元独立评级。`content` 始终是原文精确子串，只有“标题/章节/版本/时间 + content”组成的 `retrieval_text` 参与 embedding，等级、provenance 和评级理由只参与治理。存量记录按 legacy 继续读取，API 返回的各级 ID 均应视为 opaque。
+
 ### Hard ③ — 决策等级表 / The decision table
 
 A thread-level, versioned ledger at `requirements/{thread_id}/decision-table.md` — the **single source of truth** for human-approved decisions. Each row carries a `priority` of `1/2/3`; the file is content-addressed by a sha256 version; it is injected into every run via a fixed message id (`decision-table`) and **in-place replaced** on version change (zero token when unchanged). The arbitration is **monotonic**: a new decision that *downgrades* a table entry is deterministically rejected; one that *upgrades* (or states no level) requires human confirmation. This erases requirement drift / scope creep — you cannot "persuade" a table, because it is an `int` comparison.
@@ -151,7 +155,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 
 - **承诺层 (Commitment)**: `/commit <指令>` 触发 9 阶段;Worker–Evaluator 审核;人工节点在阶段 3/5/6/7 强制暂停;输出 `task-contract` + 决策等级表。Context7 仅为该流程懒加载(普通对话零依赖)。
 - **决策等级表**: 版本化、内容寻址、跨 run 注入 + 单调仲裁;`update_decision_table` 内置工具受机械校验约束。
-- **分层压制RAG**: `add_knowledge` 入库时由 LLM 对(正文、来源名、来源链接)做 claim 相对四维软评级(一手程度/领域契合/证据/命题针对性)+ 确定性硬映射产生 L1/L2/L3(或未评级),`knowledge_query` 返回已治理证据。
+- **分层压制RAG**: `add_knowledge` 把调用方确认的单条原子知识写为统一 Evidence Unit；`POST /api/knowledge/documents` 对文档做结构预切分、span-only 语义切分、零 overlap 和逐单元评级。向量只索引 `retrieval_text`，`knowledge_query` 返回已治理证据。API 详见 [`docs/knowledge-api.md`](docs/knowledge-api.md)。
 - **目标模式 (Goal)**: 持久目标 + 自动跨 run 推进(`<goal_round>`);compare-and-set 修订;`active/paused/blocked/complete` 生命周期;authority 边界(直接人类回合 vs 精确 goal 回合)。
 - **计划模式 (Plan)**: `/plan` 软引导 + `exit_plan_mode` 评审卡(Approve / Keep planning / Chat about it);刻意不强制、不隔离。
 - **子代理 (Subagents)**: `task` 委托;委托账本从消息流确定性重建;并发/总额硬上限截断;状态契约枚举 + 结果 sha256。
@@ -274,7 +278,7 @@ backend/
   packages/harness/
     caspian/
       agents/             lead agent, commitment (9-stage), middlewares, plan, goal
-      knowledge/          governed RAG (judge + govern)
+      knowledge/          Evidence Unit ingestion + governed RAG (judge + govern)
       subagents/          delegation executor / registry / status-contract
       plugins/            injection registry, hooks, runtime
       sandbox/            local / aio (Docker), path & shell guards

@@ -10,7 +10,7 @@
 示例:
     from caspian.config.langgraph_store_config import LanggraphStoreConfig
 
-    cfg = LanggraphStoreConfig(backend="async_postgres", vector_enabled=True, embed="text-embedding-v4", dims=1024, fields=["$"], embed_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    cfg = LanggraphStoreConfig(backend="async_postgres", vector_enabled=True, embed="text-embedding-v4", dims=1024, fields=["retrieval_text"], embed_base_url="https://dashscope.aliyuncs.com/compatible-mode/v1")
 """
 
 from pydantic import BaseModel
@@ -21,6 +21,6 @@ class LanggraphStoreConfig(BaseModel):
     vector_enabled: bool = True
     embed: str = "text-embedding-v4"
     dims: int = 1024
-    fields: list[str] = ["$"]
+    fields: list[str] = ["retrieval_text"]
     embed_base_url: str | None = None
     embed_api_key: str | None = None

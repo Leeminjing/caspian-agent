@@ -2,7 +2,7 @@
 本文件对外提供离散等级治理 RAG 的领域 schema 与等级工具函数。
 
 对外提供:
-    EvidenceEntry — 候选证据条目（含离散权威等级与相似度）
+    EvidenceEntry — 候选证据条目（含离散权威等级、相似度及非权威追踪元数据）
     ConflictRelation — judge 输出的两两冲突关系
     JudgeConflictOutput — judge 结构化输出根 schema
     LedgerEntry — 治理账本条目（状态 + 原因 + 被压命题）
@@ -29,34 +29,43 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from caspian.knowledge.evidence import SourceSpan
+
 _LEVEL_NAMES: dict[int, str] = {0: "L0", 1: "L1", 2: "L2", 3: "L3"}
 
 _VALID_LEVELS: frozenset = frozenset(_LEVEL_NAMES)
 
 
 def level_display(level: int | None) -> str:
-    """将等级值转为展示文本（None → 未评级）。"""
     if level is None:
         return "未评级"
     return _LEVEL_NAMES.get(level, str(level))
 
 
 def level_value(level: int | None) -> int:
-    """将显式等级值转为参与比较的数值；未评级 None 不参与比较（抛 ValueError）。"""
     if level not in _VALID_LEVELS:
         raise ValueError(f"非法等级: {level}，允许 0-3；未评级 None 不参与等级比较")
     return level
 
 
 class EvidenceEntry(BaseModel):
-    """候选证据条目。等级属于来源属性；score 仅用于召回排序，治理引擎不读取。"""
-
     id: str
     content: str
     level: int | None = None
     score: float | None = None
     source: str = ""
     source_url: str | None = None
+    chunk_id: str | None = None
+    document_id: str | None = None
+    document_revision_id: str | None = None
+    title: str = ""
+    section_path: tuple[str, ...] = ()
+    chunk_index: int | None = None
+    source_span: SourceSpan | None = None
+    version: str | None = None
+    published_at: str | None = None
+    effective_at: str | None = None
+    legacy: bool = False
 
     @property
     def level_display(self) -> str:
@@ -64,14 +73,6 @@ class EvidenceEntry(BaseModel):
 
 
 class ConflictRelation(BaseModel):
-    """judge 输出的两两冲突关系。
-
-    relation: explicit=明确冲突（可触发等级压制）；potential=可能冲突（不压制）；
-              temporal_disjoint=同主题但分属不同时间/版本（非冲突，双方保留）
-    scope: full=整体冲突；partial=仅 claim_a/claim_b 所述命题冲突
-    claim_a/claim_b: 冲突命题原文；claim_a_span/claim_b_span 为其在对应证据中的锚
-    """
-
     a: str
     b: str
     relation: Literal["explicit", "potential", "temporal_disjoint"]
@@ -83,14 +84,10 @@ class ConflictRelation(BaseModel):
 
 
 class JudgeConflictOutput(BaseModel):
-    """judge 结构化输出根 schema。"""
-
     conflicts: list[ConflictRelation] = Field(default_factory=list)
 
 
 class LedgerEntry(BaseModel):
-    """治理账本条目：每条候选证据的本次查询决策状态。"""
-
     id: str
     level_display: str
     status: Literal[
@@ -107,8 +104,6 @@ class LedgerEntry(BaseModel):
 
 
 class FinalEvidence(BaseModel):
-    """允许参与回答的最终证据（内容不删改，仅附被压命题注解）。"""
-
     id: str
     content: str
     level_display: str
@@ -116,8 +111,6 @@ class FinalEvidence(BaseModel):
 
 
 class GovernanceResult(BaseModel):
-    """单次查询的治理结果，零持久化（查询级、命题级）。"""
-
     final_evidence_set: list[FinalEvidence]
     ledger: list[LedgerEntry]
     notes: list[str] = Field(default_factory=list)
@@ -126,12 +119,6 @@ class GovernanceResult(BaseModel):
 
 
 class RatingDimensions(BaseModel):
-    """入库评级器输出的四个维度分（各 1..3）。
-
-    仅这四个维度被硬映射消费。
-    1..3 语义见 design.md D3 的 rubric 表。
-    """
-
     primary_source: int = Field(ge=1, le=3)
     domain_fit: int = Field(ge=1, le=3)
     evidence: int = Field(ge=1, le=3)
@@ -139,12 +126,6 @@ class RatingDimensions(BaseModel):
 
 
 class RatingOutput(BaseModel):
-    """评级器结构化输出根 schema。
-
-    LLM 只产出维度分 + 信心 + 理由，不直接给最终 level；最终 level 由
-    map_dimensions_to_level 确定性映射得出。unrated_reason 非空表示"信息不足"。
-    """
-
     claim_domain: str = ""
     dimensions: RatingDimensions
     confidence: float = Field(ge=0.0, le=1.0)
@@ -153,8 +134,6 @@ class RatingOutput(BaseModel):
 
 
 class LevelBasis(BaseModel):
-    """入库评级 provenance：等级为什么是它、由谁在何时评出。"""
-
     rated_by: str
     rated_at: str
     confidence: float | None = None

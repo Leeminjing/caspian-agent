@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage
 from caspian.knowledge.json_parsing import parse_fenced_or_raw
 from caspian.knowledge.judge import (
     _validated_conflicts,
+    judge_candidate_payload,
     judge_conflicts,
 )
 from caspian.knowledge.schemas import EvidenceEntry, JudgeConflictOutput
@@ -52,6 +53,28 @@ class _ModelStub:
 
 
 class JudgePureHelperTests(unittest.TestCase):
+
+    def test_judge投影只含非权威白名单(self):
+        entry = EvidenceEntry(
+            id="x",
+            content="事实",
+            level=3,
+            score=0.99,
+            source="官方",
+            title="API",
+            section_path=("参数",),
+            version="2",
+            published_at="2026-01-01",
+            effective_at="2026-02-01",
+        )
+        payload = judge_candidate_payload(entry)
+        self.assertEqual(
+            set(payload),
+            {"id", "content", "title", "section_path", "version", "published_at", "effective_at"},
+        )
+        self.assertNotIn("level", payload)
+        self.assertNotIn("score", payload)
+        self.assertNotIn("source", payload)
 
     def test_解析fenced_json(self):
         data = parse_fenced_or_raw('```json\n{"conflicts": []}\n```')
@@ -112,6 +135,18 @@ class JudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].relation, "explicit")
 
+    async def test_结构化路径接受metadata时态不相交(self):
+        model = _ModelStub(
+            structured_output=JudgeConflictOutput(
+                conflicts=[{"a": "a", "b": "b", "relation": "temporal_disjoint", "scope": "full"}]
+            )
+        )
+        result = await judge_conflicts(
+            [EvidenceEntry(id="a", content="默认值是 20", version="1"), EvidenceEntry(id="b", content="默认值是 30", version="2")],
+            model,
+        )
+        self.assertEqual(result[0].relation, "temporal_disjoint")
+
     async def test_结构化失败回退纯文本(self):
         model = _ModelStub(
             structured_output=None,
@@ -125,6 +160,17 @@ class JudgeTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].relation, "potential")
         self.assertEqual(result[0].claim_b, "非A")
+
+    async def test_纯文本路径接受metadata时态不相交(self):
+        model = _ModelStub(
+            structured_output=None,
+            plain_text='{"conflicts":[{"a":"a","b":"b","relation":"temporal_disjoint","scope":"full"}]}',
+        )
+        result = await judge_conflicts(
+            [EvidenceEntry(id="a", content="默认值是 20", effective_at="2025-01-01"), EvidenceEntry(id="b", content="默认值是 30", effective_at="2026-01-01")],
+            model,
+        )
+        self.assertEqual(result[0].relation, "temporal_disjoint")
 
     async def test_两条路径都失败抛异常(self):
         model = _ModelStub(structured_output=None, plain_text="模型输出的不是 JSON")

@@ -52,6 +52,9 @@ class _RatingModel:
         self.called = True
         return self
 
+    def get_num_tokens(self, text):
+        return len(text)
+
     def with_structured_output(self, schema, method="json_mode"):
         if self._fail:
             raise RuntimeError("structured unavailable")

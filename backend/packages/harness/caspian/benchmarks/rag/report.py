@@ -1,4 +1,23 @@
-"""四轴报告渲染。"""
+"""
+本文件对外提供 RAG benchmark 的 Markdown 报告渲染函数。
+
+对外提供:
+    render_conflictqa_report — 渲染真实 ConflictQA 三臂证据级/答案级报告
+    render_rag_report — 渲染治理、检索、可靠性、成本与 Evidence Unit 完整性报告
+
+输入:
+    runner 产生的结构化指标字典。
+
+输出:
+    str — 可直接写入 Markdown 文件的稳定报告文本。
+
+具体工作流:
+    按固定章节和表格顺序格式化指标；Evidence Unit 章节列出身份、来源覆盖、overlap、
+    hard max、span、embedding 隔离、治理等级使用、无关单元变更及 full/partial conflict 计数。
+
+示例:
+    markdown = render_rag_report(run_all())
+"""
 
 from __future__ import annotations
 
@@ -8,7 +27,6 @@ def _pct(k: int, n: int) -> str:
 
 
 def render_conflictqa_report(data: dict, answer: dict | None = None) -> str:
-    """在真实 ConflictQA 数据上的治理轴报告(证据级 + 可选答案级)。"""
     n = data["n"]
     arms = data["arms"]
     lines = [
@@ -74,7 +92,6 @@ def render_rag_report(data: dict) -> str:
     lines.append("每条语料中,错误方拥有更高相似度与更多来源数、更低权威等级(复现「流行但过时」陷阱)。")
     lines.append("")
 
-    # 轴B
     lines.append("## 轴B 治理轴对比")
     lines.append("")
     lines.append("| 臂 | 裁决信号 | 错误信息采纳率 | 正确信息保留率 |")
@@ -95,7 +112,32 @@ def render_rag_report(data: dict) -> str:
     lines.append("> score-based / source-count 反而**压制了正确信息、保留了错误信息**(相似度/来源数与真相不相关)。")
     lines.append("")
 
-    # 轴C
+    evidence = data.get("evidence_units", {})
+    if evidence:
+        lines.append("## Evidence Unit 完整性")
+        lines.append("")
+        lines.append("| 指标 | 数值 |")
+        lines.append("|---|---:|")
+        labels = {
+            "unit_count": "单元数量",
+            "identity_collisions": "身份碰撞",
+            "source_overwrites": "来源覆盖",
+            "overlap_violations": "正文 overlap 违规",
+            "hard_max_violations": "hard-max 违规",
+            "invalid_span_acceptances": "非法 span 接受",
+            "embedding_isolation_violations": "检索字段隔离违规",
+            "governance_metadata_embedding_violations": "治理 metadata 向量污染",
+            "governance_level_usage_violations": "治理等级使用违规",
+            "unrelated_unit_mutations": "无关单元变更",
+            "full_conflicts": "full conflict",
+            "partial_conflicts": "partial conflict",
+        }
+        for key, label in labels.items():
+            lines.append(f"| {label} | {evidence.get(key, 0)} |")
+        lines.append("")
+        lines.append(f"> Evidence Unit 完整性: {'✓ 通过' if evidence.get('passed') else '✗ 失败'}")
+        lines.append("")
+
     lines.append("## 轴C 检索轴(检索不能替代治理)")
     lines.append("")
     lines.append("| 检索机制 | 排序/选择信号 | 第 1 名为错误信息 |")
@@ -107,7 +149,6 @@ def render_rag_report(data: dict) -> str:
     lines.append("> 结论:检索与治理正交 —— 检索找相关,治理信哪个;相关性 ≠ 权威。")
     lines.append("")
 
-    # 轴A
     rel = data["reliability"]
     lines.append("## 轴A 机制科学可靠性")
     lines.append("")
@@ -119,7 +160,6 @@ def render_rag_report(data: dict) -> str:
         lines.append(f"  - {name}: {'✓' if passed else '✗'}")
     lines.append("")
 
-    # 轴D
     lines.append("## 轴D 成本")
     lines.append("")
     lines.append("- plain RAG:0 次额外 LLM 调用,零治理开销。")
@@ -127,7 +167,6 @@ def render_rag_report(data: dict) -> str:
     lines.append("> 治理有代价(一次 LLM 判定),换来的是不依赖相似度/来源数的权威裁决。")
     lines.append("")
 
-    # 结论
     lines.append("## 结论")
     lines.append("")
     lines.append("分层压制 RAG 以权威等级裁决冲突,是治理轴上唯一做到「错误信息 0 采纳 + 正确信息 100 保留」的机制;")

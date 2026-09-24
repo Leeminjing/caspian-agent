@@ -76,7 +76,7 @@ class StoreClientTests(unittest.IsolatedAsyncioTestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    async def test_内容哈希去重同内容upsert(self):
+    async def test_同正文不同来源保留为两条证据(self):
         store = _FakeStore()
         key1, level1 = await put_knowledge(
             store, "u1", "功能 A 已废弃。", source="官方",
@@ -86,10 +86,17 @@ class StoreClientTests(unittest.IsolatedAsyncioTestCase):
             store, "u1", "功能 A 已废弃。", source="官方2",
             source_url="https://blog.example.com/x", domains=_DOMAINS,
         )
-        self.assertEqual(key1, key2)  # 同内容去重 → 同 key
-        self.assertIsNone(level1)      # rating 关闭 → 未评级
+        self.assertNotEqual(key1, key2)
+        self.assertIsNone(level1)
         self.assertIsNone(level2)
-        self.assertEqual(len(store._data), 1)  # 同 key upsert，仅一条
+        self.assertEqual(len(store._data), 2)
+
+    async def test_无来源同正文保持幂等(self):
+        store = _FakeStore()
+        first, _ = await put_knowledge(store, "u1", "同一条原子知识")
+        second, _ = await put_knowledge(store, "u1", "同一条原子知识")
+        self.assertEqual(first, second)
+        self.assertEqual(len(store._data), 1)
 
     async def test_CAS修改成功(self):
         store = _FakeStore()

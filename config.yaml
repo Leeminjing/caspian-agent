@@ -117,7 +117,8 @@ langgraph_store:
   vector_enabled: true
   embed: qwen3.7-text-embedding
   dims: 1024
-  fields: ["$"]
+  # 只允许 Evidence Unit 的检索白名单文本参与 embedding；治理 metadata 不进入向量。
+  fields: ["retrieval_text"]
   embed_base_url: ${DASHSCOPE_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
   embed_api_key: $DASHSCOPE_API_KEY
 

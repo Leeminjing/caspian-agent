@@ -2,7 +2,7 @@
 本文件对外提供 add_knowledge 内置工具：lead agent 把信息带来源写入知识库。
 
 对外提供:
-    add_knowledge_tool — 入库一条知识（等级由来源归属确定性派生，不由调用方指定）
+    add_knowledge — 入库一条调用方已确认原子化且不超过 600 tokens 的 Evidence Unit
 
 输入:
     content: str — 知识正文
@@ -15,7 +15,7 @@
 
 具体工作流:
     (1) 从 runtime 取 store 与 user_id；缺失时返回说明性错误字符串
-    (2) put_knowledge 写入 ("knowledge", user_id) 命名空间，等级由 source_url 派生
+    (2) put_knowledge 生成来源感知的 document/revision/chunk ID，以 retrieval_text 建向量
     (3) 返回 id 与 level_display
 
 示例:
@@ -54,7 +54,7 @@ async def add_knowledge(
     When NOT to use: 未经验证的猜测、临时讨论内容、与用户目标无关的信息。
 
     Args:
-        content: 知识正文，一句话到一段话。
+        content: 已确认可独立评级与治理的原子知识正文，不超过 600 tokens；文档应调用文档 API。
         source: 来源名称，如"官方文档"。
         source_url: 来源链接，系统会依据它（及正文）自动评级，可省略（省略时仍会尝试评级，信息不足则未评级）。
     """

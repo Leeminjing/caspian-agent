@@ -26,10 +26,13 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from backend.app.gateway.routers.knowledge import (
+    DocumentIngestRequest,
     get_knowledge_list,
+    ingest_document,
     query_knowledge,
     QueryRequest,
 )
+from caspian.knowledge.evidence import DocumentIngestionResult, EvidencePersistenceError, EvidenceValidationError
 
 
 class _FakeItem:
@@ -62,6 +65,53 @@ def _request(store) -> types.SimpleNamespace:
 
 
 class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
+
+    async def test_文档入库返回稳定批量身份(self):
+        expected = DocumentIngestionResult(
+            document_id="doc_x",
+            document_revision_id="rev_x",
+            count=2,
+            chunk_ids=("chunk_a", "chunk_b"),
+        )
+        with patch("backend.app.gateway.routers.knowledge.put_document", return_value=expected):
+            response = await ingest_document(
+                DocumentIngestRequest(content="# API\n\n事实。", source="官方"),
+                _request(_FakeStore([])),
+            )
+        self.assertEqual(response.status_code, 201)
+        self.assertIn(b'"count":2', response.body)
+        self.assertIn(b'"chunk_a"', response.body)
+
+    async def test_文档验证错误映射稳定422(self):
+        error = EvidenceValidationError("span_gap", "spans 遗漏原文")
+        with patch("backend.app.gateway.routers.knowledge.put_document", side_effect=error):
+            with self.assertRaises(HTTPException) as caught:
+                await ingest_document(
+                    DocumentIngestRequest(content="事实。", source="官方"),
+                    _request(_FakeStore([])),
+                )
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertEqual(caught.exception.detail["code"], "span_gap")
+
+    async def test_文档缺失来源身份返回422且不写入(self):
+        with self.assertRaises(HTTPException) as caught:
+            await ingest_document(
+                DocumentIngestRequest(content="事实。"),
+                _request(_FakeStore([])),
+            )
+        self.assertEqual(caught.exception.status_code, 422)
+        self.assertEqual(caught.exception.detail["code"], "missing_source_identity")
+
+    async def test_文档持久化错误映射明确500(self):
+        error = EvidencePersistenceError("write failed", pending_ids=("chunk_x",))
+        with patch("backend.app.gateway.routers.knowledge.put_document", side_effect=error):
+            with self.assertRaises(HTTPException) as caught:
+                await ingest_document(
+                    DocumentIngestRequest(content="事实。", source="官方"),
+                    _request(_FakeStore([])),
+                )
+        self.assertEqual(caught.exception.status_code, 500)
+        self.assertEqual(caught.exception.detail["pending_ids"], ["chunk_x"])
 
     async def test_空库返回结构化空响应(self):
         result = await query_knowledge(
@@ -129,6 +179,25 @@ class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
         entry = result["entries"][0]
         self.assertEqual(entry["level_basis"]["rated_by"], "test-model")
         self.assertEqual(entry["level_basis"]["mapping_rule"], "no cap → L3")
+
+    async def test_列表响应扩展EvidenceUnit追踪字段(self):
+        item = _FakeItem("chunk_x", "c", 2)
+        item.value.update({
+            "record_type": "evidence_unit",
+            "chunk_id": "chunk_x",
+            "document_id": "doc_x",
+            "document_revision_id": "rev_x",
+            "title": "API",
+            "section_path": ["参数"],
+            "chunk_index": 0,
+            "source_span": {"start": 0, "end": 1},
+            "version": "2",
+        })
+        result = await get_knowledge_list(_request(_FakeStore([item])))
+        entry = result["entries"][0]
+        self.assertEqual(entry["document_id"], "doc_x")
+        self.assertEqual(entry["source_span"], {"start": 0, "end": 1})
+        self.assertFalse(entry["legacy"])
 
 
 if __name__ == "__main__":
