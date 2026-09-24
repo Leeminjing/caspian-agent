@@ -2,7 +2,7 @@
 本文件对外提供离散等级治理 RAG 的领域 schema 与等级工具函数。
 
 对外提供:
-    EvidenceEntry — 候选证据条目（含离散权威等级、相似度及非权威追踪元数据）
+    EvidenceEntry — 候选证据条目（含离散权威等级、相似度、atomicity 及时态追踪元数据）
     ConflictRelation — judge 输出的两两冲突关系
     JudgeConflictOutput — judge 结构化输出根 schema
     LedgerEntry — 治理账本条目（状态 + 原因 + 被压命题）
@@ -29,7 +29,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-from caspian.knowledge.evidence import SourceSpan
+from caspian.knowledge.evidence import Atomicity, SourceSpan, TemporalBinding
 
 _LEVEL_NAMES: dict[int, str] = {0: "L0", 1: "L1", 2: "L2", 3: "L3"}
 
@@ -65,6 +65,8 @@ class EvidenceEntry(BaseModel):
     version: str | None = None
     published_at: str | None = None
     effective_at: str | None = None
+    temporal_bindings: tuple[TemporalBinding, ...] = ()
+    atomicity: Atomicity = "legacy_unknown"
     legacy: bool = False
 
     @property

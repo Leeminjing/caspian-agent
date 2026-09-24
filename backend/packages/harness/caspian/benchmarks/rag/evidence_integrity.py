@@ -3,20 +3,20 @@
 
 对外提供:
     evidence_integrity_metrics — 统计单元、身份碰撞、来源覆盖、overlap、hard max、非法 span、
-    full/partial conflict、retrieval_text 隔离、等级使用与无关单元变更违规
+    full/partial conflict、事实簇 gate、时态 binding、partial eligibility、检索隔离与等级使用
     retrieval_text_isolated — 复算白名单检索文本并确认治理 metadata 不影响结果
     governance_isolation_metrics — 运行生产 govern，验证等级变化生效且无关单元不变
 
 输入:
-    EvidenceUnitCorpus 与确定性 TokenCounter。
+    EvidenceUnitCorpus、FactClusterCase 列表与确定性 TokenCounter。
 
 输出:
     dict[str, int|bool]；身份碰撞、来源覆盖、overlap、hard max、非法 span 和检索隔离违规
     均为零时 passed=True。
 
 具体工作流:
-    对 fixture 做分组与原文切片检查，复算 retrieval_text，统计 conflict scope，再以声明的
-    probe 运行生产 govern；不调用真实 embedding、LLM 或 Store，因此可在 CI 中稳定复验。
+    对 fixture 做原文/时态检查，复算 retrieval_text，运行生产 partial 归一化与 govern，
+    并把事实簇金标和 gate decision 对照；不调用真实 embedding、LLM 或 Store。
 
 示例:
     metrics = evidence_integrity_metrics(corpus, lambda text: len(text.split()))
@@ -26,8 +26,11 @@ from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import replace
 
-from caspian.benchmarks.rag.schema import EvidenceUnitCorpus, EvidenceUnitFixture
+from caspian.benchmarks.rag.schema import EvidenceUnitCorpus, EvidenceUnitFixture, FactClusterCase
+from caspian.knowledge.chunking import evaluate_atomicity_gate
 from caspian.knowledge.governance import govern
+from caspian.knowledge.evidence import CandidateBlock, SourceSpan
+from caspian.knowledge.judge import _validated_conflicts
 from caspian.knowledge.retrieval_text import build_retrieval_text
 from caspian.knowledge.schemas import ConflictRelation, EvidenceEntry
 
@@ -97,6 +100,7 @@ def _entry(unit: EvidenceUnitFixture) -> EvidenceEntry:
         id=unit.chunk_id,
         content=unit.content,
         level=unit.level,
+        atomicity=unit.atomicity,
     )
 
 
@@ -163,26 +167,122 @@ def governance_isolation_metrics(corpus: EvidenceUnitCorpus) -> dict[str, int]:
     }
 
 
-def evidence_integrity_metrics(corpus: EvidenceUnitCorpus, token_counter: Callable[[str], int]) -> dict:
+def _temporal_binding_violations(units: list[EvidenceUnitFixture]) -> int:
+    violations = 0
+    for unit in units:
+        for binding in unit.temporal_bindings:
+            violations += int(getattr(unit, binding.field) != binding.value)
+            if binding.source_kind == "document":
+                violations += int(binding.source_span is not None)
+                continue
+            span = binding.source_span
+            valid = (
+                span is not None
+                and 0 <= span.start < span.end <= len(unit.document_content)
+                and unit.document_content[span.start:span.end] == binding.anchor_text
+            )
+            if binding.source_kind == "content" and span is not None:
+                valid = valid and unit.source_span[0] <= span.start < span.end <= unit.source_span[1]
+            violations += int(not valid)
+    return violations
+
+
+def _partial_eligibility_violations(corpus: EvidenceUnitCorpus) -> int:
+    units = {unit.chunk_id: unit for unit in corpus.units}
+    violations = 0
+    for probe in corpus.partial_probes:
+        raw = {
+            "a": probe.a,
+            "b": probe.b,
+            "relation": "explicit",
+            "scope": "partial",
+            "claim_a": probe.claim_a,
+            "claim_b": probe.claim_b,
+            "claim_a_span": probe.claim_a_span,
+            "claim_b_span": probe.claim_b_span,
+        }
+        normalized = _validated_conflicts(
+            [raw],
+            {probe.a, probe.b},
+            {probe.a: units[probe.a].content, probe.b: units[probe.b].content},
+            {probe.a: units[probe.a].atomicity, probe.b: units[probe.b].atomicity},
+        )
+        violations += int(len(normalized) != 1)
+        if normalized:
+            violations += int(normalized[0].relation != probe.expected_relation)
+            violations += int(normalized[0].scope != probe.expected_scope)
+    return violations
+
+
+def _fact_cluster_metrics(cases: list[FactClusterCase], token_counter: Callable[[str], int]) -> dict[str, int]:
+    gate_mismatches = 0
+    binding_violations = 0
+    boundary_count = 0
+    atomicity_matches = 0
+    for case in cases:
+        block = CandidateBlock(
+            kind=case.kind,
+            content=case.content,
+            source_span=SourceSpan(start=0, end=len(case.content)),
+            structural_index=0,
+        )
+        decision = evaluate_atomicity_gate(block, token_counter)
+        gate_mismatches += int(decision.needs_semantic_split != case.expect_semantic_split)
+        boundary_count += len(case.boundaries)
+        atomicity_matches += sum(boundary.atomicity in ("atomic", "indivisible") for boundary in case.boundaries)
+        for boundary in case.boundaries:
+            for binding in boundary.temporal_bindings:
+                span = binding.source_span
+                valid = (
+                    span is not None
+                    and boundary.source_span[0] <= span.start < span.end <= boundary.source_span[1]
+                    and case.content[span.start:span.end] == binding.anchor_text
+                )
+                binding_violations += int(not valid)
+    return {
+        "fact_cluster_cases": len(cases),
+        "fact_cluster_boundary_matches": len(cases) - gate_mismatches,
+        "fact_cluster_gate_mismatches": gate_mismatches,
+        "atomicity_classification_matches": atomicity_matches,
+        "fact_cluster_temporal_binding_violations": binding_violations,
+    }
+
+
+def evidence_integrity_metrics(
+    corpus: EvidenceUnitCorpus,
+    token_counter: Callable[[str], int],
+    fact_cluster_cases: list[FactClusterCase] | None = None,
+) -> dict:
     units = corpus.units
+    token_counts = [token_counter(unit.content) for unit in units]
     metrics = {
         "unit_count": len(units),
         "identity_collisions": _identity_collisions(units),
         "source_overwrites": _source_overwrites(units),
         "overlap_violations": _overlaps(units),
-        "hard_max_violations": sum(token_counter(unit.content) > 600 for unit in units),
+        "hard_max_violations": sum(count > 600 for count in token_counts),
+        "ideal_range_below": sum(count < 150 for count in token_counts),
+        "ideal_range_within": sum(150 <= count <= 400 for count in token_counts),
+        "ideal_range_above": sum(400 < count <= 600 for count in token_counts),
         "invalid_span_acceptances": _invalid_spans(units),
+        "temporal_binding_violations": _temporal_binding_violations(units),
+        "partial_eligibility_violations": _partial_eligibility_violations(corpus),
         "embedding_isolation_violations": sum(not retrieval_text_isolated(unit) for unit in units),
         "full_conflicts": sum(conflict.scope == "full" for conflict in corpus.conflicts),
         "partial_conflicts": sum(conflict.scope == "partial" for conflict in corpus.conflicts),
     }
     metrics.update(governance_isolation_metrics(corpus))
+    metrics.update(_fact_cluster_metrics(fact_cluster_cases or [], token_counter))
     zero_keys = (
         "identity_collisions",
         "source_overwrites",
         "overlap_violations",
         "hard_max_violations",
         "invalid_span_acceptances",
+        "temporal_binding_violations",
+        "partial_eligibility_violations",
+        "fact_cluster_gate_mismatches",
+        "fact_cluster_temporal_binding_violations",
         "embedding_isolation_violations",
         "governance_metadata_embedding_violations",
         "governance_level_usage_violations",

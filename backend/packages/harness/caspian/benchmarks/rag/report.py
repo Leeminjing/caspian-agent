@@ -13,7 +13,8 @@
 
 具体工作流:
     按固定章节和表格顺序格式化指标；Evidence Unit 章节列出身份、来源覆盖、overlap、
-    hard max、span、embedding 隔离、治理等级使用、无关单元变更及 full/partial conflict 计数。
+    hard max、事实簇 gate、atomicity、时态 binding、partial eligibility、理想区间 telemetry、
+    embedding 隔离、治理等级使用、无关单元变更及 full/partial conflict 计数。
 
 示例:
     markdown = render_rag_report(run_all())
@@ -124,7 +125,17 @@ def render_rag_report(data: dict) -> str:
             "source_overwrites": "来源覆盖",
             "overlap_violations": "正文 overlap 违规",
             "hard_max_violations": "hard-max 违规",
+            "ideal_range_below": "理想区间以下（观测）",
+            "ideal_range_within": "理想区间内（观测）",
+            "ideal_range_above": "理想区间以上（观测）",
             "invalid_span_acceptances": "非法 span 接受",
+            "fact_cluster_cases": "事实簇金标样例",
+            "fact_cluster_boundary_matches": "事实簇 gate 匹配",
+            "fact_cluster_gate_mismatches": "事实簇 gate 违规",
+            "atomicity_classification_matches": "atomicity 金标分类",
+            "temporal_binding_violations": "单元时态 binding 违规",
+            "fact_cluster_temporal_binding_violations": "事实簇时态 binding 违规",
+            "partial_eligibility_violations": "partial eligibility 违规",
             "embedding_isolation_violations": "检索字段隔离违规",
             "governance_metadata_embedding_violations": "治理 metadata 向量污染",
             "governance_level_usage_violations": "治理等级使用违规",

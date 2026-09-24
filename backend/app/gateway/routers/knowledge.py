@@ -11,7 +11,8 @@
     Pydantic 请求体、request.state.current_user.id 和 request.app.state.store。
 
 输出:
-    JSON 响应；EvidenceValidationError 映射稳定 422，持久化错误映射 500，CAS 冲突映射 409。
+    JSON 响应；列表/query 同时投影 atomicity 与时态 bindings；EvidenceValidationError 映射
+    稳定 422，持久化错误映射 500，CAS 冲突映射 409。
 
 具体工作流:
     路由只做边界校验、依赖取得、调用 knowledge 入库/查询编排和错误映射；结构切分、评级、

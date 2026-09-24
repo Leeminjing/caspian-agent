@@ -2,7 +2,8 @@
 本文件对外提供 Evidence Unit 领域模型、身份、结构切分、span 验证与入库编排测试。
 
 输入:
-    Markdown/纯文本 fixtures、确定性 token counter、fake segmenter/model/store 和评级桩。
+    Markdown/纯文本 fixtures、可审计 atomicity gate、确定性 token counter、fake
+    segmenter/model/store 和评级桩。
 
 输出:
     unittest/pytest 可运行断言，复验精确原文、零 overlap、来源感知身份、检索字段隔离、
@@ -23,6 +24,7 @@ from caspian.config.knowledge_config import RatingConfig
 from langchain_core.embeddings import Embeddings
 from langgraph.store.memory import InMemoryStore
 from caspian.knowledge.chunking import (
+    evaluate_atomicity_gate,
     needs_semantic_split,
     split_structural_blocks,
     to_absolute_blocks,
@@ -153,6 +155,8 @@ class ChunkingTests(unittest.TestCase):
         blocks = split_structural_blocks(content, "markdown")
         self.assertEqual([item.kind for item in blocks], ["paragraph", "list", "table", "code"])
         self.assertTrue(all(item.section_path == ("API",) for item in blocks))
+        self.assertTrue(all(item.section_refs[0].title == "API" for item in blocks))
+        self.assertTrue(all(content[item.section_refs[0].source_span.start:item.section_refs[0].source_span.end] == "API" for item in blocks))
         self.assertTrue(all(content[item.source_span.start:item.source_span.end] == item.content for item in blocks))
 
     def test_plain_text_preserves_crlf_unicode_and_edge_whitespace(self):
@@ -166,17 +170,23 @@ class ChunkingTests(unittest.TestCase):
         short = CandidateBlock(kind="paragraph", content=" ".join(["fact"] * 60), source_span=SourceSpan(start=0, end=299), structural_index=0)
         long_cluster = CandidateBlock(kind="paragraph", content=" ".join(["fact"] * 450), source_span=SourceSpan(start=0, end=2249), structural_index=0)
         oversized = CandidateBlock(kind="paragraph", content=" ".join(["fact"] * 601), source_span=SourceSpan(start=0, end=3004), structural_index=0)
-        multi = CandidateBlock(kind="list", content="- A\n- B\n", source_span=SourceSpan(start=0, end=8), structural_index=0)
-        two_topics_text = "A 功能已废弃。B 默认值是 20。"
+        multi_text = "- React: ref behavior\n- Vue: reactivity behavior\n"
+        multi = CandidateBlock(kind="list", content=multi_text, source_span=SourceSpan(start=0, end=len(multi_text)), structural_index=0)
+        two_topics_text = "A 功能已废弃。另一方面，B 默认值是 20。"
         two_topics = CandidateBlock(kind="paragraph", content=two_topics_text, source_span=SourceSpan(start=0, end=len(two_topics_text)), structural_index=0)
         compound_text = "Mode is safe; timeout is 20."
         compound = CandidateBlock(kind="paragraph", content=compound_text, source_span=SourceSpan(start=0, end=len(compound_text)), structural_index=0)
+        same_cluster_text = "React 19 accepts ref as a prop. forwardRef is therefore no longer required."
+        same_cluster = CandidateBlock(kind="paragraph", content=same_cluster_text, source_span=SourceSpan(start=0, end=len(same_cluster_text)), structural_index=0)
         self.assertFalse(needs_semantic_split(short, _words))
         self.assertFalse(needs_semantic_split(long_cluster, _words))
         self.assertTrue(needs_semantic_split(oversized, _words))
         self.assertTrue(needs_semantic_split(multi, _words))
         self.assertTrue(needs_semantic_split(two_topics, _words))
-        self.assertTrue(needs_semantic_split(compound, _words))
+        self.assertFalse(needs_semantic_split(compound, _words))
+        self.assertFalse(needs_semantic_split(same_cluster, _words))
+        self.assertEqual(evaluate_atomicity_gate(oversized, _words).reason, "hard_max_exceeded")
+        self.assertEqual(evaluate_atomicity_gate(same_cluster, _words).reason, "no_high_confidence_multi_topic_signal")
 
     def test_span_validation_accepts_whitespace_gaps_and_absolutizes(self):
         document = "# H\n\nAlpha\n\nBeta"
@@ -204,8 +214,9 @@ class ChunkingTests(unittest.TestCase):
 
 class IngestionTests(unittest.IsolatedAsyncioTestCase):
     async def test_document_ingestion_validates_then_batches_ordered_units(self):
-        content = "- Alpha\n- Beta\n"
-        segmenter = _Segmenter((SourceSpan(start=0, end=7), SourceSpan(start=8, end=15)))
+        content = "- Alpha: enabled\n- Beta: disabled\n"
+        split_at = content.index("\n")
+        segmenter = _Segmenter((SourceSpan(start=0, end=split_at), SourceSpan(start=split_at + 1, end=len(content.rstrip()))))
         store = _Store()
         rating = RatingOutput(claim_domain="one", dimensions=RatingDimensions(primary_source=3, domain_fit=3, evidence=3, specificity=3), confidence=0.9, reason="ok")
         with patch("caspian.knowledge.ingestion.rate_level", new=AsyncMock(return_value=rating)):
@@ -216,6 +227,7 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         values = [op.value for op in store.operations]
         self.assertEqual([value["chunk_index"] for value in values], [0, 1])
         self.assertTrue(all(value["record_type"] == "evidence_unit" for value in values))
+        self.assertTrue(all(value["atomicity"] == "atomic" for value in values))
 
     async def test_document_ingestion_stage_order_is_split_rate_then_write(self):
         events = []
@@ -223,7 +235,11 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         class _OrderedSegmenter:
             async def split(self, candidate):
                 events.append("split")
-                return (SourceSpan(start=0, end=3), SourceSpan(start=4, end=7))
+                split_at = candidate.content.index("\n")
+                return (
+                    SourceSpan(start=0, end=split_at),
+                    SourceSpan(start=split_at + 1, end=len(candidate.content)),
+                )
 
         class _OrderedStore(_Store):
             async def abatch(self, operations):
@@ -245,10 +261,11 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
             )
 
         with patch("caspian.knowledge.ingestion.rate_level", new=rate):
+            content = "- Alpha: on\n- Beta: off"
             await put_document(
                 _OrderedStore(),
                 "u1",
-                DocumentInput(content="- A\n- B", source="Official"),
+                DocumentInput(content=content, source="Official"),
                 model=_Model(),
                 segmenter=_OrderedSegmenter(),
             )
@@ -258,7 +275,7 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         store = _Store()
         segmenter = _Segmenter(error=EvidenceValidationError("bad", "bad spans"))
         with self.assertRaises(EvidenceValidationError):
-            await put_document(store, "u1", DocumentInput(content="First fact.\n\n- A\n- B\n", source="Official"), model=_Model(), segmenter=segmenter)
+            await put_document(store, "u1", DocumentInput(content="First fact.\n\n- Alpha: on\n- Beta: off\n", source="Official"), model=_Model(), segmenter=segmenter)
         self.assertEqual(store.operations, [])
 
     async def test_each_unit_is_rated_independently(self):
@@ -324,6 +341,8 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         item = SimpleNamespace(key="old", value={"content": "legacy", "level": 2, "source": "s", "source_url": None}, score=0.5)
         entry = evidence_from_item(item)
         self.assertTrue(entry.legacy)
+        self.assertEqual(entry.atomicity, "legacy_unknown")
+        self.assertEqual(entry.temporal_bindings, ())
         self.assertIsNone(entry.document_id)
         self.assertEqual(entry.content, "legacy")
 
@@ -391,6 +410,7 @@ class IngestionTests(unittest.IsolatedAsyncioTestCase):
         entries = {item.key: evidence_from_item(item) for item in items}
         self.assertTrue(entries["legacy"].legacy)
         self.assertFalse(entries["chunk_new"].legacy)
+        self.assertEqual(entries["chunk_new"].atomicity, "atomic")
         self.assertEqual(entries["chunk_new"].document_id, "doc_new")
 
 

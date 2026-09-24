@@ -106,9 +106,9 @@ Knowledge retrieval is three-stage: **recall** (vector, level-blind) → **judge
 
 > 知识检索分三段:**召回**(向量,等级不参与)→ **judge**(LLM 检冲突)→ **govern**(确定性压制)。一旦存在等级差,高权威证据在*该命题*上**否决**低权威证据——**相似度、来源数量、任何 rerank 分数都不能翻盘**。同等级不裁决(`conflict_same_level`),potential 冲突不压制。压制是查询级、命题级、可解释、且**零持久化**(不改动知识库)。
 
-The stored and governed object is an **Evidence Unit**, not an arbitrary fixed-size chunk. Document ingestion preserves Markdown structure, asks the model only for exact source spans when a block is not clearly atomic, enforces zero body overlap and a 600-token hard maximum, then rates every unit independently. `content` remains the exact source substring; only `retrieval_text` (title/section/version/time + content) is embedded; level, provenance, and rating rationale remain governance-only metadata. Existing records remain readable as legacy entries, and all IDs returned by the API are opaque.
+The stored and governed object is an **Evidence Unit**, not an arbitrary fixed-size chunk. Document ingestion preserves Markdown structure and calls semantic segmentation only for a 600-token overflow or high-confidence multi-topic signal—sentence and punctuation counts never trigger it alone. The model returns exact source spans, `atomicity`, and anchored temporal metadata; code validates every boundary and anchor with zero body overlap. The 150–400 range is prompt/benchmark telemetry, not a runtime acceptance rule. `content` remains the exact source substring; only `retrieval_text` (title/section/unit version/time + content) is embedded. `partial` suppression is mechanically eligible only for a proper subspan of an `indivisible` unit. Existing records remain readable as `legacy_unknown`, and all IDs returned by the API are opaque.
 
-> 知识库的最小对象是 **Evidence Unit（证据单元）**，不是固定 token 文本块。文档入口先保留 Markdown 天然结构；只有不明确原子的候选才让模型返回原文 span，代码再机械验证。正文 overlap 为 0，hard max 为 600 tokens，不设硬性最小长度；每个单元独立评级。`content` 始终是原文精确子串，只有“标题/章节/版本/时间 + content”组成的 `retrieval_text` 参与 embedding，等级、provenance 和评级理由只参与治理。存量记录按 legacy 继续读取，API 返回的各级 ID 均应视为 opaque。
+> 知识库的最小对象是 **Evidence Unit（证据单元）**，不是固定 token 文本块。文档入口先保留 Markdown 天然结构；只有超过 600-token hard max 或命中高置信多主题信号才调用语义切分，句子/标点数量本身不会触发。模型只返回原文 span、`atomicity` 和带原文锚点的单元级版本/时间，代码机械验证；正文 overlap 为 0。150–400 tokens 只是 prompt 弱偏好和 benchmark 观测，不是运行时门槛。只有 `indivisible` 单元的真子区间才具备 partial suppression 资格。`content` 始终是原文精确子串，只有“标题/章节/单元版本/时间 + content”组成的 `retrieval_text` 参与 embedding；存量记录以 `legacy_unknown` 继续读取。
 
 ### Hard ③ — 决策等级表 / The decision table
 
@@ -155,7 +155,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 
 - **承诺层 (Commitment)**: `/commit <指令>` 触发 9 阶段;Worker–Evaluator 审核;人工节点在阶段 3/5/6/7 强制暂停;输出 `task-contract` + 决策等级表。Context7 仅为该流程懒加载(普通对话零依赖)。
 - **决策等级表**: 版本化、内容寻址、跨 run 注入 + 单调仲裁;`update_decision_table` 内置工具受机械校验约束。
-- **分层压制RAG**: `add_knowledge` 把调用方确认的单条原子知识写为统一 Evidence Unit；`POST /api/knowledge/documents` 对文档做结构预切分、span-only 语义切分、零 overlap 和逐单元评级。向量只索引 `retrieval_text`，`knowledge_query` 返回已治理证据。API 详见 [`docs/knowledge-api.md`](docs/knowledge-api.md)。
+- **分层压制RAG**: `add_knowledge` 把调用方确认的单条原子知识写为统一 Evidence Unit；`POST /api/knowledge/documents` 对文档做结构预切分、保守事实簇 gate、span-only 语义切分、单元级时态绑定、零 overlap 和逐单元评级。向量只索引 `retrieval_text`，partial 由 atomicity 代码门禁约束，`knowledge_query` 返回已治理证据。API 详见 [`docs/knowledge-api.md`](docs/knowledge-api.md)。
 - **目标模式 (Goal)**: 持久目标 + 自动跨 run 推进(`<goal_round>`);compare-and-set 修订;`active/paused/blocked/complete` 生命周期;authority 边界(直接人类回合 vs 精确 goal 回合)。
 - **计划模式 (Plan)**: `/plan` 软引导 + `exit_plan_mode` 评审卡(Approve / Keep planning / Chat about it);刻意不强制、不隔离。
 - **子代理 (Subagents)**: `task` 委托;委托账本从消息流确定性重建;并发/总额硬上限截断;状态契约枚举 + 结果 sha256。

@@ -6,7 +6,7 @@
 
 输出:
     可运行检查，覆盖结构化路径、纯文本兜底路径、坏 JSON 抛错、单候选短路、
-    非法关系过滤与去重。
+    非法关系过滤、去重及 atomicity 驱动的 partial eligibility。
 """
 
 import unittest
@@ -70,7 +70,7 @@ class JudgePureHelperTests(unittest.TestCase):
         payload = judge_candidate_payload(entry)
         self.assertEqual(
             set(payload),
-            {"id", "content", "title", "section_path", "version", "published_at", "effective_at"},
+            {"id", "content", "title", "section_path", "version", "published_at", "effective_at", "atomicity"},
         )
         self.assertNotIn("level", payload)
         self.assertNotIn("score", payload)
@@ -115,6 +115,38 @@ class JudgePureHelperTests(unittest.TestCase):
         )
         self.assertEqual(len(conflicts), 1)
         self.assertEqual(conflicts[0].relation, "temporal_disjoint")
+
+    def test_partial_only_accepts_proper_subspan_on_indivisible_side(self):
+        raw = [{
+            "a": "a", "b": "b", "relation": "explicit", "scope": "partial",
+            "claim_a": "A", "claim_b": "B1", "claim_a_span": [0, 1], "claim_b_span": [0, 2],
+        }]
+        accepted = _validated_conflicts(raw, {"a", "b"}, {"a": "A", "b": "B1 B2"}, {"a": "atomic", "b": "indivisible"})
+        self.assertEqual((accepted[0].relation, accepted[0].scope), ("explicit", "partial"))
+        rejected = _validated_conflicts(raw, {"a", "b"}, {"a": "A", "b": "B1 B2"}, {"a": "atomic", "b": "atomic"})
+        self.assertEqual((rejected[0].relation, rejected[0].scope), ("potential", "full"))
+        self.assertIsNone(rejected[0].claim_b_span)
+
+    def test_partial_with_full_claims_normalizes_to_full(self):
+        conflicts = _validated_conflicts(
+            [{"a": "a", "b": "b", "relation": "explicit", "scope": "partial", "claim_a": "A", "claim_b": "B", "claim_a_span": [0, 1], "claim_b_span": [0, 1]}],
+            {"a", "b"},
+            {"a": "A", "b": "B"},
+            {"a": "atomic", "b": "atomic"},
+        )
+        self.assertEqual(conflicts[0].scope, "full")
+
+    def test_partial_accepts_two_proper_subspans_when_both_units_are_indivisible(self):
+        conflicts = _validated_conflicts(
+            [{
+                "a": "a", "b": "b", "relation": "explicit", "scope": "partial",
+                "claim_a": "A1", "claim_b": "B1", "claim_a_span": [0, 2], "claim_b_span": [0, 2],
+            }],
+            {"a", "b"},
+            {"a": "A1 A2", "b": "B1 B2"},
+            {"a": "indivisible", "b": "indivisible"},
+        )
+        self.assertEqual((conflicts[0].relation, conflicts[0].scope), ("explicit", "partial"))
 
 
 class JudgeTests(unittest.IsolatedAsyncioTestCase):

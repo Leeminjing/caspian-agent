@@ -27,7 +27,7 @@
 - **AND** SHALL NOT 要求先执行破坏性数据迁移
 
 ### Requirement: 冲突 judge 只消费语义与时态上下文
-冲突 judge SHALL 接收候选的 `id`、`content`、`title`、`section_path`、`version`、`published_at` 与 `effective_at`，以便区分同主题不同时间或版本。judge SHALL NOT 接收候选的 `level`、相似度、authority score、`level_basis`、provenance 或来源数量；冲突识别与权威裁决 SHALL 保持正交。
+冲突 judge SHALL 接收候选的 `id`、`content`、`title`、`section_path`、`version`、`published_at`、`effective_at` 与 `atomicity`，以便区分同主题不同时间或版本并约束 partial eligibility。judge SHALL NOT 接收候选的 `level`、相似度、authority score、`level_basis`、provenance 或来源数量；冲突识别与权威裁决 SHALL 保持正交。
 
 #### Scenario: 时态字段帮助区分版本
 - **WHEN** 两个候选正文没有直接写出版本，但结构化 metadata 表明它们属于不同版本
@@ -40,7 +40,7 @@
 - **AND** 冲突关系 SHALL 在后续由治理引擎结合等级裁决
 
 ### Requirement: 单元级 full conflict 是常规路径且 partial suppression 保留为兜底
-系统 SHALL 在 Evidence Unit 之间执行既有冲突治理。语义边界已分离的单元若整体针对同一命题对立，judge SHALL 使用 `scope="full"`；只有一个无法合理继续拆分的 Evidence Unit 内部含多个不可分离命题且其中部分冲突时，才 SHALL 使用经原文锚定的 `scope="partial"`。治理结果仍 SHALL 保持跨等级压制、同级不裁决、potential 不压制和查询级零持久化。
+系统 SHALL 在 Evidence Unit 之间执行既有冲突治理。语义边界已分离的单元若整体针对同一命题对立，judge SHALL 使用 `scope="full"`。只有某一侧 `atomicity="indivisible"` 且该侧冲突 claim 是其正文真子区间时，judge 才 MAY 对该侧使用 partial；若某侧的 partial claim 是真子区间但该侧为 `atomic`、`legacy_unknown` 或缺失状态，代码 SHALL 把整条关系机械降级为 `potential` 并清除可压制 span。双方 claim 都覆盖完整正文时 SHALL 规范化为 full。治理结果仍 SHALL 保持跨等级压制、同级不裁决、potential 不压制和查询级零持久化。
 
 #### Scenario: 独立命题按 full conflict 治理
 - **WHEN** 两个原子 Evidence Unit 对同一时间版本的同一命题给出相反结论
@@ -48,9 +48,19 @@
 - **AND** govern SHALL 按既有等级规则处理
 
 #### Scenario: partial 继续要求原文锚定
-- **WHEN** 无法进一步合理拆分的单元只有部分命题与另一单元冲突
+- **WHEN** `atomicity="indivisible"` 的单元只有部分命题与另一单元冲突
 - **THEN** partial 关系 SHALL 继续提供可验证的 claim 与 span
 - **AND** 未锚定的 partial 关系 SHALL 降级为 potential，不得触发压制
+
+#### Scenario: atomic 单元拒绝 partial suppression
+- **WHEN** judge 对 `atomic`、`legacy_unknown` 或缺失 atomicity 的单元返回只覆盖正文真子区间的 partial claim
+- **THEN** 代码 SHALL 把该关系降级为 potential 并清除 partial spans
+- **AND** govern SHALL NOT 对该关系执行正文裁切或等级压制
+
+#### Scenario: 一侧完整一侧不可分时允许 partial
+- **WHEN** 冲突 claim 覆盖 atomic 单元的完整正文，但只覆盖 indivisible 单元的真子区间
+- **THEN** 代码 MAY 接受经原文锚定的 partial 关系
+- **AND** 只有 indivisible 一侧 MAY 在治理时发生局部裁切
 
 ## MODIFIED Requirements
 

@@ -13,6 +13,9 @@ units:
     source_span: [0, 19]
     title: "Foo API"
     version: "2"
+    atomicity: atomic
+    temporal_bindings:
+      - {field: version, value: "2", source_kind: document, anchor_text: "2"}
     level: 3
     level_basis: {reason: official}
     provenance: {source_type: official}
@@ -30,6 +33,9 @@ units:
     source_span: [0, 19]
     title: "Foo API"
     version: "2"
+    atomicity: atomic
+    temporal_bindings:
+      - {field: version, value: "2", source_kind: document, anchor_text: "2"}
     level: 2
     level_basis: {reason: engineering}
     provenance: {source_type: official_blog}
@@ -47,6 +53,9 @@ units:
     source_span: [0, 19]
     title: "Foo API"
     version: "3"
+    atomicity: atomic
+    temporal_bindings:
+      - {field: version, value: "3", source_kind: document, anchor_text: "3"}
     level: 3
   - chunk_id: chunk_fact_a
     document_id: doc_multi
@@ -60,6 +69,7 @@ units:
     source: "Official Multi"
     source_span: [0, 17]
     section_path: ["Features"]
+    atomicity: atomic
     level: 3
   - chunk_id: chunk_fact_b
     document_id: doc_multi
@@ -73,6 +83,7 @@ units:
     source: "Official Multi"
     source_span: [18, 40]
     section_path: ["Features"]
+    atomicity: atomic
     level: 3
   - chunk_id: chunk_fact_a_conflict
     document_id: doc_fact_conflict
@@ -86,6 +97,7 @@ units:
     source: "Community Post"
     source_span: [0, 18]
     section_path: ["Features"]
+    atomicity: atomic
     level: 1
   - chunk_id: chunk_partial
     document_id: doc_partial
@@ -97,6 +109,67 @@ units:
       Mode is safe; timeout is 20.
     source: "Legacy Compound"
     source_span: [0, 28]
+    atomicity: indivisible
+    level: 1
+  - chunk_id: chunk_react_18
+    document_id: doc_react_versions
+    document_revision_id: rev_react_versions
+    document_content: "# React 18\n\nOld behavior.\n\n# React 19\n\nNew behavior."
+    content: "Old behavior."
+    retrieval_text: |-
+      Title: React Guide
+      Section: React 18
+      Version: React 18
+      Content:
+      Old behavior.
+    source: "React Official"
+    source_span: [12, 25]
+    title: "React Guide"
+    section_path: ["React 18"]
+    version: "React 18"
+    atomicity: atomic
+    temporal_bindings:
+      - field: version
+        value: React 18
+        source_kind: heading
+        anchor_text: React 18
+        source_span: {start: 2, end: 10}
+    level: 3
+  - chunk_id: chunk_react_19
+    document_id: doc_react_versions
+    document_revision_id: rev_react_versions
+    document_content: "# React 18\n\nOld behavior.\n\n# React 19\n\nNew behavior."
+    content: "New behavior."
+    retrieval_text: |-
+      Title: React Guide
+      Section: React 19
+      Version: React 19
+      Content:
+      New behavior.
+    source: "React Official"
+    source_span: [39, 52]
+    title: "React Guide"
+    section_path: ["React 19"]
+    version: "React 19"
+    atomicity: atomic
+    temporal_bindings:
+      - field: version
+        value: React 19
+        source_kind: heading
+        anchor_text: React 19
+        source_span: {start: 29, end: 37}
+    level: 3
+  - chunk_id: chunk_legacy_unknown
+    document_id: doc_legacy_unknown
+    document_revision_id: rev_legacy_unknown
+    document_content: "Legacy A and B."
+    content: "Legacy A and B."
+    retrieval_text: |-
+      Content:
+      Legacy A and B.
+    source: "Legacy"
+    source_span: [0, 15]
+    atomicity: legacy_unknown
     level: 1
 conflicts:
   - {a: chunk_revision_3, b: chunk_source_a, relation: temporal_disjoint, scope: full}
@@ -109,3 +182,29 @@ governance_probe:
   changed_id: chunk_fact_a
   changed_level: 0
   unrelated_id: chunk_fact_b
+
+partial_eligibility_probes:
+  - a: chunk_partial
+    b: chunk_source_a
+    claim_a: "timeout is 20."
+    claim_b: "Foo defaults to 30."
+    claim_a_span: [14, 28]
+    claim_b_span: [0, 19]
+    expected_relation: explicit
+    expected_scope: partial
+  - a: chunk_fact_a
+    b: chunk_fact_a_conflict
+    claim_a: "Alpha"
+    claim_b: "Alpha is disabled."
+    claim_a_span: [0, 5]
+    claim_b_span: [0, 18]
+    expected_relation: potential
+    expected_scope: full
+  - a: chunk_legacy_unknown
+    b: chunk_source_a
+    claim_a: "Legacy A"
+    claim_b: "Foo defaults to 30."
+    claim_a_span: [0, 8]
+    claim_b_span: [0, 19]
+    expected_relation: potential
+    expected_scope: full

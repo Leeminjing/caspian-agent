@@ -192,11 +192,21 @@ class KnowledgeQueryEndpointTests(unittest.IsolatedAsyncioTestCase):
             "chunk_index": 0,
             "source_span": {"start": 0, "end": 1},
             "version": "2",
+            "atomicity": "indivisible",
+            "temporal_bindings": [{
+                "field": "version",
+                "value": "2",
+                "source_kind": "document",
+                "anchor_text": "2",
+                "source_span": None,
+            }],
         })
         result = await get_knowledge_list(_request(_FakeStore([item])))
         entry = result["entries"][0]
         self.assertEqual(entry["document_id"], "doc_x")
         self.assertEqual(entry["source_span"], {"start": 0, "end": 1})
+        self.assertEqual(entry["atomicity"], "indivisible")
+        self.assertEqual(entry["temporal_bindings"][0]["value"], "2")
         self.assertFalse(entry["legacy"])
 
 

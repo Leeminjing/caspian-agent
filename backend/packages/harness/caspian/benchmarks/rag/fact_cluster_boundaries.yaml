@@ -1,0 +1,92 @@
+version: 1
+cases:
+  - id: same_cluster_multiple_sentences
+    kind: paragraph
+    content: "Foo defaults to 20. This default also applies to retries."
+    expect_semantic_split: false
+    boundaries:
+      - source_span: [0, all]
+        atomicity: atomic
+
+  - id: explicit_topic_shift
+    kind: paragraph
+    content: "Foo defaults to 20.\n另一方面，Bar supports Windows."
+    expect_semantic_split: true
+    boundaries:
+      - source_span: [0, 19]
+        atomicity: atomic
+      - source_span: [20, all]
+        atomicity: atomic
+
+  - id: dependent_statements_are_indivisible
+    kind: list
+    content: "- A: enabled only when B is enabled\n- B: disabling B also disables A"
+    expect_semantic_split: true
+    boundaries:
+      - source_span: [0, all]
+        atomicity: indivisible
+
+  - id: labeled_list_topics
+    kind: list
+    content: "- React: ref is a prop\n- Vue: refs are reactive"
+    expect_semantic_split: true
+    boundaries:
+      - source_span: [0, 22]
+        atomicity: atomic
+      - source_span: [23, all]
+        atomicity: atomic
+
+  - id: topic_table_keeps_required_header_context
+    kind: table
+    content: "| Topic | Value |\n|---|---|\n| A | one |\n| B | two |"
+    expect_semantic_split: true
+    boundaries:
+      - source_span: [0, all]
+        atomicity: indivisible
+
+  - id: code_declarations_same_cluster
+    kind: code
+    content: "def encode(value):\n    return value\n\ndef decode(value):\n    return value"
+    expect_semantic_split: false
+    boundaries:
+      - source_span: [0, all]
+        atomicity: atomic
+
+  - id: versions_have_separate_bindings
+    kind: paragraph
+    content: "React 18 uses the old behavior.\n另一方面，React 19 uses the new behavior."
+    expect_semantic_split: true
+    boundaries:
+      - source_span: [0, 31]
+        atomicity: atomic
+        temporal_bindings:
+          - field: version
+            value: React 18
+            source_kind: content
+            anchor_text: React 18
+            source_span: {start: 0, end: 8}
+      - source_span: [32, all]
+        atomicity: atomic
+        temporal_bindings:
+          - field: version
+            value: React 19
+            source_kind: content
+            anchor_text: React 19
+            source_span: {start: 37, end: 45}
+
+  - id: short_official_announcement
+    kind: paragraph
+    content: "Foo API ends on 2027-01-01."
+    expect_semantic_split: false
+    boundaries:
+      - source_span: [0, all]
+        atomicity: atomic
+
+  - id: complete_cluster_above_ideal_range
+    kind: paragraph
+    content: fact
+    repeat: 450
+    expect_semantic_split: false
+    boundaries:
+      - source_span: [0, all]
+        atomicity: atomic

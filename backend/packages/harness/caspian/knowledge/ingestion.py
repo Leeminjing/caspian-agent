@@ -13,8 +13,8 @@
     put_document 返回 DocumentIngestionResult；put_atomic_knowledge 返回 (chunk_id, level)。
 
 具体工作流:
-    文档路径依次完成身份、结构候选、原子闸门/模型 spans、整份修订机械验证、检索文本、
-    独立评级、统一批量写入；任何结构/span/长度错误都发生在首次 Store 写入之前。
+    文档路径依次完成身份、结构候选、原子闸门/模型边界、时态锚点解析、整份修订机械
+    验证、检索文本、独立评级和统一批量写入；任何边界错误都发生在首次 Store 写入之前。
 
 示例:
     result = await put_document(store, "u1", DocumentInput(content="事实。", source="官方"))
@@ -32,7 +32,7 @@ from langgraph.store.base import BaseStore
 from caspian.knowledge.chunking import (
     HARD_TOKEN_MAX,
     TokenCounter,
-    needs_semantic_split,
+    evaluate_atomicity_gate,
     split_structural_blocks,
     to_absolute_blocks,
     validate_ordered_non_overlapping,
@@ -57,6 +57,7 @@ from caspian.knowledge.provenance import classify_level
 from caspian.knowledge.rating import decide_level, rate_level
 from caspian.knowledge.retrieval_text import build_retrieval_text
 from caspian.knowledge.segmentation import SemanticSpanSegmenter
+from caspian.knowledge.temporal import resolve_temporal_metadata
 from caspian.models import create_chat_model
 
 logger = logging.getLogger(__name__)
@@ -216,13 +217,14 @@ def _drafts(
 ) -> list[EvidenceUnitDraft]:
     drafts: list[EvidenceUnitDraft] = []
     for chunk_index, block in enumerate(blocks):
+        temporal = resolve_temporal_metadata(document.content, document, block)
         retrieval_text = build_retrieval_text(
             block.content,
             title=document.title,
             section_path=block.section_path,
-            version=document.version,
-            published_at=document.published_at,
-            effective_at=document.effective_at,
+            version=temporal.version,
+            published_at=temporal.published_at,
+            effective_at=temporal.effective_at,
         )
         drafts.append(
             EvidenceUnitDraft(
@@ -241,9 +243,11 @@ def _drafts(
                 source_span=block.source_span,
                 source=document.source,
                 source_url=document.source_url,
-                published_at=document.published_at,
-                effective_at=document.effective_at,
-                version=document.version,
+                published_at=temporal.published_at,
+                effective_at=temporal.effective_at,
+                version=temporal.version,
+                temporal_bindings=temporal.bindings,
+                atomicity=block.atomicity,
             )
         )
     return drafts
@@ -295,7 +299,8 @@ async def put_document(
     units_as_blocks: list[CandidateBlock] = []
     semantic_segmenter = segmenter or SemanticSpanSegmenter(working_model)
     for candidate in candidates:
-        if needs_semantic_split(candidate, count_tokens):
+        gate = evaluate_atomicity_gate(candidate, count_tokens)
+        if gate.needs_semantic_split:
             spans = await semantic_segmenter.split(candidate)
             units_as_blocks.extend(
                 to_absolute_blocks(document.content, candidate, spans, count_tokens)

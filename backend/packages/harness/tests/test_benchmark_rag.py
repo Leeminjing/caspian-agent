@@ -6,7 +6,8 @@
 
 输出:
     unittest/pytest 可运行断言，覆盖四臂治理、身份/span/overlap、检索字段隔离、
-    更新后等级裁决、无关单元稳定性及报告指标。
+    更新后等级裁决、事实簇金标、时态 binding、partial eligibility、理想区间 telemetry、
+    无关单元稳定性及报告指标。
 
 具体工作流:
     加载 YAML 并运行纯函数 benchmark；所有治理复验复用生产 govern，且不调用网络、
@@ -41,6 +42,7 @@ from caspian.benchmarks.rag.schema import (
     RagConflict,
     RagItem,
     load_evidence_unit_corpus,
+    load_fact_cluster_corpus,
     load_rag_corpus,
 )
 from caspian.benchmarks.rag.runner import run_all
@@ -127,15 +129,24 @@ class TestEvidenceUnitIntegrity(unittest.TestCase):
     def _path(self):
         return Path(__file__).resolve().parents[1] / "caspian" / "benchmarks" / "rag" / "evidence_units.yaml"
 
+    def _fact_cluster_path(self):
+        return Path(__file__).resolve().parents[1] / "caspian" / "benchmarks" / "rag" / "fact_cluster_boundaries.yaml"
+
     def test_fixture_has_zero_contract_violations(self):
         corpus = load_evidence_unit_corpus(self._path())
-        metrics = evidence_integrity_metrics(corpus, lambda text: len(text.split()))
+        metrics = evidence_integrity_metrics(corpus, lambda text: len(text.split()), load_fact_cluster_corpus(self._fact_cluster_path()))
         self.assertTrue(metrics["passed"])
         self.assertEqual(metrics["identity_collisions"], 0)
         self.assertEqual(metrics["source_overwrites"], 0)
         self.assertEqual(metrics["overlap_violations"], 0)
         self.assertEqual(metrics["hard_max_violations"], 0)
         self.assertEqual(metrics["invalid_span_acceptances"], 0)
+        self.assertEqual(metrics["temporal_binding_violations"], 0)
+        self.assertEqual(metrics["partial_eligibility_violations"], 0)
+        self.assertEqual(metrics["fact_cluster_gate_mismatches"], 0)
+        self.assertEqual(metrics["fact_cluster_temporal_binding_violations"], 0)
+        self.assertEqual(metrics["fact_cluster_cases"], 9)
+        self.assertEqual(metrics["fact_cluster_boundary_matches"], 9)
         self.assertEqual(metrics["governance_metadata_embedding_violations"], 0)
         self.assertEqual(metrics["governance_level_usage_violations"], 0)
         self.assertEqual(metrics["unrelated_unit_mutations"], 0)
@@ -173,6 +184,23 @@ class TestEvidenceUnitIntegrity(unittest.TestCase):
         self.assertGreater(metrics["invalid_span_acceptances"], 0)
         self.assertGreater(metrics["embedding_isolation_violations"], 0)
 
+    def test_fact_cluster_fixture_covers_required_boundary_classes(self):
+        cases = load_fact_cluster_corpus(self._fact_cluster_path())
+        ids = {case.id for case in cases}
+        self.assertTrue({
+            "same_cluster_multiple_sentences",
+            "explicit_topic_shift",
+            "dependent_statements_are_indivisible",
+            "labeled_list_topics",
+            "topic_table_keeps_required_header_context",
+            "code_declarations_same_cluster",
+            "versions_have_separate_bindings",
+            "short_official_announcement",
+            "complete_cluster_above_ideal_range",
+        } <= ids)
+        long_case = next(case for case in cases if case.id == "complete_cluster_above_ideal_range")
+        self.assertEqual(len(long_case.content.split()), 450)
+
     def test_report_includes_evidence_unit_metrics(self):
         report = render_rag_report(run_all())
         self.assertIn("Evidence Unit 完整性", report)
@@ -181,6 +209,10 @@ class TestEvidenceUnitIntegrity(unittest.TestCase):
         self.assertIn("治理等级使用违规", report)
         self.assertIn("无关单元变更", report)
         self.assertIn("partial conflict", report)
+        self.assertIn("事实簇 gate 匹配", report)
+        self.assertIn("单元时态 binding 违规", report)
+        self.assertIn("partial eligibility 违规", report)
+        self.assertIn("理想区间内（观测）", report)
 
 
 class TestConflictQA(unittest.TestCase):

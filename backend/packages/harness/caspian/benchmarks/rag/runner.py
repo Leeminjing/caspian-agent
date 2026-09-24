@@ -29,10 +29,11 @@ from caspian.benchmarks.rag.evidence_integrity import evidence_integrity_metrics
 from caspian.benchmarks.rag.oracle import correct_info_retained, wrong_info_adopted
 from caspian.benchmarks.rag.reliability import reliability_report
 from caspian.benchmarks.rag.retrieval import retrieval_axis
-from caspian.benchmarks.rag.schema import RagItem, load_evidence_unit_corpus, load_rag_corpus
+from caspian.benchmarks.rag.schema import RagItem, load_evidence_unit_corpus, load_fact_cluster_corpus, load_rag_corpus
 
 _CORPUS = Path(__file__).resolve().parent / "corpus.yaml"
 _EVIDENCE_CORPUS = Path(__file__).resolve().parent / "evidence_units.yaml"
+_FACT_CLUSTER_CORPUS = Path(__file__).resolve().parent / "fact_cluster_boundaries.yaml"
 
 
 def governance_axis(items: list[RagItem]) -> dict:
@@ -53,12 +54,13 @@ def governance_axis(items: list[RagItem]) -> dict:
 def run_all(corpus_path: str | Path = _CORPUS) -> dict:
     items = load_rag_corpus(corpus_path)
     evidence = load_evidence_unit_corpus(_EVIDENCE_CORPUS)
+    fact_clusters = load_fact_cluster_corpus(_FACT_CLUSTER_CORPUS)
     return {
         "n": len(items),
         "governance": governance_axis(items),
         "retrieval": retrieval_axis(items),
         "reliability": reliability_report(items),
-        "evidence_units": evidence_integrity_metrics(evidence, lambda text: len(text.split())),
+        "evidence_units": evidence_integrity_metrics(evidence, lambda text: len(text.split()), fact_clusters),
     }
 
 

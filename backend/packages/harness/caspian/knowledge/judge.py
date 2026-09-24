@@ -2,7 +2,7 @@
 本文件对外提供非权威候选投影与 LLM 冲突判定。
 
 对外提供:
-    judge_candidate_payload — 仅投影 id/content/title/section_path/version/时间字段
+    judge_candidate_payload — 仅投影 id/content/title/section_path/version/时间/atomicity 字段
     judge_conflicts — 单次批量判定 explicit、potential、temporal_disjoint 及 full/partial
 
 输入:
@@ -14,7 +14,7 @@
 
 具体工作流:
     先用字段白名单构造 JSON，优先 function-calling 结构化输出，失败后解析纯 JSON；
-    最后过滤未知/重复关系并校验 claim span，全部模型路径失败则向调用方抛错。
+    最后过滤未知/重复关系、校验 claim span 与 partial eligibility，全部模型路径失败则抛错。
 
 示例:
     payload = judge_candidate_payload(entry)
@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 _JUDGE_SYSTEM_PROMPT = """你是知识证据的冲突判定器。候选只包含非权威语义与时态字段。
 只判定与 query 相关、同一时间或版本、同一事实的对立结论。明确相反用 explicit，
 无法确认用 potential；不同 version/published_at/effective_at 的同主题事实应省略或标
-temporal_disjoint。整体对立用 full。只有不可进一步合理拆分的复合证据才用 partial，
+temporal_disjoint。整体对立用 full。只有 atomicity=indivisible 的不可分复合证据才用 partial，
 并提供双方原文精确子串 claim 与半开字符 span；不能精确锚定时只能用 potential。
 只输出 {"conflicts":[{"a":"id","b":"id","relation":"explicit|potential|temporal_disjoint",
 "scope":"full|partial","claim_a":"","claim_b":"","claim_a_span":[0,1],"claim_b_span":[0,1]}]}。"""
@@ -51,6 +51,7 @@ def judge_candidate_payload(candidate: EvidenceEntry) -> dict:
         "version": candidate.version,
         "published_at": candidate.published_at,
         "effective_at": candidate.effective_at,
+        "atomicity": candidate.atomicity,
     }
 
 
@@ -73,13 +74,19 @@ def _anchor(content: str, claim: str, span: tuple[int, int] | None) -> tuple[int
     return (index, index + len(claim)) if index >= 0 else None
 
 
+def _trimmed_content_span(content: str) -> tuple[int, int]:
+    start = len(content) - len(content.lstrip())
+    return start, len(content.rstrip())
+
+
 def _normalize_partial(
     item: dict,
     content_by_id: dict[str, str],
-) -> tuple[str, tuple[int, int] | None, tuple[int, int] | None]:
+    atomicity_by_id: dict[str, str],
+) -> tuple[str, str, tuple[int, int] | None, tuple[int, int] | None]:
     relation = str(item.get("relation"))
     if item.get("scope", "full") != "partial":
-        return relation, None, None
+        return relation, "full", None, None
     a = str(item.get("a"))
     b = str(item.get("b"))
     a_span = _anchor(
@@ -93,14 +100,24 @@ def _normalize_partial(
         item.get("claim_b_span") or None,
     )
     if a_span is None or b_span is None:
-        return "potential", None, None
-    return relation, a_span, b_span
+        return "potential", "full", None, None
+    proper_sides = [
+        candidate_id
+        for candidate_id, span in ((a, a_span), (b, b_span))
+        if span != _trimmed_content_span(content_by_id.get(candidate_id, ""))
+    ]
+    if not proper_sides:
+        return relation, "full", None, None
+    if any(atomicity_by_id.get(candidate_id) != "indivisible" for candidate_id in proper_sides):
+        return "potential", "full", None, None
+    return relation, "partial", a_span, b_span
 
 
 def _validated_conflicts(
     raw_conflicts: list[dict],
     known_ids: set[str],
     content_by_id: dict[str, str] | None = None,
+    atomicity_by_id: dict[str, str] | None = None,
 ) -> list[ConflictRelation]:
     result: list[ConflictRelation] = []
     seen_pairs: set[frozenset[str]] = set()
@@ -125,7 +142,11 @@ def _validated_conflicts(
         a_span = item.get("claim_a_span") or None
         b_span = item.get("claim_b_span") or None
         if scope == "partial" and content_by_id is not None:
-            relation, a_span, b_span = _normalize_partial(item, content_by_id)
+            relation, scope, a_span, b_span = _normalize_partial(
+                item,
+                content_by_id,
+                atomicity_by_id or {},
+            )
         result.append(
             ConflictRelation(
                 a=str(a),
@@ -157,6 +178,7 @@ async def judge_conflicts(
     if len(known_ids) < 2:
         return []
     content_by_id = {candidate.id: candidate.content for candidate in candidates}
+    atomicity_by_id = {candidate.id: candidate.atomicity for candidate in candidates}
     input_message = _input_message(candidates, query)
     bound_model = model.bind(max_tokens=4096)
     messages = [SystemMessage(content=_JUDGE_SYSTEM_PROMPT), input_message]
@@ -166,7 +188,12 @@ async def judge_conflicts(
             parsed = await structured_model.ainvoke(messages)
         if not isinstance(parsed, JudgeConflictOutput):
             raise ValueError("结构化输出类型异常")
-        return _validated_conflicts([relation.model_dump() for relation in parsed.conflicts], known_ids, content_by_id)
+        return _validated_conflicts(
+            [relation.model_dump() for relation in parsed.conflicts],
+            known_ids,
+            content_by_id,
+            atomicity_by_id,
+        )
     except Exception as structured_error:
         logger.warning("judge 结构化调用失败（%s），回退纯文本解析", type(structured_error).__name__)
         try:
@@ -176,7 +203,7 @@ async def judge_conflicts(
             conflicts = data.get("conflicts") if isinstance(data, dict) else None
             if not isinstance(conflicts, list):
                 raise ValueError("兜底解析结果缺少 conflicts 数组")
-            return _validated_conflicts(conflicts, known_ids, content_by_id)
+            return _validated_conflicts(conflicts, known_ids, content_by_id, atomicity_by_id)
         except Exception:
             logger.error("judge 兜底解析也失败", exc_info=True)
             raise

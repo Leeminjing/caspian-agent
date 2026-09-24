@@ -18,8 +18,8 @@
 
 具体工作流:
     namespace 固定为 ("knowledge", user_id)；新记录用 PutOp(index=["retrieval_text"])
-    批量写入；读取统一适配 schema v2 与 legacy；仅治理字段更新使用 index=False 保留向量；
-    新格式来源绑定身份且不可原地改写，legacy 仍允许补充来源并重新评级。
+    批量写入；读取统一适配 schema v2 的 atomicity/temporal bindings 与 legacy；仅治理字段
+    更新使用 index=False 保留向量；新格式来源绑定身份且不可原地改写。
 
 示例:
     key, level = await put_knowledge(store, "u1", "功能 A 已废弃。", source="官方")
@@ -34,7 +34,7 @@ from enum import Enum
 
 from langgraph.store.base import BaseStore, Item, PutOp
 
-from caspian.knowledge.evidence import EvidencePersistenceError, EvidenceUnit, SourceSpan
+from caspian.knowledge.evidence import EvidencePersistenceError, EvidenceUnit, SourceSpan, TemporalBinding
 from caspian.knowledge.schemas import EvidenceEntry
 
 _LEVELS: frozenset = frozenset({0, 1, 2, 3})
@@ -135,6 +135,10 @@ def evidence_from_item(item: Item) -> EvidenceEntry:
     span_value = value.get("source_span")
     span = SourceSpan.model_validate(span_value) if isinstance(span_value, dict) else None
     is_new = value.get("record_type") == "evidence_unit"
+    bindings = tuple(
+        TemporalBinding.model_validate(binding)
+        for binding in value.get("temporal_bindings") or ()
+    ) if is_new else ()
     return EvidenceEntry(
         id=str(item.key),
         content=str(value.get("content", "")),
@@ -152,6 +156,8 @@ def evidence_from_item(item: Item) -> EvidenceEntry:
         version=value.get("version") if is_new else None,
         published_at=value.get("published_at") if is_new else None,
         effective_at=value.get("effective_at") if is_new else None,
+        temporal_bindings=bindings,
+        atomicity=value.get("atomicity", "legacy_unknown") if is_new else "legacy_unknown",
         legacy=not is_new,
     )
 

@@ -76,3 +76,39 @@
 - [x] 10.4 运行 `python -m pytest backend/packages/harness/tests -m "not live" -q`，验证完整非 live 套件无新增失败，并把既有环境失败与本变更失败分开记录。
 - [x] 10.5 运行机械 benchmark、`python -m compileall`、仓库已有的格式/类型/静态检查以及 `git diff --check`，验证无完整性违规、语法错误或空白错误。
 - [x] 10.6 运行 `openspec validate add-evidence-unit-knowledge-ingestion --strict` 并逐项核对 proposal/specs/design/tasks 与最终 diff，验证所有 requirement 均有实现和测试证据且无超范围改动。
+
+## 11. Follow-up apply 前置核验与领域值
+
+- [x] 11.1 在本轮任何源代码、配置或测试修改前调用 Context7，核对当前 Pydantic 结构化输出、LangChain chat model structured output/few-shot message 以及 LangGraph Store 新增 metadata 字段的契约；若 Context7 不可用立即停止并询问用户，验证方式是追加 implementation evidence。
+- [x] 11.2 扩展 `knowledge/evidence.py`，定义 `Atomicity`、带绝对 source span 的 heading/section reference、`TemporalBinding` 及 Evidence Unit 的 `atomicity/temporal_bindings` 字段；验证方式是 atomic/indivisible 合法值、非法值、正文/heading/document binding 序列化测试通过。
+- [x] 11.3 扩展 Store value、`EvidenceEntry`、API 投影和 legacy adapter；新记录持久化 atomicity/bindings，legacy 缺失值映射为 `legacy_unknown` 且不得伪造 `indivisible`，验证方式是新旧混合读取、查询和 PATCH 回归通过。
+- [x] 11.4 更新所有职责变化 Python 文件的文件头声明式 docstring，说明公开入口、输入、输出、工作流和示例；正文仅保留必要不变量注释。
+
+## 12. 保守原子性闸门与事实簇 prompt
+
+- [x] 12.1 将 `needs_semantic_split` 重构为可审计的保守 gate decision；删除句子数、句末标点数、分号数和代码声明数作为独立触发条件，只保留 hard max、多个可独立治理结构项和明确主题转换等高置信信号。
+- [x] 12.2 增加快速闸门测试：同一 API/行为的多句话和多声明不得调用 segmenter，明确多主题列表/表格/主题转换必须调用，601-token 候选必须调用；验证模型调用计数与 decision reason。
+- [x] 12.3 改进 `knowledge/segmentation.py` prompt，明确事实簇、证据完整性、atomic/indivisible 含义，并加入“多句同簇合并、不同主题拆分、依赖上下文不拆、不同版本拆分并绑定”的正反 few-shot；输出仍不得包含生成正文。
+- [x] 12.4 新增版本化事实簇边界 fixture，至少覆盖同簇多句、多主题、依赖上下文、列表、表格、代码、同文档多版本、短公告、401–600 token 完整事实簇和不可分复合事实；验证 fixture 的期望 spans 均可精确还原原文。
+
+## 13. 单元级时态 metadata
+
+- [x] 13.1 扩展 Markdown 结构扫描器，为 heading stack 保存标题和绝对 source span，同时保持既有 `section_path` 输出兼容；验证方式是多级 heading 的每个 reference 都满足 `document[start:end] == anchor_text`。
+- [x] 13.2 新增 `knowledge/temporal.py`，以纯函数验证正文/heading/document bindings 并按 content、最近 heading、document 的字段级优先级解析 unit metadata；helpers 使用受保护命名，验证越界、跨单元、非继承 heading、anchor 不相等和无锚点模型值全部拒绝。
+- [x] 13.3 扩展语义切分输出，使每个 span 可携带 atomicity 和 version/published/effective bindings；代码把局部坐标机械转换为绝对坐标并在任何 Store 写入前验证。
+- [x] 13.4 更新入库编排、retrieval text、评级输入和 judge 投影使用解析后的单元级 metadata；验证同一文档 React 18/React 19 单元得到不同 version、不同 retrieval text，judge 收到对应值且不收到 binding provenance 或权威字段。
+
+## 14. Partial eligibility 代码门禁
+
+- [x] 14.1 快速路径、普通语义 span 和 `put_knowledge` 写入 `atomicity="atomic"`；只有 segmenter 明确返回且通过协议验证的不可分复合 span 写入 `indivisible`。
+- [x] 14.2 在 judge 关系归一化中逐侧判断 claim span 是否为正文真子区间；真子区间所在侧必须为 `indivisible`，否则 relation 降级为 potential、scope 规范化且清除可压制 spans；双方完整覆盖时规范化为 full。
+- [x] 14.3 增加 atomic-vs-atomic、legacy-vs-atomic、indivisible-vs-atomic、indivisible-vs-indivisible、未锚定 partial 和双方完整覆盖的表驱动测试，验证只有合格关系可到达 governance 的 partial 裁切路径。
+- [x] 14.4 运行 governance 回归，确认 full 跨等级压制、同级不裁决、potential 不压制、temporal 双方保留和查询级零持久化不变。
+
+## 15. 长度语义、Benchmark 与最终复验
+
+- [x] 15.1 删除未参与决策的 ideal-range 运行时常量，或将其封装为只供 prompt/telemetry 读取的策略值；验证 150/400 边界不会改变 gate 分支或合法事实簇边界，600 hard max 仍机械阻止入库。
+- [x] 15.2 扩展 RAG benchmark schema/fixtures/report，加入事实簇边界匹配、atomicity 分类、时态 binding 违规、partial eligibility 违规以及 ideal-range 内外分布；理想区间只展示 telemetry，不参与 passed 判定。
+- [x] 15.3 更新 README、知识 API 文档和配置说明，明确多句事实簇快速路径、单元级时态 metadata、atomicity/partial 门禁及 150–400 的弱偏好语义。
+- [x] 15.4 运行新增 targeted tests、完整非 live pytest、机械 benchmark、`python -m compileall`、仓库现有静态检查和 `git diff --check`，区分依赖环境既有失败与本轮回归。
+- [x] 15.5 追加 implementation evidence，运行 `openspec validate add-evidence-unit-knowledge-ingestion --strict`，并逐项核对本轮五项差距均有实现、测试和 benchmark 证据。
