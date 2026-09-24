@@ -21,11 +21,11 @@
 
 具体工作流:
     build_general_middlewares:
-    (1) 实例化 UploadsMiddleware（No.1）
-    (2) 实例化 DecisionTableMiddleware（No.2，始终装配，无等级表时自动跳过）
-    (3) 开启时实例化 CommitmentMiddleware（No.3）
-    (4) 实例化 SandboxAuditMiddleware
-    (5) 返回有序列表
+    (1) 可选 ContextCompressionMiddleware 置于链首
+    (2) 装配 ToolError、Uploads 与 DecisionTableEdit
+    (3) 可选装配 CommitmentMiddleware
+    (4) 装配独立的 DecisionTableGuard 与 SandboxAudit
+    (5) 完整 SystemSnapshotMiddleware 由 lead 装配末尾追加，本模块不注入局部 system patch
 
     build_subagent_middlewares:
     (1) 只装配 SandboxAuditMiddleware（shell 安全审计）
@@ -36,20 +36,19 @@
     from caspian.agents.middlewares.builder import build_general_middlewares
 
     middlewares = build_general_middlewares()
-    # → [UploadsMiddleware(), DecisionTableMiddleware(), SandboxAuditMiddleware()]
+    # → [ToolErrorMiddleware(), UploadsMiddleware(), DecisionTableEditMiddleware(), ...]
 """
+
+from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
 
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING
-
 from caspian.agents.commitment import CommitmentMiddleware
 from caspian.agents.middlewares.decision_table_edit_middleware import DecisionTableEditMiddleware
 from caspian.agents.middlewares.decision_table_guard_middleware import DecisionTableGuardMiddleware
-from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
 from caspian.agents.middlewares.sandbox_audit_middleware import SandboxAuditMiddleware
 from caspian.agents.middlewares.tool_error_middleware import ToolErrorMiddleware
 from caspian.agents.middlewares.uploads_middleware import UploadsMiddleware
@@ -71,7 +70,7 @@ def build_general_middlewares(
 
     输出:
         list[AgentMiddleware] — [(ContextCompressionMiddleware), UploadsMiddleware,
-        DecisionTableMiddleware(, CommitmentMiddleware), SandboxAuditMiddleware]
+        CommitmentMiddleware, SandboxAuditMiddleware]
 
     工作流:
         (1) context_compression.enabled 时在链首装配 ContextCompressionMiddleware
@@ -91,7 +90,6 @@ def build_general_middlewares(
     middlewares.append(ToolErrorMiddleware())
     middlewares.extend([
         UploadsMiddleware(),
-        DecisionTableMiddleware(),
         DecisionTableEditMiddleware(),
     ])
     if commitment_enabled:

@@ -3,6 +3,7 @@
 
 LeadAgentState: lead_agent 子图的 LangGraph State schema，继承自 AgentState，扩展业务字段
     plan_active — 计划模式激活标记（NotRequired[bool]，last-wins，空值折叠为未激活）
+SystemSnapshotState: 当前有效完整 system snapshot 的 checkpoint-safe primitive record
 SandboxState: 沙箱绑定状态
 ViewedImageData: 已查看图片数据
 DelegationEntry: task 委派账本条目
@@ -14,6 +15,9 @@ merge_delegations: delegations 字段的 reducer，同 id 原位替换保首见�
 输入: 无 — 本文件为纯定义文件，不包含函数入口
 输出: LeadAgentState 类及辅助类型供 create_agent() 的 state_schema 参数使用
 
+具体工作流:
+    LangGraph 用字段注解选择 reducer；普通 TypedDict 字段 last-write-wins，集合字段使用本文件 reducer，
+    effective_system_snapshot 只持久化字符串、枚举值与可空版本号，保证 checkpoint 可序列化。
 
 示例:
     from caspian.agents.lead_agent_state import LeadAgentState, merge_artifacts, merge_viewed_images
@@ -47,6 +51,15 @@ class DelegationEntry(TypedDict):
     result_sha256: NotRequired[str]
     stop_reason: NotRequired[str]
     created_at: str
+
+
+class SystemSnapshotState(TypedDict):
+    """当前有效完整 system snapshot 的持久状态。"""
+
+    content: str
+    fingerprint: str
+    decision_table_version: str | None
+    mode: str
 
 
 TERMINAL_DELEGATION_STATUSES: frozenset[str] = frozenset(
@@ -125,5 +138,6 @@ class LeadAgentState(AgentState):
     task_contract: NotRequired[str]
     delegations: Annotated[list[DelegationEntry], merge_delegations]
     plan_active: NotRequired[bool]
+    effective_system_snapshot: NotRequired[SystemSnapshotState]
     # 中间件（如 DecisionTableEditMiddleware）可设置 jump_to="end" 让图跳过模型调用直接结束
     jump_to: NotRequired[str | None]

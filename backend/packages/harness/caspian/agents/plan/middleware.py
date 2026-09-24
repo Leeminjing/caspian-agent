@@ -1,5 +1,5 @@
 """
-本文件对外提供 PlanModeMiddleware，作为计划模式（先规划、后执行）的 AgentMiddleware 入口。
+本文件对外提供 PlanModeMiddleware，作为计划模式命令与状态的 AgentMiddleware 入口。
 
 输入:
     config: PlanModeConfig — 计划模式配置（enabled / section 策略段文本）
@@ -7,7 +7,6 @@
 
 输出:
     before_agent / abefore_agent → dict | None（拦截 /plan 命令时返回 {"plan_active", "messages"} 状态更新）
-    wrap_model_call / awrap_model_call → ModelResponse（激活时把 config.section 追加进 system message，否则原样透传）
 
 工作流:
     (1) before_agent: 取最后一条 HumanMessage，剥离前导 skill token（/name）后匹配 /plan 命令
@@ -15,8 +14,7 @@
         - /plan <msg> → plan_active=True，触发消息替换为普通用户消息 <msg>
         - /plan off   → plan_active=False，触发消息替换为退出通知；携带图片附件时拒绝（不改状态）
         - 其他        → 不拦截（返回 None）
-    (2) wrap_model_call: 激活时把 config.section 追加到 model 请求的 system message（不覆盖基础模板）
-        ；未激活时原样透传，零开销
+    (2) plan policy 由 SystemSnapshotBuilder 根据 plan_active 合成；本中间件不再修改模型请求
 
 示例:
     middleware = PlanModeMiddleware(app_config.plan_mode)
@@ -24,11 +22,11 @@
 
 import asyncio
 import re
-from typing import Any, Callable
+from typing import Any
 
-from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelResponse
+from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import AgentState
-from langchain.messages import HumanMessage, SystemMessage
+from langchain.messages import HumanMessage
 
 from caspian.config.plan_mode_config import PlanModeConfig
 
@@ -78,7 +76,7 @@ def _match_plan_command(
 
 
 class PlanModeMiddleware(AgentMiddleware):
-    """计划模式中间件：拦截 /plan 命令、注入策略段。未激活时零开销。"""
+    """计划模式中间件：只拦截 /plan 命令并维护 plan_active。"""
 
     def __init__(
         self, config: PlanModeConfig, skill_names: frozenset[str] | None = None
@@ -86,10 +84,6 @@ class PlanModeMiddleware(AgentMiddleware):
         super().__init__()
         self.config = config
         self._enabled_skill_names = skill_names if skill_names is not None else frozenset()
-
-    # ------------------------------------------------------------------
-    # before_agent：命令拦截
-    # ------------------------------------------------------------------
 
     async def _before_agent(
         self, state: AgentState, runtime: Any
@@ -108,7 +102,6 @@ class PlanModeMiddleware(AgentMiddleware):
             return None
         action, message = command
         if action == "off":
-            # /plan off 携带图片附件 → 拒绝，不改状态
             if trigger.additional_kwargs.get("files"):
                 return {
                     "messages": [
@@ -124,7 +117,6 @@ class PlanModeMiddleware(AgentMiddleware):
                     HumanMessage(content="Plan mode off.", id=trigger.id)
                 ],
             }
-        # action == "on"
         if message is not None:
             return {
                 "plan_active": True,
@@ -146,31 +138,3 @@ class PlanModeMiddleware(AgentMiddleware):
         self, state: AgentState, runtime: Any
     ) -> dict[str, Any] | None:
         return await self._before_agent(state, runtime)
-
-    # ------------------------------------------------------------------
-    # wrap_model_call：策略段注入
-    # ------------------------------------------------------------------
-
-    async def _wrap_model_call(
-        self, request: ModelRequest, handler: Callable
-    ) -> ModelResponse:
-        if not request.state.get("plan_active"):
-            return await handler(request)
-        base = request.system_message
-        blocks: list[dict[str, Any]] = []
-        if base is not None:
-            content = base.content
-            if isinstance(content, list):
-                blocks = list(content)
-            elif content:
-                blocks = [{"type": "text", "text": content}]
-        blocks.append({"type": "text", "text": self.config.section})
-        return await handler(request.override(system_message=SystemMessage(content=blocks)))
-
-    def wrap_model_call(self, request: ModelRequest, handler: Callable) -> ModelResponse:
-        return asyncio.run(self._wrap_model_call(request, handler))
-
-    async def awrap_model_call(
-        self, request: ModelRequest, handler: Callable
-    ) -> ModelResponse:
-        return await self._wrap_model_call(request, handler)

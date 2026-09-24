@@ -4,7 +4,7 @@
 
 对外提供:
     make_lead_agent — 装配并返回可执行的 CompiledStateGraph
-    _build_middlewares — 组装 lead_agent 的中间件链（通用 + subagent 限制/账本）
+    _build_middlewares — 组装 lead_agent 的通用治理链与 subagent 限制
 
 输入:
     make_lead_agent:
@@ -19,7 +19,7 @@
     CompiledStateGraph — langchain.agents.create_agent() 产出的可执行 agent graph
 
 具体工作流:
-    (1) 调用 create_chat_model(name=model_name) 获取 BaseChatModel 实例
+    (1) 加载 AppConfig，显式选择 ModelConfig route capability，再创建 BaseChatModel
     (2) 加载 skills:
         (2a) 读 extensions_config.json 获取 enabled skill 名称集合
         (2b) public: SKILLS_PUBLIC_REAL_ROOT 下扫描 skills/public/ 发现 SKILL.md
@@ -32,14 +32,14 @@
         (3a) 调用 build_describe_skill_tool(catalog) 创建 skill 查询工具
         (3b) 合并: [describe_skill_tool] + global_tools
         (3c) plan_mode.enabled 为真时追加 exit_plan_mode 评审退出工具
-    (4) 调用 _build_middlewares() 获取中间件列表，按配置装配 CommitmentMiddleware 与 subagent 限制/账本
+    (4) 生成最终静态 prompt（基础模板、委派纪律、选中技能与 goal guidance）
+    (5) 调用 _build_middlewares() 获取治理链，按配置追加插件、Plan 与 Goal 状态 mutator
         (4a) 调用 build_general_middlewares() 获取通用中间件链
-        (4b) subagent_enabled 时追加 SubagentLimitMiddleware 与 DelegationLedgerMiddleware
+        (4b) subagent_enabled 时只追加 SubagentLimitMiddleware；账本由完整 snapshot 合成
         (4c) 链尾追加 PluginHookMiddleware（插件注入的有序 Hook 实现；无插件时零开销）
-        (4d) plan_mode.enabled 为真时链尾追加 PlanModeMiddleware（拦截 /plan、注入策略段）
-    (5) 调用 apply_prompt_template(agent_name, skill_names, container_base_path) 生成 system_prompt，
-        追加委托纪律段与选中技能段
-    (6) 调用 langchain.agents.create_agent(model, tools, middleware, system_prompt, state_schema=LeadAgentState)
+        (4d) plan_mode.enabled 为真时追加 PlanModeMiddleware（只拦截 /plan 并维护状态）
+        (5a) 所有状态 mutator 之后追加 SystemSnapshotMiddleware，并传入显式 route capability
+    (6) create_agent 使用静态 prompt 作为 append route 的稳定 seed，动态完整快照由末尾中间件管理
     (7) 返回 CompiledStateGraph
 
 示例:
@@ -63,7 +63,7 @@ from langgraph.graph.state import CompiledStateGraph
 from caspian.agents.lead.prompt import apply_prompt_template
 from caspian.agents.lead_agent_state import LeadAgentState
 from caspian.agents.middlewares.builder import build_general_middlewares
-from caspian.models import create_chat_model
+from caspian.models import create_chat_model, resolve_model_config
 from caspian.tools import get_available_tools
 
 logger = logging.getLogger(__name__)
@@ -102,15 +102,11 @@ def _build_middlewares(
         context_compression=app_config.context_compression,
     )
     if subagent_enabled:
-        from caspian.agents.middlewares.delegation_ledger_middleware import (
-            DelegationLedgerMiddleware,
-        )
         from caspian.agents.middlewares.subagent_limit_middleware import (
             SubagentLimitMiddleware,
         )
 
         middlewares.append(SubagentLimitMiddleware())
-        middlewares.append(DelegationLedgerMiddleware())
     return middlewares
 
 
@@ -264,13 +260,13 @@ async def make_lead_agent(
     selected_skills: list[str] | None = None,
     subagent_enabled: bool = True,
 ) -> CompiledStateGraph:
-    # (1) 创建模型
-    model = create_chat_model(name=model_name)
-
-    # (2) 加载 skills
     from caspian.config import get_app_config
 
     app_config = get_app_config("config.yaml")
+    model_config = resolve_model_config(model_name, app_config=app_config)
+    model = create_chat_model(name=model_name, app_config=app_config)
+
+    # (2) 加载 skills
     # goal_mode 是与 AppConfig 字段严格关联的可选能力；用 getattr 兼容未含该字段的配置/测试桩
     goal_mode = getattr(app_config, "goal_mode", None)
     # container_base_path 用于 system prompt（沙箱内的 skill 路径），host 路径用 SKILLS_PUBLIC_REAL_ROOT
@@ -357,6 +353,16 @@ async def make_lead_agent(
         from caspian.agents.goal import GoalModeMiddleware
 
         middleware.append(GoalModeMiddleware(goal_mode, frozenset(catalog.names)))
+
+    from caspian.agents.system_prompt import SystemSnapshotMiddleware
+
+    middleware.append(
+        SystemSnapshotMiddleware(
+            system_prompt,
+            model_config.capabilities.system_prompt_update,
+            plan_section=(app_config.plan_mode.section if app_config.plan_mode.enabled else ""),
+        )
+    )
 
     # (6) create_agent
     return create_agent(

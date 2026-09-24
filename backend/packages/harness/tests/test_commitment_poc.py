@@ -6,6 +6,12 @@
 
 输出:
     可运行检查，覆盖开关、审核重试、人工修订、磁盘结果、消息隔离和 interrupt/resume
+
+具体工作流:
+    用确定性 stub 驱动承诺层各阶段，验证 CAS/HITL/冲突结果与中间件装配职责保持不变。
+
+示例:
+    python -m pytest -m "not live" tests/test_commitment_poc.py
 """
 
 import asyncio
@@ -1069,14 +1075,13 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_default_switch_and_builder_are_unchanged(self):
+    def test_default_switch_and_builder_delegates_system_to_snapshot_layer(self):
         self.assertFalse(CommitmentConfig().enabled)
         self.assertEqual(
             [type(item).__name__ for item in build_general_middlewares()],
             [
                 "ToolErrorMiddleware",
                 "UploadsMiddleware",
-                "DecisionTableMiddleware",
                 "DecisionTableEditMiddleware",
                 "DecisionTableGuardMiddleware",
                 "SandboxAuditMiddleware",
@@ -1094,13 +1099,12 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 model=object(),
                 context7_tools=[],
             )
-        self.assertIs(result[4], sentinel)
+        self.assertIs(result[3], sentinel)
         self.assertEqual(type(result[0]).__name__, "ToolErrorMiddleware")
         self.assertEqual(type(result[1]).__name__, "UploadsMiddleware")
-        self.assertEqual(type(result[2]).__name__, "DecisionTableMiddleware")
-        self.assertEqual(type(result[3]).__name__, "DecisionTableEditMiddleware")
-        self.assertEqual(type(result[5]).__name__, "DecisionTableGuardMiddleware")
-        self.assertEqual(type(result[6]).__name__, "SandboxAuditMiddleware")
+        self.assertEqual(type(result[2]).__name__, "DecisionTableEditMiddleware")
+        self.assertEqual(type(result[4]).__name__, "DecisionTableGuardMiddleware")
+        self.assertEqual(type(result[5]).__name__, "SandboxAuditMiddleware")
 
     async def test_reviewed_delegator_retries_without_exposing_failures(self):
         delegator = StubDelegator([False, True])

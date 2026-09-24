@@ -1,4 +1,19 @@
-"""计划模式（plan-mode）单元测试：配置校验、命令拦截、策略段注入、评审退出工具。"""
+"""
+本文件验证计划模式配置、命令/状态、评审退出工具及 lead-agent snapshot 装配顺序。
+
+输入:
+    自包含的 PlanModeConfig、假 runtime/model、/plan 消息与人工评审结果
+
+输出:
+    pytest 断言结果，覆盖 /plan on/off/message、interrupt/resume 与 snapshot-last 约束
+
+具体工作流:
+    单元测试先验证命令 reducer，再用 create_agent 验证退出工具，最后捕获 make_lead_agent 参数，
+    确认 PlanModeMiddleware 只维护状态且 SystemSnapshotMiddleware 在所有 mutator 之后。
+
+示例:
+    python -m pytest tests/test_plan_mode.py
+"""
 
 import asyncio
 from pathlib import Path
@@ -6,7 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain.agents import create_agent
-from langchain.messages import AIMessage, HumanMessage, SystemMessage
+from langchain.messages import AIMessage, HumanMessage
 from langchain_core.language_models import BaseChatModel
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langgraph.checkpoint.memory import InMemorySaver
@@ -16,6 +31,7 @@ from caspian.agents.lead_agent_state import LeadAgentState
 from caspian.agents.plan import PlanModeMiddleware, build_exit_plan_mode_tool
 from caspian.agents.plan.middleware import _match_plan_command
 from caspian.config.plan_mode_config import PlanModeConfig
+from caspian.config.model_config import SystemPromptUpdate
 
 
 def _run(coro):
@@ -27,15 +43,6 @@ class _FakeRuntime:
         self.context = ctx or {"run_id": "r1", "user_id": "u1"}
         self.execution_info = type("Exec", (), {"thread_id": "t1"})()
         self.state = state or {"plan_active": False}
-
-
-class _FakeRequest:
-    def __init__(self, state, system_message):
-        self.state = state
-        self.system_message = system_message
-
-    def override(self, **kwargs):
-        return _FakeRequest(self.state, kwargs.get("system_message", self.system_message))
 
 
 def _cfg():
@@ -118,33 +125,6 @@ class TestPlanModeMiddleware:
         mw = self._mw()
         state = {"messages": [HumanMessage(content="just a message", id="m5")]}
         assert _run(mw.abefore_agent(state, _FakeRuntime())) is None
-
-    def test_wrap_model_call_active_injects_section(self):
-        mw = self._mw()
-        request = _FakeRequest(
-            {"plan_active": True}, SystemMessage(content="base prompt")
-        )
-
-        async def handler(req):
-            return req
-
-        result = _run(mw.awrap_model_call(request, handler))
-        blocks = result.system_message.content
-        assert blocks[-1] == {"type": "text", "text": _cfg().section}
-        assert {"type": "text", "text": "base prompt"} == blocks[0]
-
-    def test_wrap_model_call_inactive_noop(self):
-        mw = self._mw()
-        request = _FakeRequest(
-            {"plan_active": False}, SystemMessage(content="base prompt")
-        )
-
-        async def handler(req):
-            return req
-
-        result = _run(mw.awrap_model_call(request, handler))
-        assert result.system_message.content == "base prompt"
-
 
 class TestExitPlanModeTool:
     def _tool(self):
@@ -273,6 +253,14 @@ class TestPlanModeBoundaryIsolation:
 
 def _fake_app_config(plan_enabled: bool):
     return SimpleNamespace(
+        models=[
+            SimpleNamespace(
+                name="fake",
+                capabilities=SimpleNamespace(
+                    system_prompt_update=SystemPromptUpdate.REPLACE
+                ),
+            )
+        ],
         plan_mode=PlanModeConfig(
             enabled=plan_enabled, section="plan section"
         ),
@@ -329,3 +317,10 @@ class TestPlanModeAssemblyGate:
         tool_names = [getattr(t, "name", None) for t in captured.get("tools", [])]
         assert "PlanModeMiddleware" in {c.__name__ for c in names if c is not None}
         assert "exit_plan_mode" in tool_names
+        ordered = [c.__name__ for c in names if c is not None]
+        assert ordered[-1] == "SystemSnapshotMiddleware"
+        assert ordered.index("PlanModeMiddleware") < ordered.index(
+            "SystemSnapshotMiddleware"
+        )
+        assert "DecisionTableMiddleware" not in ordered
+        assert "DelegationLedgerMiddleware" not in ordered

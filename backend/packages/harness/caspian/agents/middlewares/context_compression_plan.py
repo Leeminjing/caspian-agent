@@ -2,10 +2,10 @@
 本文件对外提供上下文压缩的纯函数模块,供 ContextCompressionMiddleware 复用。
 
 对外提供:
-    SUMMARY_MESSAGE_ID / SUMMARY_MARKER_KEY / DECISION_TABLE_MESSAGE_ID / CONTRACT_TAG — 常量
+    SUMMARY_MESSAGE_ID / SUMMARY_MARKER_KEY / DECISION_TABLE_MESSAGE_ID / CONTRACT_TAG — 兼容常量
     SUMMARY_PROMPT_TEMPLATE — 摘要 prompt 模板(含继承指令与 side-channel 占位符)
     make_token_counter — 构造近似 token 计数函数
-    is_anchor — 判断消息是否为锚点(任务合同 / 决策等级表)
+    is_anchor — 判断普通历史是否为锚点(任务合同 / 历史摘要)
     compute_cutoff — 计算摘要区与保留区切点
     plan_compression — 产出 (to_summarize, preserved)
     build_summary_message — 构造固定 id + 标记的摘要消息
@@ -17,7 +17,7 @@
 
 工作流:
     (1) compute_cutoff 按"配对保护 → 轮边界对齐"确定切点(照搬 langchain SummarizationMiddleware 思路)
-    (2) plan_compression 将锚点无条件移入保留区
+    (2) plan_compression 先丢弃旧 snapshot/legacy patch，再将普通锚点移入保留区
     (3) 摘要 prompt 注入 state 的确定性 side-channel,模型输出经 verify_shrink 校验
 
 示例:
@@ -34,6 +34,12 @@ from langchain_core.messages.utils import (
     count_tokens_approximately,
     get_buffer_string,
     trim_messages,
+)
+
+from caspian.agents.system_prompt.metadata import (
+    SNAPSHOT_TABLE_VERSION_KEY,
+    is_managed_snapshot,
+    rebase_system_history,
 )
 
 SUMMARY_MESSAGE_ID = "caspian-summary"
@@ -53,7 +59,7 @@ def make_token_counter():
 
 
 def is_anchor(message) -> bool:
-    """判断消息是否为压缩锚点:决策等级表、任务合同或历史摘要消息。
+    """判断普通历史是否为压缩锚点:任务合同或历史摘要消息。
 
     输入:
         message — BaseMessage 实例
@@ -62,12 +68,9 @@ def is_anchor(message) -> bool:
         bool — True 表示该消息必须原样保留,不得进入摘要区
 
     工作流:
-        (1) 决策等级表按固定 id 检测
-        (2) 任务合同按内容检测 <task_contract> 标签(其 id 为触发 /commit 消息的 id,压缩侧不可预知)
-        (3) 历史摘要按 additional_kwargs 的 caspian_summary 标记检测(防止"摘要的摘要"退化)
+        (1) 任务合同按内容检测 <task_contract> 标签(其 id 为触发 /commit 消息的 id,压缩侧不可预知)
+        (2) 历史摘要按 additional_kwargs 的 caspian_summary 标记检测(防止"摘要的摘要"退化)
     """
-    if isinstance(message, SystemMessage) and message.id == DECISION_TABLE_MESSAGE_ID:
-        return True
     if isinstance(message, HumanMessage) and CONTRACT_TAG in str(message.content):
         return True
     if (
@@ -137,17 +140,18 @@ def plan_compression(messages: list, *, keep_messages: int):
         消息数不足或摘要区为空时返回 None
 
     工作流:
-        (1) compute_cutoff 确定切点
-        (2) 锚点消息无条件进保留区
-        (3) 摘要区为空 → 返回 None
+        (1) rebase_system_history 从摘要候选中剔除 superseded snapshot、fragment 载体与 legacy patch
+        (2) compute_cutoff 在普通对话上确定切点
+        (3) 锚点消息无条件进保留区；摘要区为空 → 返回 None
     """
-    cutoff = compute_cutoff(messages, keep_messages)
+    ordinary = list(rebase_system_history(messages).ordinary_messages)
+    cutoff = compute_cutoff(ordinary, keep_messages)
     if cutoff is None or cutoff <= 0:
         return None
 
     to_summarize: list = []
     preserved: list = []
-    for index, message in enumerate(messages):
+    for index, message in enumerate(ordinary):
         if index < cutoff and not is_anchor(message):
             to_summarize.append(message)
         else:
@@ -175,8 +179,13 @@ def build_summary_message(summary_text: str) -> HumanMessage:
 
 
 def _decision_table_version(messages: list) -> str | None:
-    """从 id="decision-table" 的 SystemMessage 内容提取等级表版本号。"""
-    for message in messages:
+    """从托管 snapshot metadata 或 legacy table 内容提取等级表版本号。"""
+    for message in reversed(messages):
+        if is_managed_snapshot(message):
+            version = (message.additional_kwargs or {}).get(SNAPSHOT_TABLE_VERSION_KEY)
+            if version:
+                return str(version)
+    for message in reversed(messages):
         if isinstance(message, SystemMessage) and message.id == DECISION_TABLE_MESSAGE_ID:
             match = _DECISION_TABLE_VERSION_RE.search(str(message.content))
             if match:
@@ -207,7 +216,12 @@ def render_side_channels(state: dict) -> str:
     else:
         contract_text = "无"
 
-    table_text = _decision_table_version(list(state.get("messages") or [])) or "无"
+    effective = state.get("effective_system_snapshot") or {}
+    table_text = (
+        effective.get("decision_table_version")
+        or _decision_table_version(list(state.get("messages") or []))
+        or "无"
+    )
 
     lines = [
         f"- 已 present 文件列表(state.artifacts): {artifact_text}",

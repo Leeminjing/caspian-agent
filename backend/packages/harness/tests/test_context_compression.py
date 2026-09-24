@@ -5,7 +5,11 @@
 输入: 无(自包含,stub 模型与 InMemorySaver 本地构造)
 输出: 测试通过/失败
 
-运行: 仓库根执行
+具体工作流:
+    先验证纯切点、锚点与 rebase，再验证预防压缩和 overflow recovery 都只保留最新完整 snapshot，
+    最后覆盖归档、后置 shrink 校验与 fail-soft 行为。
+
+示例: 仓库根执行
     backend\\packages\\harness\\.venv\\Scripts\\python.exe -m pytest backend/packages/harness/tests/test_context_compression.py
 """
 
@@ -17,6 +21,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from langchain.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain.agents.middleware import ModelRequest, ModelResponse
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import BaseMessage, RemoveMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -43,7 +48,10 @@ from caspian.agents.middlewares.context_compression_plan import (
     render_side_channels,
     verify_shrink,
 )
+from caspian.agents.system_prompt.metadata import make_snapshot_message
+from caspian.agents.system_prompt.snapshot import SystemSnapshot
 from caspian.config.context_compression_config import ContextCompressionConfig
+from caspian.config.model_config import SystemPromptUpdate
 
 
 def _ai(tool_call_ids=("tc-1",), msg_id="ai-1"):
@@ -102,7 +110,7 @@ class PlanFunctionTests(unittest.TestCase):
         seq = [_human(1), _ai(), _tool()]
         self.assertIsNone(compute_cutoff(seq, keep_messages=5))
 
-    def test_anchors_move_to_preserved(self):
+    def test_anchors_move_to_preserved_and_legacy_table_is_dropped(self):
         contract = HumanMessage(content=f"{CONTRACT_TAG}\n合同\n</task_contract>", id="h1")
         table = SystemMessage(content='<decision_table version="v1">', id=DECISION_TABLE_MESSAGE_ID)
         seq = [contract, table, _human(2), _ai(), _tool(), _human(3)]
@@ -110,8 +118,8 @@ class PlanFunctionTests(unittest.TestCase):
         self.assertIsNotNone(plan)
         to_summarize, preserved = plan
         self.assertIn(contract, preserved)
-        self.assertIn(table, preserved)
         self.assertNotIn(contract, to_summarize)
+        self.assertNotIn(table, preserved)
         self.assertNotIn(table, to_summarize)
 
     def test_plan_none_when_only_anchors_before_cutoff(self):
@@ -159,6 +167,26 @@ class PlanFunctionTests(unittest.TestCase):
         self.assertIn("已存在", text)
         self.assertIn("abc123", text)
         self.assertIn("completed", text)
+
+    def test_render_side_channels_prefers_effective_snapshot_record(self):
+        text = render_side_channels(
+            {
+                "effective_system_snapshot": {
+                    "content": "full",
+                    "fingerprint": "f",
+                    "decision_table_version": "snapshot-v2",
+                    "mode": "replace",
+                },
+                "messages": [
+                    SystemMessage(
+                        content='<decision_table version="legacy-v1">',
+                        id=DECISION_TABLE_MESSAGE_ID,
+                    )
+                ],
+            }
+        )
+        self.assertIn("snapshot-v2", text)
+        self.assertNotIn("legacy-v1", text)
 
     def test_prune_large_tool_messages(self):
         counter = make_token_counter()
@@ -304,13 +332,21 @@ class MiddlewareHookTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertEqual(summary_stub.summary_calls, 0)
 
-    async def test_abefore_model_compresses_and_preserves_anchor(self):
+    async def test_abefore_model_compresses_and_rebases_latest_snapshot(self):
         summary_stub = StubChatModel()
         mw = ContextCompressionMiddleware(_cfg(), summary_model=summary_stub)
-        table = SystemMessage(content='<decision_table version="v1">', id="decision-table")
+        old = make_snapshot_message(
+            SystemSnapshot.from_content("OLD", decision_table_version="v0"),
+            SystemPromptUpdate.IN_HISTORY,
+        )
+        current = make_snapshot_message(
+            SystemSnapshot.from_content("CURRENT", decision_table_version="v1"),
+            SystemPromptUpdate.IN_HISTORY,
+        )
         state = self._state([
-            table,
+            old,
             HumanMessage(content="x" * 5000, id="h1"),
+            current,
             HumanMessage(content="y" * 100, id="h2"),
             AIMessage(content="ok", id="ai1"),
             HumanMessage(content="z" * 100, id="h3"),
@@ -320,12 +356,12 @@ class MiddlewareHookTests(unittest.IsolatedAsyncioTestCase):
         rebuilt = [m for m in update["messages"] if not isinstance(m, RemoveMessage)]
         ids = [m.id for m in rebuilt]
         self.assertTrue(any(i.startswith(SUMMARY_MESSAGE_ID + "-") for i in ids))
-        self.assertIn("decision-table", ids)
+        self.assertIn(current.id, ids)
+        self.assertNotIn(old.id, ids)
         self.assertNotIn("h1", ids)
         self.assertIn("h3", ids)
-        # 锚点逐字保留
-        kept_table = next(m for m in rebuilt if m.id == "decision-table")
-        self.assertEqual(kept_table.content, table.content)
+        self.assertIs(rebuilt[0], current)
+        self.assertTrue(rebuilt[1].id.startswith(SUMMARY_MESSAGE_ID + "-"))
         self.assertEqual(summary_stub.summary_calls, 1)
 
     async def test_abefore_model_idempotent(self):
@@ -566,6 +602,48 @@ class ArchiveTests(unittest.TestCase):
         }
         update = await mw.abefore_model(state, None)
         self.assertIsNotNone(update)  # 无 runtime 信息时压缩照常,仅跳过归档
+
+
+def test_overflow_recovery_rebases_latest_snapshot_before_summary():
+    summary_stub = StubChatModel()
+    middleware = ContextCompressionMiddleware(
+        _cfg(trigger_tokens=100000), summary_model=summary_stub
+    )
+    old = make_snapshot_message(
+        SystemSnapshot.from_content("OLD", decision_table_version="v0"),
+        SystemPromptUpdate.IN_HISTORY,
+    )
+    current = make_snapshot_message(
+        SystemSnapshot.from_content("CURRENT", decision_table_version="v1"),
+        SystemPromptUpdate.IN_HISTORY,
+    )
+    messages = [
+        old,
+        HumanMessage(content="x" * 5000, id="h1"),
+        current,
+        HumanMessage(content="recent", id="h2"),
+        AIMessage(content="recent answer", id="a2"),
+        HumanMessage(content="now", id="h3"),
+    ]
+    request = ModelRequest(
+        model=object(),
+        messages=messages,
+        state={"messages": messages},
+        runtime=None,
+    )
+    captured = []
+
+    async def handler(candidate):
+        captured.append(list(candidate.messages))
+        if len(captured) == 1:
+            raise FakeOverflow()
+        return ModelResponse(result=[AIMessage(content="ok")])
+
+    asyncio.run(middleware.awrap_model_call(request, handler))
+    rebuilt = captured[1]
+    assert rebuilt[0] is current
+    assert old not in rebuilt
+    assert rebuilt[1].id.startswith(SUMMARY_MESSAGE_ID + "-")
 
 
 if __name__ == "__main__":

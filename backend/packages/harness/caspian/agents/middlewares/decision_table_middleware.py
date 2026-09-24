@@ -1,8 +1,8 @@
 """
-本文件对外提供 DecisionTableMiddleware 类，作为决策等级表的版本去重注入中间件。
+本文件保留 DecisionTableMiddleware 兼容入口；新 lead-agent 装配由 SystemSnapshotMiddleware 接管。
 
 对外提供:
-    DecisionTableMiddleware(AgentMiddleware) — 覆盖 before_agent / abefore_agent 与
+    DecisionTableMiddleware(AgentMiddleware) — 旧 checkpoint/独立调用兼容层，覆盖 before_agent / abefore_agent 与
     before_model / abefore_model 钩子，读取当前 thread 的决策等级表并以固定 message id 注入
     SystemMessage（含等级表与仲裁规则），版本一致时跳过注入（零 token 去重）。
     before_model 在每次模型调用前重读磁盘并按版本热替换，使当前 run 内发生的等级表变更
@@ -41,25 +41,13 @@ from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import ToolRuntime
 
 from caspian.agents.commitment.decision_table import DecisionTable, read_decision_table
+from caspian.agents.system_prompt.decision_table import render_decision_table_section
 
 logger = logging.getLogger(__name__)
 
 _MESSAGE_ID = "decision-table"
 
 _VERSION_PATTERN = re.compile(r'<decision_table version="([^"]+)"')
-
-_ARBITRATION_RULES = """<decision_table_instructions>
-This is the thread's decision LEVEL TABLE (决策等级表). It contains human-approved decisions, and each decision carries a LEVEL (等级): 3=必须 must, 2=可协商 negotiable, 1=可选 optional. The LEVEL is the governing mechanism for decision conflicts — when decisions clash, the LEVEL decides which one wins.
-
-Before proposing any new requirement or decision, scan ALL entries in this table for conflicts. Conflicts include semantic ones (wording changes, technology substitutions, and other surface-unrelated clashes) - not just exact text matches.
-
-Conflict governance by LEVEL:
-- New decision conflicts with an entry, and its level is LOWER than the entry's level → you MUST abandon the new decision and follow the existing entry. Do not execute, propose, or argue for it.
-- New decision conflicts with an entry, and its level is EQUAL or HIGHER, or its level cannot be determined → you MUST stop and ask the user to confirm before proceeding.
-
-LEVEL comparison is numeric: 3 > 2 > 1. Compare with code-like rigor, never guess the comparison result.
-</decision_table_instructions>"""
-
 
 def _build_content(table: DecisionTable) -> str:
     """组装等级表注入内容（受保护 helper）。
@@ -70,28 +58,7 @@ def _build_content(table: DecisionTable) -> str:
     输出:
         str — 等级表全文（含版本标记）+ 仲裁规则文本
     """
-    rows_lines = ["| id | requirement | decision | priority |", "|---|---|---|---|"]
-    rows_lines.extend(
-        f"| {row.id} | {row.requirement} | {row.decision} | {row.priority} |"
-        for row in table.rows
-    )
-    rows_md = "\n".join(rows_lines)
-
-    guard_lines = []
-    for row in table.hard_entries():
-        for guard in row.guards:
-            guard_lines.append(
-                f"- 条目 {row.id}（等级 {row.priority}）：{guard.kind} {guard.target} "
-                f"{guard.operator} \"{guard.pattern}\""
-            )
-    guards_md = ("\n\n守卫规则：\n" + "\n".join(guard_lines)) if guard_lines else ""
-
-    return (
-        f'<decision_table version="{table.version}" updated="{table.updated}">\n'
-        f"{rows_md}{guards_md}\n"
-        f"</decision_table>\n\n"
-        f"{_ARBITRATION_RULES}"
-    )
+    return render_decision_table_section(table)
 
 
 def _injected_version(content: str) -> str | None:

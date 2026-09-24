@@ -12,7 +12,7 @@
     summary_model: BaseChatModel | None — 摘要模型,None 时从 runtime.context 的 app_config 懒创建
 
 输出:
-    before_model 返回 {"messages": [RemoveMessage(REMOVE_ALL_MESSAGES), 摘要消息, ...保留消息]} | None
+    before_model 返回 {"messages": [RemoveMessage(REMOVE_ALL_MESSAGES), 最新快照?, 摘要消息, ...保留消息]} | None
     awrap_model_call 返回 ModelResponse 或 ExtendedModelResponse(model_response, command=Command(update))
 
 具体工作流:
@@ -52,6 +52,7 @@ from caspian.agents.middlewares.context_compression_plan import (
     render_side_channels,
     verify_shrink,
 )
+from caspian.agents.system_prompt.metadata import rebase_system_history
 from caspian.config.context_compression_config import ContextCompressionConfig
 from caspian.sandbox.path_utils import REAL_ROOT
 
@@ -277,8 +278,17 @@ class ContextCompressionMiddleware(AgentMiddleware):
         压缩期间经 stream writer 推 compaction_status 事件(started/done/failed),
         替换前把被压消息追加存档,保证前端折叠条可还原完整历史。
         """
+        rebased = rebase_system_history(messages)
+        baseline = [
+            *([rebased.latest_snapshot] if rebased.latest_snapshot is not None else []),
+            *rebased.ordinary_messages,
+        ]
         plan = plan_compression(messages, keep_messages=self._cfg.keep_messages)
         if plan is None:
+            if baseline != messages:
+                return {
+                    "messages": [RemoveMessage(id=REMOVE_ALL_MESSAGES), *baseline]
+                }
             return None
         to_summarize, preserved = plan
         emit_compaction_event("started")
@@ -303,6 +313,11 @@ class ContextCompressionMiddleware(AgentMiddleware):
         return {
             "messages": [
                 RemoveMessage(id=REMOVE_ALL_MESSAGES),
+                *(
+                    [rebased.latest_snapshot]
+                    if rebased.latest_snapshot is not None
+                    else []
+                ),
                 summary_message,
                 *preserved,
             ]

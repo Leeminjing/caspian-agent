@@ -108,9 +108,9 @@ Knowledge retrieval is three-stage: **recall** (vector, level-blind) → **judge
 
 ### Hard ③ — 决策等级表 / The decision table
 
-A thread-level, versioned ledger at `requirements/{thread_id}/decision-table.md` — the **single source of truth** for human-approved decisions. Each row carries a `priority` of `1/2/3`; the file is content-addressed by a sha256 version; it is injected into every run via a fixed message id (`decision-table`) and **in-place replaced** on version change (zero token when unchanged). The arbitration is **monotonic**: a new decision that *downgrades* a table entry is deterministically rejected; one that *upgrades* (or states no level) requires human confirmation. This erases requirement drift / scope creep — you cannot "persuade" a table, because it is an `int` comparison.
+A thread-level, versioned ledger at `requirements/{thread_id}/decision-table.md` — the **single source of truth** for human-approved decisions. Each row carries a `priority` of `1/2/3`; the file is content-addressed by a sha256 version. At every model boundary Caspian composes the current table with the static prompt and runtime policies into one complete System Snapshot. A route uses safe `replace` by default; only an explicitly verified route may append changed full snapshots in history, while unchanged content adds zero messages. The arbitration is **monotonic** and remains enforced by the deterministic tool guard regardless of model compliance.
 
-> 线程级、带版本的账本,存于 `requirements/{thread_id}/decision-table.md`——人已批准决策的**唯一事实源**。每行带 `priority 1/2/3`;文件以 sha256 版本内容寻址;每次 run 通过固定 id(`decision-table`)注入并**原位替换**(版本不变则零 token)。仲裁是**单调**的:新决策若**降级**表内条目即被确定性拒绝;若**升级**(或未定级)则须人工确认。这一下掐死了需求漂移/范围蔓延——你无法"说服"一张表,因为它是一段 `int` 比较。
+> 线程级、带版本的账本,存于 `requirements/{thread_id}/decision-table.md`——人已批准决策的**唯一事实源**。每行带 `priority 1/2/3`;文件以 sha256 版本内容寻址。每个模型边界都会把当前表、静态 prompt 与运行期 policy 合成一份完整 System Snapshot；route 缺省安全使用 `replace`，只有精确 route 经验证后才允许在历史尾部追加变化后的完整快照，内容不变则零追加。无论模型是否遵循，确定性工具守卫仍拥有最终治理权。
 
 ---
 
@@ -159,6 +159,7 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 - **技能 (Skills)**: `skills/public` + `skills/custom`;`extensions_config.json` 启停;`describe_skill` 发现。示例:`docx`、`vision`。
 - **沙箱 (Sandbox)**: 可插拔,经 `$CASPIAN_SANDBOX` 选择(见 `.env.example`);默认 `AioSandbox`(容器隔离,需 Docker,一个 `(user, thread)` 一容器:默认 seccomp + `no-new-privileges`(不关 `seccomp=unconfined`,all-in-one 镜像保留默认能力集)、pids/内存/CPU 上限、控制端口仅绑 `127.0.0.1`);`LocalSandbox` 为 **development-only** 本地受限执行器——校验虚拟路径(目录层级围栏、`..` 穿越拒绝、symlink 逃逸拒绝)与 shell 命令,但 **不提供 OS 级隔离**,仅用于本地/开发运行。两者均含虚拟路径白名单 `validate_subdir`、`resolve_path` 防越界、shell 五道防线 + regex `block/warn/pass` 审计;错误自动清洗真实路径。
 - **上下文压缩**: 触发阈值 + 切点 + LLM 摘要 + 后置校验(fail-soft);被压消息入 `archive.jsonl` 存档。
+- **System Snapshot 热更新**: route 显式声明 `replace | in-history`;完整 fingerprint 去重;Plan、委派账本、插件 fragment 与最新决策表统一合成;压缩时只保留最新快照，旧 system 控制文本不进入摘要。
 - **工具错误收口**: `ToolErrorMiddleware` 统一捕获工具异常并回传 LLM。
 
 ---
@@ -171,6 +172,31 @@ The coarse level also forces an honest boundary: where the level gap is clear, t
 - **模型**: OpenAI-compatible (default `deepseek-v4-flash` via `caspian.models.deepseek`), pluggable.
 - **外部能力**: MCP (Context7 docs, Playwright browser), vendored vanilla-JS frontend.
 - **配置**: `config.yaml` · `extensions_config.json` · `.mcp.json`.
+
+### System Snapshot route capability
+
+`system_prompt_update` 属于精确的 model/endpoint route，不由模型名、provider 名、adapter 类或 URL 推断。旧配置不写该字段时等价于 `replace`：
+
+```yaml
+models:
+  - name: my-route
+    # model / use / api_key / base_url ...
+    capabilities:
+      system_prompt_update: replace  # replace | in-history
+```
+
+`in-history` 只适用于确认“历史中最后一条完整 system 覆盖之前 system”的 route。内置 system 内容全部由 snapshot builder 合成；插件若要提供可合并段，必须给 `SystemMessage.additional_kwargs["caspian_system_fragment"]` 一个稳定字符串 identity。未标记的外部 `SystemMessage` 会触发诊断并对该调用降级到 Replace，且不会作为权威指令发送。
+
+上下文压缩和溢出恢复会重基线：只保留最新托管完整快照，丢弃被 supersede 的快照与 legacy `decision-table` patch，并禁止把它们写进摘要。回滚只需把 route 改回 `replace`，无需迁移决策表或 checkpoint。
+
+真实 route 的 A/B 验证必须显式 opt-in，且不会把 API key 写入报告：
+
+```powershell
+$env:CASPIAN_SYSTEM_PROMPT_E2E = "1"
+python -m caspian.models.system_prompt_e2e --model-name my-route --output system-prompt-e2e.json
+```
+
+报告分别给出 `semantic_supersede` 与 `cache_benefit`；provider 不返回 cache 字段时结论为 `indeterminate`，不是零命中。只有人工复核该精确 route 的报告后才应把配置改为 `in-history`；DeepSeek 名称本身不是能力证据。
 
 ---
 

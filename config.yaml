@@ -6,6 +6,9 @@ models:
     api_key: $OPENAI_API_KEY
     base_url: ${OPENAI_BASE_URL:-https://api.deepseek.com}
     vision: true
+    # route capability 缺省为 replace；只有该精确 endpoint/model 的 Caspian E2E 经人工确认后才可改为 in-history。
+    capabilities:
+      system_prompt_update: replace
 
 agent:
   recursion_limit: 300
