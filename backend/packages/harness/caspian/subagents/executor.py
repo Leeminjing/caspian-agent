@@ -261,6 +261,8 @@ class SubagentExecutor:
         thread_id: str | None = None,
         tool_groups: list[str] | None = None,
         trace_id: str | None = None,
+        shared_checkpoint_writer: Any | None = None,
+        app_config: Any | None = None,
     ) -> None:
         self.config = config
         self.parent_model = parent_model
@@ -268,6 +270,8 @@ class SubagentExecutor:
         self.thread_id = thread_id
         self.tool_groups = tool_groups
         self.trace_id = trace_id or str(uuid.uuid4())[:8]
+        self.shared_checkpoint_writer = shared_checkpoint_writer
+        self.app_config = app_config
         self.model_name: str | None = resolve_subagent_model_name(config, parent_model)
         self._base_tools = _filter_tools(tools, config.tools, config.disallowed_tools)
         self._available_skill_names: set[str] = set()
@@ -391,6 +395,7 @@ class SubagentExecutor:
             run_config: dict[str, Any] = {
                 "recursion_limit": self.config.max_turns,
                 "tags": [f"subagent:{self.config.name}"],
+                "configurable": {"thread_id": self.thread_id, "run_id": self.trace_id},
             }
             context: dict[str, Any] = {}
             if self.thread_id:
@@ -400,7 +405,10 @@ class SubagentExecutor:
             if self.tool_groups:
                 context["tool_groups"] = self.tool_groups
             context["model_name"] = self.model_name
+            context["run_id"] = self.trace_id
             context["is_subagent"] = True
+            context["shared_checkpoint_writer"] = self.shared_checkpoint_writer
+            context["app_config"] = self.app_config
 
             logger.info(
                 "[trace=%s] Subagent %s 开始执行 max_turns=%s",

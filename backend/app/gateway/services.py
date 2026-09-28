@@ -1,32 +1,8 @@
-"""
-本文件对外提供 `start_run` 异步函数，作为 core-aob 链路的编排层核心。
+"""本文件对外提供 start_run，创建并调度可恢复的网关 Run。
 
-对外提供:
-    start_run — 编排实现层需要的参数与对象，最后创建 asyncio task 调用实现层
-
-输入:
-    body: Any — RunCreateRequest 解析后的请求体
-    thread_id: str — 请求查询参数中的 thread_id
-    request: Request — FastAPI Request 对象，用于获取 app.state 中的资源
-
-输出:
-    RunRecord — 新创建的 run 运行时档案
-
-具体工作流:
-    (1) 从 request.app.state 获取 StreamBridge、RunManager、Checkpointer、Store
-    (2) 通过 get_app_config("config.yaml") 获取 AppConfig
-    (3) 从 request.state.current_user.id 提取 user_id
-    (4) 创建 RunRecord（初始状态 pending）
-    (5) 组装参数：input → HumanMessage（保留 additional_kwargs.files）、RunnableConfig、context（含 user_id）、stream_modes
-    (6) asyncio.create_task(run_agent(...)) 启动 worker
-    (7) record.task = task，返回 RunRecord
-
-示例:
-    @router.post("/{thread_id}/runs/stream")
-    async def stream_run(thread_id: str, body: RunCreateRequest, request: Request):
-        record = await start_run(body, thread_id, request)
-        return StreamingResponse(sse_consumer(...))
-"""
+输入为 RunCreateRequest、逻辑会话 ID 和认证 Request；输出为 RunRecord。
+工作流验证上下文与模型及恢复请求的原 Run 身份，持久登记 Run 并分配独立物理 checkpoint；恢复请求沿用原 Run 的分支，把逻辑会话、共享投影写入者和身份传给 worker。
+示例：`record = await start_run(body, thread_id, request)`。"""
 
 import asyncio
 import logging
@@ -38,6 +14,8 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import Command
 
 from caspian.config.app_config import get_app_config
+from caspian.decision_governance.run_audit import create_run_audit, get_run_audit, update_run_audit
+from caspian.persistence.engine import get_session
 from caspian.runtime.runs.manager import RunManager, RunRecord
 from caspian.runtime.runs.schemas import DisconnectMode
 from caspian.runtime.runs.worker import run_agent
@@ -132,6 +110,14 @@ def _build_graph_input(body: Any) -> dict | Command:
     return graph_input
 
 
+def _is_decision_edit(graph_input: dict | Command) -> bool:
+    return isinstance(graph_input, dict) and any(
+        isinstance(message, HumanMessage)
+        and isinstance((message.additional_kwargs or {}).get("decision_table_edit"), dict)
+        for message in graph_input.get("messages", [])
+    )
+
+
 async def _persist_run_usage(
     record: RunRecord, context_service: Any, thread_id: str
 ) -> None:
@@ -194,23 +180,54 @@ async def start_run(
             detail=f"模型 {resolved_model.name} 不支持图片输入，请切换到 vision 模型后重试",
         )
 
+    from caspian.decision_governance.convergence_runtime import branch_config
+    resume_run_id = getattr(body, "resume_run_id", None)
+    prior_audit = await get_run_audit(
+        get_session, user_id=user_id, thread_id=thread_id, run_id=resume_run_id,
+    ) if resume_run_id else None
+    if resume_run_id is not None:
+        if prior_audit is None:
+            raise HTTPException(status_code=404, detail="原 Run 不存在或不属于当前会话")
+        previous = run_manager.get(resume_run_id)
+        if previous is not None and previous.thread_id != thread_id:
+            raise HTTPException(status_code=403, detail="原 Run 不属于当前会话")
+        if checkpointer is None or await checkpointer.aget_tuple(branch_config(thread_id, resume_run_id)) is None:
+            raise HTTPException(status_code=409, detail="原 Run 的执行 checkpoint 不存在，无法恢复")
     record = run_manager.create(
         thread_id=thread_id,
         on_disconnect=DisconnectMode.cancel,
         model_name=model_name,
     )
     logger.info("RunRecord 已创建: run_id='%s', thread_id='%s'", record.run_id, thread_id)
+    origin_run_id = resume_run_id or record.run_id
+    branch = branch_config(thread_id, origin_run_id)
 
     # (4) 组装参数
 
     graph_input = _build_graph_input(body)
+    await create_run_audit(
+        get_session, user_id=user_id, thread_id=thread_id,
+        run_id=record.run_id, origin_run_id=origin_run_id,
+        kind=prior_audit.kind if prior_audit else ("decision_edit" if _is_decision_edit(graph_input) else "work"),
+    )
+
+    async def persist_status(changed: RunRecord) -> None:
+        await update_run_audit(
+            get_session, user_id=user_id, thread_id=thread_id,
+            run_id=changed.run_id, status=changed.status.value, error=changed.error,
+        )
+        if origin_run_id != changed.run_id and prior_audit is not None:
+            await update_run_audit(
+                get_session, user_id=user_id, thread_id=thread_id,
+                run_id=origin_run_id, status=changed.status.value, error=changed.error,
+            )
 
     # RunnableConfig（recursion_limit 来自 config.yaml agent 段）
     runnable_config: RunnableConfig = {
         "max_concurrency": None,
         "recursion_limit": app_config.agent.recursion_limit,
         "configurable": {
-            "thread_id": thread_id,
+            **branch["configurable"],
             "run_id": record.run_id,
         },
     }
@@ -220,6 +237,10 @@ async def start_run(
         "model_name": model_name,
         "app_config": app_config,
         "user_id": user_id,
+        "thread_id": thread_id,
+        "run_id": record.run_id,
+        "origin_run_id": origin_run_id,
+        "shared_checkpoint_writer": request.app.state.shared_checkpoint_writer,
         "selected_skills": selected_skills,
     }
 
@@ -244,6 +265,8 @@ async def start_run(
             checkpointer=checkpointer,
             store=store,
             before_end=lambda _r: _persist_run_usage(_r, context_service, thread_id),
+            shared_checkpoint_writer=request.app.state.shared_checkpoint_writer,
+            status_sink=persist_status,
         )
     )
 

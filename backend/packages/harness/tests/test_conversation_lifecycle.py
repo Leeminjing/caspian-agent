@@ -44,7 +44,8 @@ class ConversationLifecycleTests(unittest.IsolatedAsyncioTestCase):
             WebThread,
         )
 
-        tables = [WebThread.__table__, WebContextDefinition.__table__, WebContextSource.__table__]
+        tables = [WebThread.__table__, WebContextDefinition.__table__, WebContextSource.__table__,
+                  *[table for table in Base.metadata.tables.values() if table.name.startswith("decision_table_")]]
         async with self.engine.begin() as conn:
             await conn.run_sync(lambda c: Base.metadata.create_all(c, tables=tables))
         self.checkpointer = InMemorySaver()

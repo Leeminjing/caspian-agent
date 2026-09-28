@@ -6,6 +6,9 @@
 
 输出:
     可运行检查，覆盖开关、审核重试、人工修订、磁盘结果、消息隔离和 interrupt/resume
+
+工作流: 模拟承诺层依赖，提交阶段请求并断言结果与恢复行为。
+示例：`pytest tests/test_commitment_poc.py`。
 """
 
 import asyncio
@@ -305,6 +308,23 @@ class FakeRunManager:
 
 
 class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        table_reader = patch(
+            "caspian.agents.commitment.middleware._load_decision_table_dict",
+            AsyncMock(return_value={"version": "0:empty", "revision": 0, "rows": []}),
+        )
+        table_proposer = patch(
+            "caspian.agents.commitment.workflow.propose_contract_table",
+            AsyncMock(return_value=SimpleNamespace(
+                operation_id="test-table-operation", status="committed",
+                changes=[], checks=[], result_revision=1,
+            )),
+        )
+        table_reader.start()
+        table_proposer.start()
+        self.addCleanup(table_reader.stop)
+        self.addCleanup(table_proposer.stop)
+
     async def test_public_output_tokens_stream_without_private_reasoning(self):
         class TokenAgent:
             async def astream(self, *_args, **_kwargs):
@@ -1076,10 +1096,11 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
             [
                 "ToolErrorMiddleware",
                 "UploadsMiddleware",
-                "DecisionTableMiddleware",
                 "DecisionTableEditMiddleware",
                 "DecisionTableGuardMiddleware",
+                "DecisionActionReviewMiddleware",
                 "SandboxAuditMiddleware",
+                "DecisionTableMiddleware",
             ],
         )
 
@@ -1094,13 +1115,14 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 model=object(),
                 context7_tools=[],
             )
-        self.assertIs(result[4], sentinel)
+        self.assertIs(result[3], sentinel)
         self.assertEqual(type(result[0]).__name__, "ToolErrorMiddleware")
         self.assertEqual(type(result[1]).__name__, "UploadsMiddleware")
-        self.assertEqual(type(result[2]).__name__, "DecisionTableMiddleware")
-        self.assertEqual(type(result[3]).__name__, "DecisionTableEditMiddleware")
-        self.assertEqual(type(result[5]).__name__, "DecisionTableGuardMiddleware")
+        self.assertEqual(type(result[2]).__name__, "DecisionTableEditMiddleware")
+        self.assertEqual(type(result[4]).__name__, "DecisionTableGuardMiddleware")
+        self.assertEqual(type(result[5]).__name__, "DecisionActionReviewMiddleware")
         self.assertEqual(type(result[6]).__name__, "SandboxAuditMiddleware")
+        self.assertEqual(type(result[7]).__name__, "DecisionTableMiddleware")
 
     async def test_reviewed_delegator_retries_without_exposing_failures(self):
         delegator = StubDelegator([False, True])
@@ -2602,7 +2624,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
 
     def test_resume_request_and_graph_input(self):
         resume = {"decision": "approve"}
-        request = RunCreateRequest(resume=resume)
+        request = RunCreateRequest(resume=resume, resume_run_id="origin-run")
         graph_input = _build_graph_input(request)
         self.assertIsInstance(graph_input, Command)
         self.assertEqual(graph_input.resume, resume)

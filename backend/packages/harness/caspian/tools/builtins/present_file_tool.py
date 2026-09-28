@@ -48,12 +48,11 @@ from langgraph.prebuilt import ToolRuntime
 from langgraph.types import Command
 
 from caspian.sandbox.path_utils import REAL_ROOT, VRROOT, resolve_path
+from caspian.decision_governance.identity import logical_thread_id
 
 
 def _get_thread_id(runtime: ToolRuntime) -> str | None:
-    if runtime.execution_info is None:
-        return None
-    return runtime.execution_info.thread_id
+    return logical_thread_id(runtime)
 
 
 def _sanitize_present_error(error: Exception, runtime: ToolRuntime) -> str:

@@ -8,6 +8,8 @@
 输入: 无 — 本文件为纯定义文件
 输出: RunStatus、DisconnectMode 枚举类
 
+工作流: RunManager 用 RunStatus 表示处理中、待审批及终态，SSE 消费者按 DisconnectMode 处理断线。
+
 示例:
     from caspian.runtime.runs.schemas import RunStatus, DisconnectMode
     status = RunStatus.pending
@@ -26,6 +28,7 @@ class RunStatus(StrEnum):
     error = "error"
     timeout = "timeout"
     interrupted = "interrupted"
+    waiting_approval = "waiting_approval"
 
 
 class DisconnectMode(StrEnum):

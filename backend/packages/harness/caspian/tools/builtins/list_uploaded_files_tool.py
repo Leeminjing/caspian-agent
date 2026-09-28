@@ -90,9 +90,8 @@ def list_uploaded_files(
             returns metadata only, true expands every file, and a filename list
             expands only the selected files.
     """
-    thread_id = None
-    if runtime is not None and runtime.execution_info is not None:
-        thread_id = runtime.execution_info.thread_id
+    from caspian.decision_governance.identity import logical_thread_id
+    thread_id = logical_thread_id(runtime)
     if thread_id is None:
         return [{"error": "无法获取当前 thread ID"}]
 

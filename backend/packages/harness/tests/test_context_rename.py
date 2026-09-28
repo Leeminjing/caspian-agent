@@ -32,6 +32,7 @@ _CONTEXT_TABLES = [
     WebThread.__table__,
     WebContextDefinition.__table__,
     WebContextSource.__table__,
+    *[table for table in Base.metadata.tables.values() if table.name.startswith("decision_table_")],
 ]
 
 

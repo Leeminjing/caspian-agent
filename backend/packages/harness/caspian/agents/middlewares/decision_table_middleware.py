@@ -1,221 +1,106 @@
-"""
-本文件对外提供 DecisionTableMiddleware 类，作为决策等级表的版本去重注入中间件。
+"""本文件对外提供 DecisionTableMiddleware，在模型发送边界注入唯一有效决策表。
 
-对外提供:
-    DecisionTableMiddleware(AgentMiddleware) — 覆盖 before_agent / abefore_agent 与
-    before_model / abefore_model 钩子，读取当前 thread 的决策等级表并以固定 message id 注入
-    SystemMessage（含等级表与仲裁规则），版本一致时跳过注入（零 token 去重）。
-    before_model 在每次模型调用前重读磁盘并按版本热替换，使当前 run 内发生的等级表变更
-    可在当前 run 的后续轮次立即生效。
-
-输入:
-    before_agent / abefore_agent / before_model / abefore_model:
-        state: AgentState — 当前 agent 状态（含 messages，可含历史注入的等级表消息）
-        runtime: ToolRuntime — LangGraph 运行时（含 execution_info.thread_id）
-
-输出:
-    dict | None — 需要注入时返回 {"messages": [SystemMessage]} 状态增量；
-                  等级表不存在或版本一致时返回 None
-
-具体工作流:
-    (1) 从 runtime.execution_info 获取 thread_id，无法获取时跳过
-    (2) 读取 requirements/{thread_id}/decision-table.md，不存在时跳过
-    (3) 扫描 state.messages 找 id="decision-table" 的 SystemMessage，解析其内嵌版本
-    (4) 版本与磁盘一致 → 返回 None（已在上下文中，零 token）
-    (5) 版本不一致或不存在 → 返回固定 id 的 SystemMessage（等级表全文 + 仲裁规则文本），
-        add_messages reducer 按 id 原位替换，消息历史始终只有一份等级表
-
-示例:
-    from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
-
-    middleware = DecisionTableMiddleware()
-    # 在 create_agent(middleware=[..., middleware]) 中使用
+输入为 ModelRequest、认证 Run 上下文和权威表；输出为含完整当前表的请求及调用修订记录。
+工作流每轮重新读表、剔除旧注入、验证唯一性，先记调用版本再发送；任何读取或验证失败均阻止模型调用。
+示例：`create_agent(middleware=[DecisionTableMiddleware(actor_id="lead")])`。
 """
 
-import logging
-import re
+from __future__ import annotations
 
-from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import AgentState
+import asyncio
+from typing import Any
+
+from langchain.agents.middleware import AgentMiddleware, ModelRequest
 from langchain_core.messages import SystemMessage
-from langgraph.prebuilt import ToolRuntime
 
-from caspian.agents.commitment.decision_table import DecisionTable, read_decision_table
-
-logger = logging.getLogger(__name__)
-
-_MESSAGE_ID = "decision-table"
-
-_VERSION_PATTERN = re.compile(r'<decision_table version="([^"]+)"')
-
-_ARBITRATION_RULES = """<decision_table_instructions>
-This is the thread's decision LEVEL TABLE (决策等级表). It contains human-approved decisions, and each decision carries a LEVEL (等级): 3=必须 must, 2=可协商 negotiable, 1=可选 optional. The LEVEL is the governing mechanism for decision conflicts — when decisions clash, the LEVEL decides which one wins.
-
-Before proposing any new requirement or decision, scan ALL entries in this table for conflicts. Conflicts include semantic ones (wording changes, technology substitutions, and other surface-unrelated clashes) - not just exact text matches.
-
-Conflict governance by LEVEL:
-- New decision conflicts with an entry, and its level is LOWER than the entry's level → you MUST abandon the new decision and follow the existing entry. Do not execute, propose, or argue for it.
-- New decision conflicts with an entry, and its level is EQUAL or HIGHER, or its level cannot be determined → you MUST stop and ask the user to confirm before proceeding.
-
-LEVEL comparison is numeric: 3 > 2 > 1. Compare with code-like rigor, never guess the comparison result.
-</decision_table_instructions>"""
+from caspian.config.decision_review_config import DecisionReviewConfig
+from caspian.decision_governance.adapter import service
+from caspian.decision_governance.convergence_runtime import hash_messages, missing_shared_messages
+from caspian.decision_governance.identity import logical_thread_id
+from caspian.decision_governance.model_calls import begin_model_call, count_model_calls, finish_model_call, mark_model_call_sent
+from caspian.decision_governance.policy import Actor
+from caspian.decision_governance.view import TableView, bind_model_request
+from caspian.persistence.engine import get_session
 
 
-def _build_content(table: DecisionTable) -> str:
-    """组装等级表注入内容（受保护 helper）。
-
-    输入:
-        table: DecisionTable — 决策等级表实例
-
-    输出:
-        str — 等级表全文（含版本标记）+ 仲裁规则文本
-    """
-    rows_lines = ["| id | requirement | decision | priority |", "|---|---|---|---|"]
-    rows_lines.extend(
-        f"| {row.id} | {row.requirement} | {row.decision} | {row.priority} |"
-        for row in table.rows
-    )
-    rows_md = "\n".join(rows_lines)
-
-    guard_lines = []
-    for row in table.hard_entries():
-        for guard in row.guards:
-            guard_lines.append(
-                f"- 条目 {row.id}（等级 {row.priority}）：{guard.kind} {guard.target} "
-                f"{guard.operator} \"{guard.pattern}\""
-            )
-    guards_md = ("\n\n守卫规则：\n" + "\n".join(guard_lines)) if guard_lines else ""
-
-    return (
-        f'<decision_table version="{table.version}" updated="{table.updated}">\n'
-        f"{rows_md}{guards_md}\n"
-        f"</decision_table>\n\n"
-        f"{_ARBITRATION_RULES}"
-    )
-
-
-def _injected_version(content: str) -> str | None:
-    """从已注入的 SystemMessage 内容解析版本号（受保护 helper）。
-
-    输入:
-        content: str — SystemMessage 内容
-
-    输出:
-        str | None — 内嵌版本号，未找到返回 None
-    """
-    match = _VERSION_PATTERN.search(content)
-    return match.group(1) if match else None
+def _identity(request: ModelRequest) -> tuple[str, str, str]:
+    runtime = request.runtime
+    context = runtime.context if runtime and isinstance(runtime.context, dict) else {}
+    user_id = context.get("user_id")
+    run_id = context.get("run_id")
+    thread_id = logical_thread_id(runtime)
+    if not all((user_id, run_id, thread_id)):
+        raise RuntimeError("模型调用缺少已验证的用户、Run 或会话 ID")
+    return str(user_id), str(thread_id), str(run_id)
 
 
 class DecisionTableMiddleware(AgentMiddleware):
+    def __init__(self, actor_id: str = "lead"):
+        self._actor_id = actor_id
 
-    def _inject_decision_table(
-        self, state: AgentState, runtime: ToolRuntime
-    ) -> dict | None:
-        """核心逻辑：读取等级表，版本一致跳过，否则固定 id 注入。
-
-        输入:
-            state: AgentState — 当前 agent 状态
-            runtime: ToolRuntime — LangGraph 运行时
-
-        输出:
-            dict | None — {"messages": [SystemMessage]} 状态增量，无等级表或版本一致时返回 None
-        """
-        thread_id = None
-        if runtime.execution_info is not None:
-            thread_id = runtime.execution_info.thread_id
-        if thread_id is None:
-            logger.warning("DecisionTableMiddleware: 无法获取 thread_id，跳过注入")
+    async def abefore_model(self, state: dict, runtime: Any) -> dict | None:
+        context = runtime.context if runtime and isinstance(runtime.context, dict) else {}
+        writer = context.get("shared_checkpoint_writer")
+        if writer is None:
             return None
-
-        user_id = None
-        ctx = getattr(runtime, "context", None)
-        if isinstance(ctx, dict):
-            raw_user_id = ctx.get("user_id")
-            if raw_user_id:
-                user_id = str(raw_user_id)
-
-        table = read_decision_table(str(thread_id), user_id=user_id)
-        if table is None:
-            return None
-
-        for message in reversed(state.get("messages", [])):
-            if isinstance(message, SystemMessage) and message.id == _MESSAGE_ID:
-                if _injected_version(str(message.content)) == table.version:
-                    return None
-                break
-
-        logger.info(
-            "DecisionTableMiddleware: 注入等级表 (thread_id=%s, version=%s)",
-            thread_id,
-            table.version,
+        user_id = context.get("user_id")
+        thread_id = logical_thread_id(runtime)
+        if not user_id or not thread_id:
+            raise RuntimeError("合流缺少已验证的用户或会话 ID")
+        missing = await missing_shared_messages(
+            get_session, str(user_id), str(thread_id), list(state.get("messages") or []), writer,
+            dict(state.get("shared_message_hashes") or {}),
+            operation_only=bool(context.get("is_subagent")),
         )
-        return {
-            "messages": [
-                SystemMessage(content=_build_content(table), id=_MESSAGE_ID)
-            ]
-        }
+        hashes = dict(state.get("shared_message_hashes") or {})
+        hashes.update(hash_messages([*(state.get("messages") or []), *missing]))
+        if missing or hashes != (state.get("shared_message_hashes") or {}):
+            return {"messages": missing, "shared_message_hashes": hashes}
+        return None
 
-    def before_agent(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
-        """同步钩子：agent 执行前注入等级表。
+    async def _prepare(self, request: ModelRequest) -> tuple[ModelRequest, str]:
+        user_id, thread_id, run_id = _identity(request)
+        table = await service().current(user_id, thread_id, Actor(self._actor_id, "agent"))
+        bound = bind_model_request(request, TableView.from_snapshot(table))
+        context = request.runtime.context if request.runtime and isinstance(request.runtime.context, dict) else {}
+        app_config = context.get("app_config")
+        review = getattr(app_config, "decision_review", DecisionReviewConfig())
+        reminder_reason = None
+        if review.enabled:
+            previous = await count_model_calls(get_session, user_id, thread_id, run_id)
+            if previous > 0 and previous % review.reminder_interval == 0:
+                reminder_reason = "periodic"
+                bound = bound.override(system_message=SystemMessage(content=(
+                    f"{bound.system_message.text}\n\n"
+                    f'<decision_review_reminder reason="periodic" round="{previous + 1}" table_revision="{table.revision}">'
+                    "请对照当前有效决策表检查整体方向，指出涉及条目、冲突或无法确认之处，再继续。"
+                    "</decision_review_reminder>"
+                )))
+        call_id = await begin_model_call(
+            get_session, user_id=user_id, thread_id=thread_id, run_id=run_id,
+            actor_id=self._actor_id, table=table, request=bound,
+            reminder_reason=reminder_reason,
+        )
+        return bound, call_id
 
-        输入:
-            state: AgentState — 当前 agent 状态
-            runtime: ToolRuntime — LangGraph 运行时
-
-        输出:
-            dict | None — 状态增量，无等级表或版本一致时返回 None
-        """
+    async def awrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
+        bound, call_id = await self._prepare(request)
         try:
-            return self._inject_decision_table(state, runtime)
-        except Exception:
-            logger.error("DecisionTableMiddleware.before_agent 异常，跳过注入", exc_info=True)
-            return None
+            await mark_model_call_sent(get_session, call_id)
+            result = await handler(bound)
+        except Exception as exc:
+            await finish_model_call(get_session, call_id, "failed", f"{type(exc).__name__}: {exc}")
+            raise
+        await finish_model_call(get_session, call_id, "completed")
+        return result
 
-    async def abefore_agent(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
-        """异步钩子：逻辑与同步版本同构。
-
-        输入:
-            state: AgentState — 当前 agent 状态
-            runtime: ToolRuntime — LangGraph 运行时
-
-        输出:
-            dict | None — 状态增量，无等级表或版本一致时返回 None
-        """
+    def wrap_model_call(self, request: ModelRequest, handler: Any) -> Any:
+        bound, call_id = asyncio.run(self._prepare(request))
         try:
-            return self._inject_decision_table(state, runtime)
-        except Exception:
-            logger.error("DecisionTableMiddleware.abefore_agent 异常，跳过注入", exc_info=True)
-            return None
-
-    def before_model(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
-        """同步钩子：每次模型调用前重读磁盘并按版本热替换等级表。
-
-        输入:
-            state: AgentState — 当前 agent 状态
-            runtime: ToolRuntime — LangGraph 运行时
-
-        输出:
-            dict | None — 状态增量，无等级表或版本一致时返回 None
-        """
-        try:
-            return self._inject_decision_table(state, runtime)
-        except Exception:
-            logger.error("DecisionTableMiddleware.before_model 异常，跳过注入", exc_info=True)
-            return None
-
-    async def abefore_model(self, state: AgentState, runtime: ToolRuntime) -> dict | None:
-        """异步钩子：每次模型调用前重读磁盘并按版本热替换等级表。
-
-        输入:
-            state: AgentState — 当前 agent 状态
-            runtime: ToolRuntime — LangGraph 运行时
-
-        输出:
-            dict | None — 状态增量，无等级表或版本一致时返回 None
-        """
-        try:
-            return self._inject_decision_table(state, runtime)
-        except Exception:
-            logger.error("DecisionTableMiddleware.abefore_model 异常，跳过注入", exc_info=True)
-            return None
+            asyncio.run(mark_model_call_sent(get_session, call_id))
+            result = handler(bound)
+        except Exception as exc:
+            asyncio.run(finish_model_call(get_session, call_id, "failed", f"{type(exc).__name__}: {exc}"))
+            raise
+        asyncio.run(finish_model_call(get_session, call_id, "completed"))
+        return result

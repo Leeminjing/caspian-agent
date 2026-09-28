@@ -26,9 +26,11 @@ Most agent systems are **homogeneous**: either "an LLM judging an LLM" (soft dec
 
 A single rule reproduces itself across the whole system:
 
-> **在每一处 LLM 边界,把自由度压缩成一个可机械校验的窄类型(离散等级是最典型的一种),然后用纯函数裁决、用版本化文件落账、用 CAS 管可变状态、用 fail-hard 守核心。**
+> **在每一处 LLM 边界,把自由度压缩成一个可机械校验的窄类型(离散等级是最典型的一种),然后用纯函数裁决、用不可变修订和操作事件落账、用 CAS 管可变状态、用 fail-hard 守核心。**
 >
-> **Compress the LLM's freedom at every boundary into a narrow, mechanically-checkable type (discrete levels being the canonical case); then adjudicate with pure functions, persist with versioned files, guard mutable state with compare-and-set, and fail-hard at the core.**
+> **Compress the LLM's freedom at every boundary into a narrow, mechanically-checkable type (discrete levels being the canonical case); then adjudicate with pure functions, persist immutable revisions and operation events, guard mutable state with compare-and-set, and fail-hard at the core.**
+
+决策等级表的运行时结构、权限、审计、Run 合流和接口见 [决策等级表治理](docs/decision-table-governance.md)。
 
 This is why the front end is also zero-dependency and transparent, why the orchestration is non-LLM, and why every "hard" is ultimately the lifecycle of one protocol type.
 

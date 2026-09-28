@@ -141,9 +141,8 @@ Args:
         # (4) 虚拟路径解析为后端真实文件路径
         from caspian.sandbox.path_utils import resolve_path
 
-        thread_id = None
-        if runtime.execution_info is not None:
-            thread_id = runtime.execution_info.thread_id
+        from caspian.decision_governance.identity import logical_thread_id
+        thread_id = logical_thread_id(runtime)
         if thread_id is None:
             raise ValueError("无法获取当前线程 ID")
 

@@ -178,9 +178,8 @@ async def task_tool(
         )
 
     # 父上下文捕获
-    thread_id = None
-    if runtime.config is not None:
-        thread_id = runtime.config.get("configurable", {}).get("thread_id")
+    from caspian.decision_governance.identity import logical_thread_id
+    thread_id = logical_thread_id(runtime)
     context = runtime.context if isinstance(runtime.context, dict) else {}
     user_id = context.get("user_id")
     parent_model = context.get("model_name")
@@ -204,6 +203,8 @@ async def task_tool(
         thread_id=thread_id,
         tool_groups=tool_groups,
         trace_id=trace_id,
+        shared_checkpoint_writer=context.get("shared_checkpoint_writer"),
+        app_config=context.get("app_config"),
     )
 
     # 后台启动，task_id=tool_call_id

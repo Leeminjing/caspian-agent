@@ -1,8 +1,8 @@
-"""跑 supervisor 的 harness:mock delegator + InMemorySaver + 自动 resume 人工节点。
+"""本文件对外提供承诺层离线 benchmark harness。
 
-收集:
-- stages:按顺序的阶段序列(从 ToolMessage payload 提取)
-- interrupts:人工中断的阶段列表(3/5/6/7)
+输入为模拟委派器、InMemorySaver 与阶段响应；输出为阶段序列及人工中断记录。
+工作流运行 supervisor，自动恢复人工节点并收集 ToolMessage 阶段结果。
+示例：`python -m caspian.benchmarks.commitment.harness`。
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -57,14 +59,21 @@ async def run_supervisor(source_text: str, thread_id: str) -> dict:
     state: dict | Command = _base_state(thread_id, source_text)
     interrupts: list[int] = []
     result: dict = {}
-    while True:
-        result = await supervisor.ainvoke(state, config=config)
-        if result.get("__interrupt__"):
-            for it in result["__interrupt__"]:
-                interrupts.append(int(it.value.get("stage", 0)))
-            state = Command(resume={"decision": "approve"})
-            continue
-        break
+    async def no_table_operation(_state, _artifacts):
+        return SimpleNamespace(
+            operation_id="benchmark-table-operation", status="committed",
+            changes=[], checks=[], result_revision=1,
+        )
+
+    with patch("caspian.agents.commitment.workflow.propose_contract_table", no_table_operation):
+        while True:
+            result = await supervisor.ainvoke(state, config=config)
+            if result.get("__interrupt__"):
+                for it in result["__interrupt__"]:
+                    interrupts.append(int(it.value.get("stage", 0)))
+                state = Command(resume={"decision": "approve"})
+                continue
+            break
 
     return {
         "stages": _stage_sequence(result),

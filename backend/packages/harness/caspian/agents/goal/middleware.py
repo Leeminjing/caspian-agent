@@ -73,13 +73,8 @@ def _goal_service(runtime: Any, config: GoalModeConfig) -> GoalService:
     store = getattr(runtime, "store", None)
     if store is None:
         raise GoalError("目标模式需要 LangGraph store", "GOAL_TOOL_AUTHORITY_REQUIRED")
-    # thread_id：中间件 Runtime 走 execution_info.thread_id（镜像 CommitmentMiddleware）；
-    # 回退 config.configurable.thread_id（工具/测试桩）。
-    exec_info = getattr(runtime, "execution_info", None)
-    thread_id = getattr(exec_info, "thread_id", None)
-    if thread_id is None:
-        config_dict = getattr(runtime, "config", None) or {}
-        thread_id = (config_dict.get("configurable") or {}).get("thread_id")
+    from caspian.decision_governance.identity import logical_thread_id
+    thread_id = logical_thread_id(runtime)
     context = getattr(runtime, "context", None)
     if not isinstance(context, dict):
         context = {}

@@ -1,51 +1,8 @@
-"""
-本文件对外提供 `run_agent` 异步函数，作为 core-aob 链路的执行层主入口。
+"""本文件对外提供 run_agent，执行可恢复的 Agent Run 并发布 SSE 事件。
 
-对外提供:
-    run_agent — 在后台 asyncio task 中运行 agent graph，将 stream chunk 通过 StreamBridge 发布为 SSE 事件
-
-输入:
-    record: RunRecord — 当前 run 的运行时档案，含 run_id、model_name、abort_event 等
-    bridge: StreamBridge — 进程内事件总线，worker 通过它发布事件
-    run_manager: RunManager — run 状态管理注册表，用于更新状态
-    app_config: AppConfig — 组合根配置
-    graph_input: dict — agent graph 的输入（含 messages 等）
-    runnable_config: RunnableConfig — LangGraph 执行配置
-    stream_modes: list[str] | str | None — 前端传入的 stream mode
-    agent_name: str | None — agent 名称
-    tool_groups: list[str] | None — 工具分组过滤
-    langgraph_context: dict | None — LangGraph context，传给 agent.astream(context=...)，框架据此构建 Runtime 供节点读取；其中 user_id 传给 make_lead_agent 用于定位 per-user custom skills
-    checkpointer: BaseCheckpointSaver | None — checkpoint 持久化器，None 时不启用
-    store: BaseStore | None — 跨 thread 长期记忆存储，None 时不启用
-    COMMITMENT_MESSAGES_MONITOR — 设为 1 时把角色 messages 镜像到标准输出
-
-输出:
-    SSE 事件流 → bridge → 前端；可选 messages 镜像 → 标准输出；最终状态 → run_manager
-
-具体工作流:
-    (1) 设置 run 状态为 running，发布 metadata 事件（含 run_id + thread_id）
-    (2) 读取当前 thread 的旧 checkpoint 保存为 rollback 快照（checkpointer 可用时）
-    (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
-    (3.5) 将 checkpointer 挂载到 agent.checkpointer，将 store 挂载到 agent.store
-    (4) 翻译 stream_modes（前端名称 → LangGraph 内部名称）
-    (5) 调用 agent.astream()，每轮检查 abort_event
-    (6) 每个 chunk 转换为 SSE 事件 publish 到 bridge
-    (7) 监控开关开启时镜像 commitment_messages，不改变 SSE 消费
-    (8) 终态处理：success / interrupted（rollback 时用旧 checkpoint 恢复 thread 状态）/ error
-    (9) finally: publish_end 关流 + 延迟缓存清理
-
-示例:
-    task = asyncio.create_task(run_agent(
-        record=record,
-        bridge=bridge,
-        run_manager=run_manager,
-        app_config=app_config,
-        graph_input={"messages": [HumanMessage(content="你好")]},
-        runnable_config={"configurable": {"thread_id": "th-001"}},
-        stream_modes=["values"],
-        langgraph_context={"model_name": "deepseek-v4-flash", "app_config": app_config, "user_id": "uuid-xxx"},
-    ))
-"""
+输入为 RunRecord、图输入、逻辑会话配置、checkpoint 和共享投影写入者；输出为流事件与 Run 终态。
+工作流以独立物理线程保存每个 Run，从旧会话导入完整历史，在流式安全边界登记工作消息并合入共享事件；恢复时补入后续改表记录，状态写入持久审计，动作仍由治理中间件复核。
+示例：`await run_agent(record=record, bridge=bridge, run_manager=manager, app_config=config, graph_input=input, runnable_config=branch_config("t", "r"))`。"""
 
 import json
 import logging
@@ -251,6 +208,7 @@ async def _stream_one_round(
     langgraph_context: dict | None,
     record: RunRecord,
     bridge: StreamBridge,
+    progress_sink: Callable[[list[BaseMessage]], Awaitable[None]] | None = None,
 ) -> tuple[bool, bool]:
     """执行一轮 agent.astream 并发布 SSE 事件。
 
@@ -285,11 +243,18 @@ async def _stream_one_round(
             if interrupts:
                 graph_interrupted = True
                 for interrupt_data in interrupts:
+                    if isinstance(interrupt_data, dict) and isinstance(interrupt_data.get("value"), dict):
+                        record.waiting_approval = interrupt_data["value"].get("type") == "decision_table_adjudication"
                     bridge.publish(
                         record.run_id,
                         _build_chunk_event("interrupt", interrupt_data),
                     )
                 continue
+
+            if mode == "values" and isinstance(chunk, dict) and progress_sink is not None:
+                messages = chunk.get("messages")
+                if isinstance(messages, list):
+                    await progress_sink(messages)
 
             serialized_chunk = _serialize_chunk(chunk)
             if mode == "messages":
@@ -346,6 +311,8 @@ async def _stream_one_round(
         graph_interrupted = True
         interrupts = getattr(exc, "__interrupt__", None) or _extract_interrupts(exc)
         for interrupt_data in interrupts:
+            if isinstance(interrupt_data, Interrupt) and isinstance(interrupt_data.value, dict):
+                record.waiting_approval = interrupt_data.value.get("type") == "decision_table_adjudication"
             bridge.publish(
                 record.run_id,
                 _build_chunk_event("interrupt", _serialize_chunk(interrupt_data)),
@@ -413,7 +380,7 @@ async def _repair_dangling_tool_calls(agent, config: RunnableConfig) -> None:
     thread_id = (config.get("configurable") or {}).get("thread_id")
     if thread_id is None:
         return
-    configurable = {"configurable": {"thread_id": thread_id}}
+    configurable = {"configurable": dict(config.get("configurable") or {})}
     try:
         snapshot = await checkpointer.aget_tuple(configurable)
     except Exception:
@@ -447,10 +414,14 @@ async def run_agent(
     checkpointer: BaseCheckpointSaver | None = None,
     store: BaseStore | None = None,
     before_end: Callable[[RunRecord], Awaitable[None]] | None = None,
+    shared_checkpoint_writer: Any | None = None,
+    status_sink: Callable[[RunRecord], Awaitable[None]] | None = None,
 ) -> None:
     try:
         # (1) 置 running，发 metadata 事件
         run_manager.update(record.run_id, status=RunStatus.running)
+        if status_sink is not None:
+            await status_sink(record)
         logger.info("run '%s' 状态 → running", record.run_id)
 
         metadata_event = _build_chunk_event("metadata", {
@@ -463,7 +434,7 @@ async def run_agent(
         rollback_snapshot = None
         if checkpointer is not None:
             try:
-                config_for_latest = {"configurable": {"thread_id": record.thread_id}}
+                config_for_latest = {"configurable": dict(runnable_config.get("configurable") or {})}
                 latest = await checkpointer.aget_tuple(config_for_latest)
                 if latest is not None:
                     rollback_snapshot = latest
@@ -476,7 +447,7 @@ async def run_agent(
         # (3) 从 record.model_name 取模型名，从 langgraph_context 取 user_id，创建 agent
         model_name = record.model_name or (app_config.models[0].name if app_config.models else None)
         mapped_stream_modes = _map_stream_modes(stream_modes)
-        if app_config.commitment.enabled or app_config.subagents.enabled:
+        if shared_checkpoint_writer is not None or app_config.commitment.enabled or app_config.subagents.enabled:
             if isinstance(mapped_stream_modes, str):
                 mapped_stream_modes = list(
                     dict.fromkeys([mapped_stream_modes, "values", "custom"])
@@ -490,6 +461,40 @@ async def run_agent(
         if langgraph_context is not None:
             # run_id 供 SubagentLimitMiddleware 按 run 记账委托总额
             langgraph_context["run_id"] = record.run_id
+
+        progress_sink = None
+        if shared_checkpoint_writer is not None:
+            from caspian.decision_governance.adapter import service as decision_service
+            from caspian.decision_governance.convergence_runtime import hash_messages, record_work_progress, synchronize
+            from caspian.decision_governance.convergence_store import append_work_messages
+            from caspian.decision_governance.policy import Actor
+            from caspian.persistence.engine import get_session
+
+            if not user_id:
+                raise RuntimeError("执行合流缺少用户 ID")
+            await decision_service().current(str(user_id), record.thread_id, Actor("lead", "agent"))
+            branch = await checkpointer.aget_tuple(runnable_config) if checkpointer is not None else None
+            if branch is None and checkpointer is not None:
+                previous = await checkpointer.aget_tuple({"configurable": {"thread_id": record.thread_id}})
+                old_messages = previous.checkpoint.get("channel_values", {}).get("messages", []) if previous else []
+                if old_messages:
+                    await append_work_messages(
+                        get_session, str(user_id), record.thread_id,
+                        f"legacy:{record.thread_id}", old_messages,
+                    )
+            shared = await synchronize(get_session, str(user_id), record.thread_id, shared_checkpoint_writer)
+            if branch is None and isinstance(graph_input, dict):
+                graph_input = {
+                    **graph_input,
+                    "messages": [*shared, *(graph_input.get("messages") or [])],
+                    "shared_message_hashes": hash_messages(shared),
+                }
+
+            async def progress_sink(messages: list[BaseMessage]) -> None:
+                await record_work_progress(
+                    get_session, str(user_id), record.thread_id,
+                    record.run_id, messages, shared_checkpoint_writer,
+                )
 
         agent = await make_lead_agent(
             model_name=model_name or None,
@@ -506,6 +511,24 @@ async def run_agent(
         if store is not None:
             agent.store = store
 
+        if shared_checkpoint_writer is not None and checkpointer is not None and branch is not None:
+            from caspian.decision_governance.convergence_runtime import missing_shared_messages
+            from caspian.persistence.engine import get_session
+
+            state = await agent.aget_state(runnable_config)
+            if not state.next:
+                missing = await missing_shared_messages(
+                    get_session, str(user_id), record.thread_id,
+                    list(state.values.get("messages") or []), shared_checkpoint_writer,
+                    dict(state.values.get("shared_message_hashes") or {}),
+                )
+                if missing:
+                    hashes = dict(state.values.get("shared_message_hashes") or {})
+                    hashes.update(hash_messages(missing))
+                    await agent.aupdate_state(runnable_config, {
+                        "messages": missing, "shared_message_hashes": hashes,
+                    })
+
         # (3.6) 清理悬空 tool_call：中断可能把 run 停在「AI 已带 tool_calls 却无紧跟 tool result」的
         # 悬空点，发新消息直接复用该状态会被模型端以 400 拒绝。用 aupdate_state 清理悬空轮次。
         await _repair_dangling_tool_calls(agent, runnable_config)
@@ -517,11 +540,7 @@ async def run_agent(
         if goal_mode_cfg is not None and goal_mode_cfg.enabled:
             from caspian.goal import GoalRoundDriver
 
-            goal_thread_id = (
-                (runnable_config.get("configurable") or {}).get("thread_id")
-                if isinstance(runnable_config, dict)
-                else None
-            )
+            goal_thread_id = (langgraph_context or {}).get("thread_id")
             goal_user_id = (langgraph_context or {}).get("user_id")
             if store is None:
                 raise RuntimeError("goal_mode.enabled 需要 LangGraph store；请配置 langgraph_store")
@@ -544,6 +563,7 @@ async def run_agent(
                 langgraph_context,
                 record,
                 bridge,
+                progress_sink,
             )
             graph_interrupted = graph_interrupted or round_interrupted
             if goal_driver is not None:
@@ -579,11 +599,16 @@ async def run_agent(
                 run_manager.update(record.run_id, status=RunStatus.interrupted)
                 logger.info("run '%s' 状态 → interrupted", record.run_id)
         elif graph_interrupted:
-            run_manager.update(record.run_id, status=RunStatus.interrupted)
-            logger.info("run '%s' 状态 → interrupted (graph interrupt)", record.run_id)
+            next_status = RunStatus.waiting_approval if record.waiting_approval else RunStatus.interrupted
+            run_manager.update(record.run_id, status=next_status)
+            logger.info("run '%s' 状态 → %s (graph interrupt)", record.run_id, next_status.value)
         else:
             run_manager.update(record.run_id, status=RunStatus.success)
             logger.info("run '%s' 状态 → success", record.run_id)
+
+        origin_run_id = (langgraph_context or {}).get("origin_run_id")
+        if origin_run_id and origin_run_id != record.run_id and run_manager.get(origin_run_id) is not None:
+            run_manager.update(origin_run_id, status=run_manager.get(record.run_id).status)
 
     except Exception as exc:
         logger.error("run '%s' 异常: %s", record.run_id, exc, exc_info=True)
@@ -595,6 +620,11 @@ async def run_agent(
             logger.error("发布 error 事件失败", exc_info=True)
 
     finally:
+        if status_sink is not None:
+            try:
+                await status_sink(record)
+            except Exception:
+                logger.error("run '%s' 状态审计落库失败", record.run_id, exc_info=True)
         # (6.5) 终态钩子（如 usage 落库）先于关流，保证订阅者收到 end 帧时数据已就绪
         if before_end is not None:
             try:

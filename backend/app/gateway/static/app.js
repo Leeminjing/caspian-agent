@@ -2,11 +2,11 @@
 本文件对外提供网关前端主控制器：会话列表、聊天流式渲染、承诺层评审卡、决策等级表、
 目标徽章与本地单用户身份，是 index.html 的主脚本。
 
-输入为用户交互事件与 /api/threads/{id}/runs/stream 的 SSE 事件；输出为 DOM 渲染与对
-后端 REST 接口的调用。具体工作流为：restoreSession() 以 GET /api/auth/me 取本地单用户
+输入为用户交互事件、决策表修订与 /api/threads/{id}/runs/stream 的 SSE 事件；输出为 DOM 渲染、带基准和理由的改表 Run 请求及 REST 查询。
+具体工作流为：restoreSession() 以 GET /api/auth/me 取本地单用户
 身份，loadThreads() 以 GET /api/contexts/tree 为事实源装载会话全集，经 CaspianThreadList
 合并本地未入库会话并按最近活跃倒序渲染；提交任务后逐帧消费 SSE，按事件类型分派到正文、
-推理、工具卡与中断评审面板。
+推理、工具卡与中断评审面板；恢复请求保留原 Run ID，决策表面板展示当前表、权限、操作历史和动作复核记录。
 
 会话列表的事实源是服务端；localStorage["caspian.threads"] 仅作离线降级缓存（保存前
 先排序再截断最近 20 条），localStorage["caspian.current_thread"] 记住当前选中会话。
@@ -53,6 +53,7 @@ const state = {
   followMessages: true,
   pendingInterrupt: null,
   currentRunId: null,
+  originRunId: null,
   interruptedByUser: false,
   streamSeq: 0,
   activeStreamId: 0,
@@ -405,6 +406,7 @@ function selectThread(id) {
   saveCurrentThread();
   state.pendingInterrupt = null;
   state.currentRunId = null;
+  state.originRunId = null;
   state.interruptedByUser = false;
   state.uploads = [];
   state.renderedMessageIds.clear();
@@ -1650,6 +1652,41 @@ function showDecisionTableAdjudication(interrupt) {
   scrollMessages();
 }
 
+function showDecisionActionReview(interrupt) {
+  removeThinking();
+  finishTracePanel("等待动作确认");
+  state.pendingInterrupt = interrupt;
+  setBusy(false);
+  setStatus("review", "等待动作确认");
+  const payload = interrupt.value || {};
+  const fragment = $("#review-template").content.cloneNode(true);
+  const panel = $(".review-panel", fragment);
+  $(".review-kicker", panel).textContent = "动作前复核";
+  $("h3", panel).textContent = "关键动作已暂停";
+  $(".review-draft", panel).textContent = JSON.stringify({
+    action: payload.action_name,
+    args: payload.args,
+    table_revision: payload.table_revision,
+    conclusion: payload.conclusion,
+  }, null, 2);
+  $(".segmented", panel)?.remove();
+  $(".revision-form", panel)?.remove();
+  const approve = $(".approve-button", panel);
+  const cancel = $(".revise-toggle", panel);
+  approve.textContent = payload.allowed_decisions?.includes("approve") ? "确认执行" : "改表后重试";
+  cancel.textContent = "取消动作";
+  approve.addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: payload.allowed_decisions?.includes("approve") ? "approve" : "retry_after_table_change" });
+  });
+  cancel.addEventListener("click", () => {
+    disableReview(panel);
+    resumeRun({ decision: "cancel" });
+  });
+  $("#messages").append(panel);
+  scrollMessages();
+}
+
 function showPlanReview(interrupt) {
   removeThinking();
   finishTracePanel("等待确认");
@@ -1709,6 +1746,7 @@ async function streamRun(body) {
   removeInterruptPanel();
   state.interruptedByUser = false;
   state.currentRunId = null;
+  if (!body.resume) state.originRunId = null;
   const streamId = ++state.streamSeq;
   state.activeStreamId = streamId;
   finishTracePanel();
@@ -1771,12 +1809,16 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
   } catch {
     // Keep plain-text SSE payloads readable.
   }
-  if (event === "metadata" && data?.run_id) state.currentRunId = data.run_id;
+  if (event === "metadata" && data?.run_id) {
+    state.currentRunId = data.run_id;
+    state.originRunId ||= data.run_id;
+  }
   if (event === "events") consumeGraphEvent(data);
   if (event === "stream") consumeTokenChunk(data);
   if (event === "interrupt") {
     if (data?.value?.type === "plan_review") showPlanReview(data);
     else if (data?.value?.type === "decision_table_adjudication") showDecisionTableAdjudication(data);
+    else if (data?.value?.type === "decision_action_review") showDecisionActionReview(data);
     else showReview(data);
   }
   if (event === "goal_state") renderGoalBadge(data?.goal);
@@ -1787,6 +1829,7 @@ function handleSseFrame(frame, streamId = state.activeStreamId) {
     window.CaspianContextUi?.onRunEnded();
     // usage 落库先于关流，收到 end 时 updated_at 已刷新，可直接重排会话列表
     loadThreads();
+    if (!decisionTablePanel.hidden) loadDecisionTable();
   }
   if (event === "error") {
     stopGoalPoll();
@@ -1898,10 +1941,11 @@ async function submitTask(content, selectedSkills = []) {
 }
 
 async function resumeRun(payload) {
+  const resumeRunId = state.originRunId;
   state.pendingInterrupt = null;
   setBusy(true);
   try {
-    await streamRun({ resume: payload, selected_skills: state.activeSelectedSkills });
+    await streamRun({ resume: payload, resume_run_id: resumeRunId, selected_skills: state.activeSelectedSkills });
   } catch (error) {
     handleError(error);
   } finally {
@@ -2293,18 +2337,22 @@ window.CaspianContextUi?.init({
   selectThread,
 });
 
-// --- 决策等级表查看 ---
-const _LEVEL_LABELS = { 3: "3 必须", 2: "2 可协商", 1: "1 可选" };
+const _LEVEL_LABELS = { 3: "3 必须", 2: "2 可协商", 1: "1 可选", 0: "0 丢弃" };
+const _OPERATION_STATUS_LABELS = {
+  processing: "处理中", awaiting_approval: "等待审批", committed: "已生效",
+  rejected: "已拒绝", cancelled: "已取消", failed: "执行失败",
+  version_conflict: "版本冲突", permission_denied: "权限不足",
+};
 
 function renderDecisionTable(data) {
+  if (!["verified_empty", "verified_current"].includes(data.read_status)) {
+    throw new Error("决策表状态未通过校验");
+  }
   const version = $("#decision-table-version");
   const body = $("#decision-table-body");
-  if (!data.exists || !data.rows.length) {
-    // 空表/新建：仍渲染可编辑表格与新增/提交，便于创建首条条目
-    version.textContent = data.exists ? `版本 ${data.version}` : "";
-  } else {
-    version.textContent = `版本 ${data.version}`;
-  }
+  version.textContent = data.read_status === "verified_empty"
+    ? `当前为空表 · 修订 ${data.revision}`
+    : `当前有效 · 修订 ${data.revision}`;
   const table = document.createElement("table");
   table.className = "decision-table decision-table-editable";
   table.innerHTML = "<thead><tr><th>要求</th><th>决策</th><th>等级</th><th>守卫</th><th></th></tr></thead>";
@@ -2338,7 +2386,7 @@ function renderDecisionTable(data) {
       const opt = document.createElement("option");
       opt.value = v;
       opt.textContent = label;
-      if (Number(v) === (r.priority || 3)) opt.selected = true;
+      if (Number(v) === (r.priority ?? 3)) opt.selected = true;
       selectPri.append(opt);
     }
     tdPri.append(selectPri);
@@ -2371,13 +2419,150 @@ function renderDecisionTable(data) {
   saveBtn.type = "button";
   saveBtn.className = "button button-primary";
   saveBtn.textContent = "提交编辑";
+  const reason = document.createElement("input");
+  reason.type = "text";
+  reason.placeholder = "修改理由（必填）";
+  reason.setAttribute("aria-label", "决策表修改理由");
   const msg = document.createElement("p");
   msg.className = "decision-table-msg";
   saveBtn.addEventListener("click", () => {
-    collectAndSubmitDecisionTable(body, msg);
+    collectAndSubmitDecisionTable(body, msg, data.revision, reason.value);
   });
-  actions.append(addBtn, saveBtn);
-  body.append(actions, msg);
+  actions.append(addBtn, reason, saveBtn);
+  const history = document.createElement("section");
+  history.className = "decision-table-history";
+  history.textContent = "正在读取修改历史…";
+  const execution = document.createElement("section");
+  execution.className = "decision-table-history";
+  execution.textContent = "正在读取调用与动作记录…";
+  const permissions = document.createElement("section");
+  permissions.className = "decision-table-permissions";
+  permissions.textContent = "正在读取权限配置…";
+  body.append(actions, msg, permissions, history, execution);
+  loadDecisionPermissions(permissions);
+  loadDecisionHistory(history);
+  loadDecisionExecutionAudit(execution);
+}
+
+async function loadDecisionExecutionAudit(host) {
+  try {
+    const base = `/api/threads/${encodeURIComponent(state.threadId)}/decision-table`;
+    const [callsResponse, reviewsResponse] = await Promise.all([
+      fetch(`${base}/model-calls`, { credentials: "same-origin" }),
+      fetch(`${base}/action-reviews`, { credentials: "same-origin" }),
+    ]);
+    if (!callsResponse.ok || !reviewsResponse.ok) throw new Error("调用记录读取失败");
+    const calls = (await callsResponse.json()).calls;
+    const reviews = (await reviewsResponse.json()).reviews;
+    const heading = document.createElement("h3");
+    heading.textContent = "模型调用与动作复核";
+    host.replaceChildren(heading);
+    for (const call of calls.slice(-20).reverse()) {
+      const line = document.createElement("p");
+      line.textContent = `模型 ${call.call_id} · Run ${call.run_id} · 表修订 ${call.table_revision} · ${call.reminder_reason || "常规调用"} · ${call.status}`;
+      host.append(line);
+    }
+    for (const review of reviews.slice(-20).reverse()) {
+      const detail = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${review.action_name} · ${review.status} · Run ${review.run_id} · 表修订 ${review.table_revision}`;
+      const body = document.createElement("pre");
+      body.textContent = JSON.stringify(review, null, 2);
+      detail.append(summary, body);
+      host.append(detail);
+    }
+  } catch (error) {
+    host.textContent = `调用与动作记录读取失败：${error.message}`;
+  }
+}
+
+async function loadDecisionPermissions(host) {
+  try {
+    const url = `/api/threads/${encodeURIComponent(state.threadId)}/decision-table/permissions`;
+    const response = await fetch(url, { credentials: "same-origin" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const heading = document.createElement("h3");
+    heading.textContent = `改表权限 · 修订 ${data.revision}`;
+    const help = document.createElement("p");
+    help.textContent = "按 user:ID 或 agent:ID 配置 view、propose、approve、direct_commit；每项列出 add、modify、delete、change_priority。";
+    const editor = document.createElement("textarea");
+    editor.setAttribute("aria-label", "决策表权限策略 JSON");
+    editor.rows = 9;
+    editor.value = JSON.stringify(data.policy, null, 2);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "button button-quiet";
+    save.textContent = "保存权限";
+    const status = document.createElement("p");
+    save.addEventListener("click", async () => {
+      try {
+        const policy = JSON.parse(editor.value);
+        const update = await fetch(url, {
+          method: "PUT", credentials: "same-origin",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ policy }),
+        });
+        if (!update.ok) {
+          const failure = await update.json().catch(() => ({}));
+          throw new Error(failure.detail || `HTTP ${update.status}`);
+        }
+        status.textContent = `权限已保存 · 修订 ${(await update.json()).revision}`;
+      } catch (error) {
+        status.textContent = `保存失败：${error.message}`;
+      }
+    });
+    host.replaceChildren(heading, help, editor, save, status);
+  } catch (error) {
+    host.textContent = `权限配置读取失败：${error.message}`;
+  }
+}
+
+async function loadDecisionHistory(host) {
+  try {
+    const response = await fetch(
+      `/api/threads/${encodeURIComponent(state.threadId)}/decision-table/operations`,
+      { credentials: "same-origin" }
+    );
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+    const heading = document.createElement("h3");
+    heading.textContent = "修改历史";
+    host.replaceChildren(heading);
+    for (const operation of [...data.operations].reverse()) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "button button-quiet";
+      const status = operation.status === "rejected" && operation.error === "权限不足"
+        ? "权限不足" : (_OPERATION_STATUS_LABELS[operation.status] || operation.status);
+      button.textContent = `${status} · ${operation.reason} · Run ${operation.run_id}`;
+      const detail = document.createElement("pre");
+      detail.hidden = true;
+      button.addEventListener("click", async () => {
+        if (!detail.hidden) { detail.hidden = true; return; }
+        const response = await fetch(
+          `/api/threads/${encodeURIComponent(state.threadId)}/decision-table/operations/${encodeURIComponent(operation.operation_id)}`,
+          { credentials: "same-origin" }
+        );
+        if (!response.ok) { detail.textContent = `读取失败：HTTP ${response.status}`; }
+        else {
+          const data = await response.json();
+          detail.textContent = JSON.stringify({
+            operation: data.operation,
+            run: data.run,
+            approvals: data.approvals,
+            events: data.events,
+            before: data.before,
+            after: data.after,
+          }, null, 2);
+        }
+        detail.hidden = false;
+      });
+      host.append(button, detail);
+    }
+  } catch (error) {
+    host.textContent = `修改历史读取失败：${error.message}`;
+  }
 }
 
 function collectRows(body) {
@@ -2385,8 +2570,10 @@ function collectRows(body) {
   body.querySelectorAll("tbody tr").forEach((tr) => {
     const requirement = tr.querySelector('[data-field="requirement"]')?.value || "";
     const decision = tr.querySelector('[data-field="decision"]')?.value || "";
-    const priority = Number(tr.querySelector('[data-field="priority"]')?.value || 0);
-    if (!requirement || !decision || !priority) return;
+    const priority = Number(tr.querySelector('[data-field="priority"]')?.value ?? 0);
+    if (!requirement.trim() || !decision || !Number.isInteger(priority)) {
+      throw new Error("请完整填写每条决策行");
+    }
     const row = { requirement, decision, priority };
     const id = tr.dataset.id || "";
     if (id) row.id = id;
@@ -2398,29 +2585,40 @@ function collectRows(body) {
   return rows;
 }
 
-function collectAndSubmitDecisionTable(body, msg) {
-  const rows = collectRows(body);
-  if (!rows.length) {
-    msg.textContent = "没有可提交的条目";
+function collectAndSubmitDecisionTable(body, msg, baseRevision, reason) {
+  if (!reason.trim()) {
+    msg.textContent = "请填写修改理由";
+    return;
+  }
+  let rows;
+  try {
+    rows = collectRows(body);
+  } catch (error) {
+    msg.textContent = error.message;
     return;
   }
   msg.textContent = "提交中…";
-  sendDecisionTableEdit(rows, msg);
+  sendDecisionTableEdit(rows, msg, baseRevision, reason.trim());
 }
 
-async function sendDecisionTableEdit(rows, msg) {
-  const content = "用户手工编辑了决策等级表，请据此执行冲突检测。";
-  await streamRun({
+async function sendDecisionTableEdit(rows, msg, baseRevision, reason) {
+  const content = `用户提交决策等级表修改：${reason}`;
+  try {
+    await streamRun({
     input: {
       messages: [{
         role: "user",
         content,
-        additional_kwargs: { decision_table_edit: { rows } },
+        additional_kwargs: { decision_table_edit: { rows, base_revision: baseRevision, reason } },
       }],
     },
     selected_skills: [],
     context: state.modelName ? { model_name: state.modelName } : undefined,
-  });
+    });
+    msg.textContent = state.pendingInterrupt ? "等待有权主体审批；原表未改变" : "请求已处理，正在刷新结果";
+  } catch (error) {
+    msg.textContent = `提交失败：${error.message}`;
+  }
 }
 
 async function loadDecisionTable() {
@@ -2437,11 +2635,18 @@ async function loadDecisionTable() {
       `/api/threads/${encodeURIComponent(state.threadId)}/decision-table`,
       { credentials: "same-origin" }
     );
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (!response.ok) {
+      const failure = await response.json().catch(() => ({}));
+      throw new Error(failure.detail || `HTTP ${response.status}`);
+    }
     renderDecisionTable(await response.json());
   } catch (error) {
-    version.textContent = "";
-    body.innerHTML = '<p class="decision-table-empty">加载失败</p>';
+    version.textContent = "读取失败";
+    body.replaceChildren();
+    const notice = document.createElement("p");
+    notice.className = "decision-table-empty";
+    notice.textContent = `决策表读取或校验失败：${error.message}`;
+    body.append(notice);
   }
 }
 

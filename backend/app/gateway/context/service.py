@@ -4,8 +4,9 @@
 
 输入为 LangGraph checkpointer 以及 Context 请求模型；输出为可直接返回给 Context API 的
 数据。具体工作流为校验同用户来源和已提交 checkpoint，保存用户 authored messages，
-调用 context_projection 编译执行投影，在无需降级或用户批准后以新 thread_id 调用
-aupdate_state 创建独立 checkpoint。示例：`context = await service.derive(user_id, body)`。
+调用 context_projection 编译执行投影，在创建新 Context 的同一事务中继承来源有效决策表，
+在无需降级或用户批准后以新 thread_id 调用 aupdate_state 创建独立 checkpoint。
+示例：`context = await service.derive(user_id, body)`。
 
 其中 tree() 的返回体同时服务两个消费方：Context 树栏读血缘字段（depth/parents），
 会话列表读时间字段（created_at/updated_at）按最近活跃倒序排序。updated_at 由
@@ -40,6 +41,7 @@ from langchain_core.messages import RemoveMessage
 from langgraph.graph.message import REMOVE_ALL_MESSAGES
 
 from caspian.persistence.engine import get_session as _default_session_factory
+from caspian.decision_governance.context_inheritance import inherit_context_table
 
 
 _RUNNABLE_STATUSES = frozenset({"valid", "repaired", "approved"})
@@ -105,7 +107,6 @@ class ContextService:
 
         projection = compile_context_messages(body.messages)
         context_id = _new_id()
-        thread_id = _new_id()
         async with self.session_factory() as session:
             task = WebThread(
                 thread_id=context_id,
@@ -136,6 +137,14 @@ class ContextService:
                 for index, source in enumerate(body.sources)
             ]
             session.add_all([definition, *sources])
+            try:
+                await inherit_context_table(
+                    session, user_id, context_id, [parent.thread_id for parent in parents]
+                )
+            except PermissionError as exc:
+                raise HTTPException(403, str(exc)) from exc
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
             await session.commit()
         if projection.status != "approval_required":
             await self._initialize(context_id, projection.status)
@@ -327,6 +336,9 @@ class ContextService:
 
     async def ensure_runnable(self, user_id: str, context_id: str) -> None:
         async with self.session_factory() as session:
+            thread = await session.get(WebThread, context_id)
+            if thread is not None and thread.user_id != user_id:
+                raise HTTPException(status_code=403, detail="无权在该会话启动 Run")
             definition = await session.scalar(
                 select(WebContextDefinition)
                 .where(WebContextDefinition.context_id == context_id)

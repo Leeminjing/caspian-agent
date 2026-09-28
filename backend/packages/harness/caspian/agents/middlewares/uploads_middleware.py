@@ -193,9 +193,8 @@ class UploadsMiddleware(AgentMiddleware):
         if not files or not isinstance(files, list):
             return None
 
-        thread_id = None
-        if runtime.execution_info is not None:
-            thread_id = runtime.execution_info.thread_id
+        from caspian.decision_governance.identity import logical_thread_id
+        thread_id = logical_thread_id(runtime)
         if thread_id is None:
             logger.warning("UploadsMiddleware: 无法获取 thread_id，跳过 <current_uploads> 注入")
             return None

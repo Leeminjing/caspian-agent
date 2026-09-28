@@ -1,47 +1,8 @@
-"""
-本文件对外提供 langgraph_runtime 异步上下文管理器，作为 FastAPI 应用运行时依赖模块。
+"""本文件对外提供 langgraph_runtime，管理网关的进程级运行资源。
 
-对外提供:
-    langgraph_runtime(app, app_config) — 进程级 agent 核心资源的生命周期管理器
-
-输入:
-    app: FastAPI — FastAPI 应用实例，资源创建后挂载到 app.state
-    app_config: AppConfig — 应用配置对象，驱动各资源的实现选择（组合根依赖注入）
-
-输出:
-    AsyncGenerator[None, None] — yield 前完成资源初始化并挂载，yield 后清理所有资源
-
-具体工作流:
-    (1) 创建 AsyncExitStack 统一管理多个异步上下文资源
-    (2) 通过 create_stream_bridge(app_config) 创建 StreamBridge → 挂载到 app.state.stream_bridge
-        → 注册到 ExitStack（create_stream_bridge 自带 cleanup on exit）
-    (3) 若 app_config.database 非空，初始化 AsyncEngine 和 session factory 全局单例
-        → 通过 stack.callback 注册 dispose_engine 以确保退出时释放连接池
-        → 不挂载到 app.state
-    (3.5) 通过 create_checkpointer(app_config) 创建 Checkpointer → 挂载到 app.state.checkpointer
-        → 通过 stack.push_async_callback 注册 dispose_checkpointer 以确保退出时释放连接
-    (3.6) 通过 create_store(app_config) 创建 Store → 挂载到 app.state.store
-        → 通过 stack.push_async_callback 注册 dispose_store 以确保退出时释放连接
-    (3.7) 创建 ContextService（Recursive Context Forking，依赖 checkpointer）
-    (3.7.1) 创建 ThreadLifecycleService（会话级联删除/归档/恢复，依赖 checkpointer + store）→ 挂载到
-        app.state.thread_lifecycle
-    (3.8) 创建 PluginRuntime（插件系统，public 插件启动期加载）→ 挂载到
-        app.state.plugin_runtime 并设置进程单例
-    (4) 创建 RunManager 实例 → 挂载到 app.state.run_manager
-    (5) yield — 此时 FastAPI 开始接收请求
-    (6) yield 之后 ExitStack 按 LIFO 顺序清理所有已注册资源
-
-示例:
-    from backend.app.gateway.deps import langgraph_runtime
-    from caspian.config import get_app_config
-
-    app_config = get_app_config("config.yaml")
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
-        async with langgraph_runtime(app, app_config):
-            yield
-"""
+输入为 FastAPI app 与 AppConfig；输出为已挂载的数据库、checkpointer、共享 checkpoint 写入者、outbox 工作者、Store 和 RunManager。
+工作流先初始化数据库与 checkpointer，标记上次进程遗留的未完成 Run，再补投递操作事件并恢复共享投影，退出时按资源栈逆序清理。
+示例：`async with langgraph_runtime(app, config): await serve()`。"""
 
 import contextlib
 import logging
@@ -70,6 +31,7 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         # (3) 数据库引擎初始化（全局单例，不挂载 app.state）
         if app_config.database is not None:
             from caspian.persistence.engine import dispose_engine, init_engine
+            from caspian.persistence.engine import get_session
 
             init_engine(app_config)
             stack.callback(dispose_engine)
@@ -89,6 +51,15 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         app.state.checkpointer = checkpointer
         stack.push_async_callback(dispose_checkpointer, checkpointer)
         logger.info("Checkpointer 已挂载到 app.state.checkpointer (type=%s)", app_config.checkpointer.type)
+
+        app.state.shared_checkpoint_writer = None
+        if app_config.database is not None:
+            from caspian.decision_governance.outbox_worker import run_outbox
+            from caspian.decision_governance.shared_checkpoint import SharedCheckpointWriter
+
+            shared_writer = SharedCheckpointWriter(checkpointer)
+            app.state.shared_checkpoint_writer = shared_writer
+            await stack.enter_async_context(run_outbox(get_session, checkpoint_writer=shared_writer))
 
         # (3.6) Store 资源初始化
         from caspian.runtime.store import create_store, dispose_store
@@ -134,6 +105,12 @@ async def langgraph_runtime(app: FastAPI, app_config: AppConfig) -> AsyncGenerat
         run_manager = RunManager()
         app.state.run_manager = run_manager
         logger.info("RunManager 已挂载到 app.state.run_manager")
+        if app_config.database is not None:
+            from caspian.decision_governance.run_audit import reconcile_incomplete_run_audits
+
+            recovered = await reconcile_incomplete_run_audits(get_session)
+            if recovered:
+                logger.warning("已标记 %s 个上次进程遗留的未完成 Run", recovered)
 
         # (5) ... 待扩展更多资源
 

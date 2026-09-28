@@ -1,43 +1,8 @@
-"""
-本文件对外提供 `build_general_middlewares` 与 `build_subagent_middlewares` 函数，
-作为中间件链的组装入口。
+"""本文件对外提供 build_general_middlewares 与 build_subagent_middlewares。
 
-对外提供:
-    build_general_middlewares — 返回 lead agent 通用的 AgentMiddleware 列表
-    build_subagent_middlewares — 返回 subagent 专用的 AgentMiddleware 列表
-
-输入:
-    build_general_middlewares:
-        commitment_enabled: bool — 是否装配 CommitmentMiddleware
-        model/context7_tools — CommitmentMiddleware 的内部依赖
-        skill_names: frozenset[str] | None — 当前用户 enabled 技能名集合，透传给承诺层剥离前导 skill token
-
-    build_subagent_middlewares:
-        model: BaseChatModel | None — 预留（签名对齐）
-        skill_names: frozenset[str] | None — subagent 可用技能名集合（预留）
-
-输出:
-    list[AgentMiddleware] — 按固定顺序排列的中间件列表
-
-具体工作流:
-    build_general_middlewares:
-    (1) 实例化 UploadsMiddleware（No.1）
-    (2) 实例化 DecisionTableMiddleware（No.2，始终装配，无等级表时自动跳过）
-    (3) 开启时实例化 CommitmentMiddleware（No.3）
-    (4) 实例化 SandboxAuditMiddleware
-    (5) 返回有序列表
-
-    build_subagent_middlewares:
-    (1) 只装配 SandboxAuditMiddleware（shell 安全审计）
-    (2) 不装配 UploadsMiddleware / CommitmentMiddleware（子上下文干净、防嵌套承诺）
-    (3) 返回列表
-
-示例:
-    from caspian.agents.middlewares.builder import build_general_middlewares
-
-    middlewares = build_general_middlewares()
-    # → [UploadsMiddleware(), DecisionTableMiddleware(), SandboxAuditMiddleware()]
-"""
+输入为承诺层开关、模型、Context7 工具加载器和技能名；输出为按执行顺序装配的中间件列表。
+工作流为主 Agent 装配上传、界面改表、承诺流程、表工具守卫、动作前复核及模型表边界；执行子 Agent 使用同一表边界和工具闸门。
+示例：`middlewares = build_general_middlewares(commitment_enabled=False)`。"""
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
@@ -47,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING
 
 from caspian.agents.commitment import CommitmentMiddleware
+from caspian.agents.middlewares.decision_action_review_middleware import DecisionActionReviewMiddleware
 from caspian.agents.middlewares.decision_table_edit_middleware import DecisionTableEditMiddleware
 from caspian.agents.middlewares.decision_table_guard_middleware import DecisionTableGuardMiddleware
 from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
@@ -87,11 +53,9 @@ def build_general_middlewares(
     middlewares: list[AgentMiddleware] = []
     if context_compression is not None and context_compression.enabled:
         middlewares.append(ContextCompressionMiddleware(context_compression))
-    # 工具失败统一收口：置于链首（wrap_tool_call 最外层），捕获任何工具异常并回传 LLM
     middlewares.append(ToolErrorMiddleware())
     middlewares.extend([
         UploadsMiddleware(),
-        DecisionTableMiddleware(),
         DecisionTableEditMiddleware(),
     ])
     if commitment_enabled:
@@ -109,7 +73,9 @@ def build_general_middlewares(
             CommitmentMiddleware(model, effective_loader, skill_names or frozenset())
         )
     middlewares.append(DecisionTableGuardMiddleware())
+    middlewares.append(DecisionActionReviewMiddleware())
     middlewares.append(SandboxAuditMiddleware())
+    middlewares.append(DecisionTableMiddleware(actor_id="lead"))
     return middlewares
 
 
@@ -130,6 +96,8 @@ def build_subagent_middlewares(
     middlewares: list[AgentMiddleware] = [
         ToolErrorMiddleware(),
         DecisionTableGuardMiddleware(),
+        DecisionActionReviewMiddleware(),
         SandboxAuditMiddleware(),
+        DecisionTableMiddleware(actor_id="subagent"),
     ]
     return middlewares

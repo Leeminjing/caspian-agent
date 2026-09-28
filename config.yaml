@@ -86,6 +86,18 @@ context_compression:
   prune_max_chars: 800
   recovery_max_attempts: 1
 
+decision_review:
+  enabled: true
+  reminder_interval: 5
+  critical_tools:
+    - bash_tool
+    - powershell_tool
+    - cmd_tool
+    - sh_tool
+    - write_file_tool
+    - task_tool
+    - task
+
 subagents:
   # 内置 subagent 的默认超时秒数（自定义类型用自身值）
   timeout_seconds: 1800

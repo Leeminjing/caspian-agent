@@ -1,5 +1,5 @@
 """
-本文件对外提供 `router`（APIRouter 实例），定义 core-aob 链路的 SSE 流式接口 `POST /api/threads/{thread_id}/runs/stream` 与打断接口 `POST /api/threads/{thread_id}/runs/{run_id}/interrupt`。
+本文件对外提供 `router`（APIRouter 实例），定义 Run 的持久查询、SSE 流式创建和打断接口。
 
 对外提供:
     router: APIRouter — 已注册 thread runs 相关路由的 FastAPI Router，供 app 挂载
@@ -26,6 +26,7 @@
 
 输出:
     stream_run → StreamingResponse(sse_consumer(...))
+    get_run → dict — 持久 Run 身份与状态；不存在时 404
     interrupt_run → dict — {"run_id", "status"}；404 / 409 时抛 HTTPException
 
 具体工作流:
@@ -63,6 +64,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, model_validator
 
+from caspian.decision_governance.run_audit import get_run_audit, serialize_run_audit
+from caspian.persistence.engine import get_session
 from caspian.runtime.runs.manager import RunManager, RunRecord
 from caspian.runtime.runs.schemas import RunStatus
 from caspian.runtime.stream_bridge.base import StreamBridge
@@ -77,6 +80,17 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+@router.get("/{thread_id}/runs/{run_id}")
+async def get_run(thread_id: str, run_id: str, request: Request) -> dict:
+    user_id = str(request.state.current_user.id)
+    run = await get_run_audit(
+        get_session, user_id=user_id, thread_id=thread_id, run_id=run_id,
+    )
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run 不存在或不属于该会话")
+    return serialize_run_audit(run)
+
+
 class RunCreateRequest(BaseModel):
     """POST /api/threads/{thread_id}/runs/stream 的请求体。input.messages[] 中的消息支持 additional_kwargs.files 字段，携带本轮上传文件元数据。"""
 
@@ -88,6 +102,7 @@ class RunCreateRequest(BaseModel):
         default=None,
         description="LangGraph interrupt resume payload",
     )
+    resume_run_id: str | None = Field(default=None, description="产生中断的原始 Run ID")
     context: dict[str, Any] | None = Field(default=None)
     stream_mode: list[str] | str | None = Field(
         default=None,
@@ -102,6 +117,10 @@ class RunCreateRequest(BaseModel):
     def validate_input_or_resume(self):
         if (self.input is None) == (self.resume is None):
             raise ValueError("input 与 resume 必须且只能提供一个")
+        if self.resume is not None and not self.resume_run_id:
+            raise ValueError("恢复执行必须指定产生中断的 Run ID")
+        if self.input is not None and self.resume_run_id:
+            raise ValueError("新请求不能指定恢复 Run ID")
         return self
 
 

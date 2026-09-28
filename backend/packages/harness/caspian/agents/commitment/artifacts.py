@@ -4,8 +4,7 @@
 对外提供:
     _write_knowledge — 阶段六 knowledge 结果写入 knowledge 目录，返回相对路径列表
     _write_contract — 阶段七合同写入 requirements/{user_id}/{thread_id}/task-contract.md（user_id 为空时
-                      写入 requirements/{thread_id}/task-contract.md），并在提供阶段2/3结果时同步写入
-                      决策等级表（best-effort）
+                      写入 requirements/{thread_id}/task-contract.md）；决策等级表由工作流提交治理操作
     _build_final_message — 组装交给 lead agent 的最终合同消息
 
 输入:
@@ -16,7 +15,7 @@
         result: dict — 阶段七合同结果（contract_markdown）
         stage_two_result: dict | None — 阶段2 artifacts（requirements/discarded_requirements）
         stage_three_result: dict | None — 阶段3 artifacts（逐条优先级）
-        user_id: str | None — 用户标识，非空则 task-contract 与决策等级表均按用户隔离
+        user_id: str | None — 用户标识，非空则 task-contract 按用户隔离
     _build_final_message:
         contract: str — 合同正文
         knowledge_files: list[str] — 已写入的知识文件相对路径
@@ -30,8 +29,7 @@
     (1) 校验技术名、版本和 thread_id 的安全路径片段。
     (2) 将官方知识写入根目录 knowledge。
     (3) 将合同写入 requirements/{user_id}/{thread_id}/task-contract.md（user_id 为空则不含 user 维度）。
-    (4) 合同写入成功后，若提供阶段2/3结果，同步写入决策等级表（失败仅日志，不阻断）。
-    (5) 读取已确认知识并组装交给 lead agent 的第一条 HumanMessage 内容。
+    (4) 读取已确认知识并组装交给 lead agent 的第一条 HumanMessage 内容。
 
 示例:
     contract, path = _write_contract(thread_id, stage_seven_result)
@@ -41,7 +39,6 @@
 from pathlib import Path
 from typing import Any
 
-from caspian.agents.commitment.decision_table import write_decision_table
 from caspian.agents.commitment.stage_rules import _safe_segment, _slug_segment
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[6]
@@ -95,13 +92,6 @@ def _write_contract(
     path = _users_root() / relative_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(contract + "\n", encoding="utf-8")
-    if stage_two_result is not None and stage_three_result is not None:
-        write_decision_table(
-            safe_thread_id,
-            stage_two_result,
-            stage_three_result,
-            user_id=user_id,
-        )
     return contract, relative_path.as_posix()
 
 def _build_final_message(contract: str, knowledge_files: list[str]) -> str:

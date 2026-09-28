@@ -79,6 +79,7 @@ class RunRecord:
     abort_action: str = "interrupt"
     # values 模式 usage 累计的消息 id 去重集合（runtime-only）
     _usage_seen_ids: set = field(default_factory=set, repr=False)
+    waiting_approval: bool = False
 
     # === 结果信息 ===
     error: str | None = None

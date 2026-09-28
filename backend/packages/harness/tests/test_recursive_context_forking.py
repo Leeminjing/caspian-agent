@@ -12,9 +12,11 @@ import asyncio
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from fastapi import HTTPException
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelRequest
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from langchain_core.messages import AIMessage, HumanMessage
 from sqlalchemy import select
@@ -27,12 +29,19 @@ from backend.app.gateway.context.models import (
 )
 from backend.app.gateway.context.service import ContextService
 from caspian.persistence.base import Base
+from caspian.decision_governance.domain import Row
+from caspian.decision_governance.policy import Actor
+from caspian.decision_governance.policy import default_policy
+from caspian.decision_governance.service import DecisionTableService
+from caspian.agents.middlewares.decision_table_middleware import DecisionTableMiddleware
+from langgraph.runtime import ExecutionInfo, Runtime
 from langgraph.checkpoint.memory import InMemorySaver
 
 _CONTEXT_TABLES = [
     WebThread.__table__,
     WebContextDefinition.__table__,
     WebContextSource.__table__,
+    *[table for table in Base.metadata.tables.values() if table.name.startswith("decision_table_")],
 ]
 
 
@@ -110,6 +119,60 @@ class RecursiveContextForkingTests(unittest.IsolatedAsyncioTestCase):
     async def _derive_valid(self, user_id: str, sources, messages, title="新 Context"):
         body = _derive_body(title, sources, messages)
         return await self.service.derive(user_id, body)
+
+    async def test_派生继承已生效表并拒绝不同来源(self):
+        tables = DecisionTableService(self.session_factory, checker=lambda *_: asyncio.sleep(0, result=()))
+        cp_a = await self._register_root("u-1", "thread-a", "A 工作")
+        cp_b = await self._register_root("u-1", "thread-b", "B 工作")
+        await tables.submit(
+            user_id="u-1", thread_id="thread-a", actor=Actor("u-1", "user"),
+            run_id="edit-a", source="ui", idempotency_key="edit-a", base_revision=0,
+            rows=(Row("r-a", "继承 A 的决策", "保留", 3),), reason="确定决策",
+        )
+        restricted = default_policy("u-1")
+        restricted["subjects"]["user:u-1"].pop("direct_commit")
+        await tables.set_policy(
+            user_id="u-1", thread_id="thread-a", actor=Actor("u-1", "user"), policy=restricted,
+        )
+        derived = await self._derive_valid(
+            "u-1", [{"context_id": "thread-a", "checkpoint_id": cp_a}],
+            [{"role": "human", "content": "继续 A", "id": "child-msg"}],
+        )
+        current = await tables.current("u-1", derived["context_id"], Actor("u-1", "user"))
+        self.assertEqual(current.revision, 1)
+        self.assertEqual(current.rows[0].requirement, "继承 A 的决策")
+        self.assertEqual((await tables.policy("u-1", derived["context_id"]))["policy"], restricted)
+        inherited_operation = (await tables.history("u-1", derived["context_id"]))[0]
+        self.assertEqual(inherited_operation.source, "context_inheritance")
+        self.assertEqual(inherited_operation.status, "committed")
+        self.assertEqual(inherited_operation.result_revision, 1)
+        model_input = []
+        runtime = Runtime(
+            context={"user_id": "u-1", "thread_id": derived["context_id"], "run_id": "child-work"},
+            execution_info=ExecutionInfo("child-ck", "", "task", derived["context_id"]),
+        )
+        request = ModelRequest(
+            model=FakeListChatModel(responses=["ok"]),
+            messages=[HumanMessage(content="继续 A")], runtime=runtime,
+        )
+        async def capture(bound):
+            model_input.append(bound.system_message.text)
+            return AIMessage(content="完成")
+        with patch("caspian.agents.middlewares.decision_table_middleware.service", return_value=tables), patch(
+            "caspian.agents.middlewares.decision_table_middleware.get_session", self.session_factory
+        ):
+            await DecisionTableMiddleware().awrap_model_call(request, capture)
+        self.assertIn("继承 A 的决策", model_input[0])
+        self.assertIn('revision="1"', model_input[0])
+        with self.assertRaises(HTTPException) as error:
+            await self._derive_valid(
+                "u-1", [
+                    {"context_id": "thread-a", "checkpoint_id": cp_a},
+                    {"context_id": "thread-b", "checkpoint_id": cp_b},
+                ], [{"role": "human", "content": "合并", "id": "merge-msg"}],
+            )
+        self.assertEqual(error.exception.status_code, 409)
+        self.assertIn("有效决策表不同", error.exception.detail)
 
     async def test_递归派生链A到B到C与父后续变化隔离(self):
         cp_a = await self._register_root("u-1", "thread-a", "root hello")

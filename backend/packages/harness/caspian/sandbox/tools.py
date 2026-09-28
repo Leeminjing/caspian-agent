@@ -19,7 +19,7 @@ sandbox_to_tools（兼容入口）:
     str — 文件内容 / 写入结果 / shell 执行输出；无运行上下文时返回说明性错误字符串
 
 具体工作流:
-    (1) 工具调用时从 runtime.context 提取 user_id，从 runtime.execution_info.thread_id 提取 thread_id
+    (1) 工具调用时从 runtime.context 提取 user_id 和逻辑 thread_id，隔离的执行 checkpoint 不改变沙箱归属
     (2) 经 get_sandbox_provider().acquire(user_id, thread_id) + .get(sandbox_id) 获取沙箱实例
     (3) read_file_tool 对 /mnt/skills/ 前缀直接委托沙箱读取；其余路径经 validate_subdir 白名单校验后委托
     (4) write_file_tool 经 validate_subdir 校验 workspace/outputs 后写入
@@ -86,7 +86,8 @@ def _runtime_sandbox(runtime: ToolRuntime) -> Sandbox:
     """
     if runtime is None or runtime.execution_info is None:
         raise ValueError("沙箱工具只能在 Agent 运行上下文中使用")
-    thread_id = runtime.execution_info.thread_id
+    from caspian.decision_governance.identity import logical_thread_id
+    thread_id = logical_thread_id(runtime)
     if thread_id is None:
         raise ValueError("沙箱工具只能在 Agent 运行上下文中使用（无法获取 thread_id）")
     user_id = _runtime_user_id(runtime)

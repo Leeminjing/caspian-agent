@@ -1,87 +1,35 @@
-"""
-本文件对外提供 CommitmentMiddleware、TaskEnvelope、ReviewedDelegator 及承诺层测试所需的稳定导出。
+"""本文件对外提供承诺层公共类型与兼容辅助函数的惰性导出。
 
-输入:
-    调用方从 caspian.agents.commitment 导入的公开类型、核心类或兼容辅助函数。
-
-输出:
-    CommitmentMiddleware — 可装配到 lead agent 的承诺层中间件。
-    TaskEnvelope — Supervisor 委派单个阶段时使用的结构化任务信封。
-    ReviewedDelegator — 执行 Worker-Evaluator 审核闭环的委派器。
-
-具体工作流:
-    (1) 从各职责模块导入公开对象。
-    (2) 通过 __all__ 声明稳定导出集合。
-    (3) 调用方无需感知内部模块拆分即可使用承诺层。
-
-示例:
-    from caspian.agents.commitment import CommitmentMiddleware, TaskEnvelope
+输入为调用方请求的公共名称；输出为对应职责模块中的对象。
+工作流只在实际访问名称时导入模块，避免文件解析、治理服务和工作流之间的初始化环。
+示例：`from caspian.agents.commitment import CommitmentMiddleware, TaskEnvelope`。
 """
 
-from caspian.agents.commitment.artifacts import (
-    _build_final_message,
-    _write_contract,
-    _write_knowledge,
-)
-from caspian.agents.commitment.delegation import ReviewedDelegator
-from caspian.agents.commitment.middleware import (
-    CommitmentMiddleware,
-    _commit_instruction,
-    _extract_uploads_tag,
-)
-from caspian.agents.commitment.references import _SearchResultParser
-from caspian.agents.commitment.schemas import (
-    CommitmentState,
-    ReviewOutput,
-    TaskEnvelope,
-    WorkerOutput,
-)
-from caspian.agents.commitment.stage_rules import (
-    _contains_unresolved_versions,
-    _context7_candidate_version,
-    _context7_stable_version,
-    _extract_structured,
-    _filter_stage_four_result,
-    _has_open_conflicts,
-    _normalize_stage_three_result,
-    _safe_segment,
-    _stage_four_needs_review,
-    _stage_timeout,
-    _validate_stage_result,
-)
-from caspian.agents.commitment.workflow import (
-    _build_supervisor,
-    _human_payload,
-    _review_human_revision,
-    build_delegate_with_review_tool,
-)
+from importlib import import_module
 
-__all__ = [
-    "CommitmentMiddleware",
-    "CommitmentState",
-    "_commit_instruction",
-    "ReviewOutput",
-    "ReviewedDelegator",
-    "TaskEnvelope",
-    "WorkerOutput",
-    "_SearchResultParser",
-    "_build_final_message",
-    "_build_supervisor",
-    "_contains_unresolved_versions",
-    "_context7_candidate_version",
-    "_context7_stable_version",
-    "_extract_structured",
-    "_extract_uploads_tag",
-    "_filter_stage_four_result",
-    "_has_open_conflicts",
-    "_human_payload",
-    "_normalize_stage_three_result",
-    "_review_human_revision",
-    "_safe_segment",
-    "_stage_four_needs_review",
-    "_stage_timeout",
-    "_validate_stage_result",
-    "_write_contract",
-    "_write_knowledge",
-    "build_delegate_with_review_tool",
-]
+_EXPORTS = {
+    "_build_final_message": "artifacts", "_write_contract": "artifacts", "_write_knowledge": "artifacts",
+    "ReviewedDelegator": "delegation",
+    "CommitmentMiddleware": "middleware", "_commit_instruction": "middleware", "_extract_uploads_tag": "middleware",
+    "_SearchResultParser": "references",
+    "CommitmentState": "schemas", "ReviewOutput": "schemas", "TaskEnvelope": "schemas", "WorkerOutput": "schemas",
+    "_contains_unresolved_versions": "stage_rules", "_context7_candidate_version": "stage_rules",
+    "_context7_stable_version": "stage_rules", "_extract_structured": "stage_rules",
+    "_filter_stage_four_result": "stage_rules", "_has_open_conflicts": "stage_rules",
+    "_normalize_stage_three_result": "stage_rules", "_safe_segment": "stage_rules",
+    "_stage_four_needs_review": "stage_rules", "_stage_timeout": "stage_rules",
+    "_validate_stage_result": "stage_rules",
+    "_build_supervisor": "workflow", "_human_payload": "workflow",
+    "_review_human_revision": "workflow", "build_delegate_with_review_tool": "workflow",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+    module = _EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(name)
+    value = getattr(import_module(f"caspian.agents.commitment.{module}"), name)
+    globals()[name] = value
+    return value

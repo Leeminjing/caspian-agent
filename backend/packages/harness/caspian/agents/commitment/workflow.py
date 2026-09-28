@@ -57,6 +57,9 @@ from caspian.agents.commitment.stage_rules import (
     _validate_stage_result,
 )
 from caspian.agents.commitment.tracing import emit_commitment_trace
+from caspian.decision_governance.adapter import result_text, service as table_service
+from caspian.decision_governance.commitment import propose_contract_table
+from caspian.decision_governance.policy import Actor
 
 def _human_payload(stage: int, state: dict[str, Any], error: str = "") -> dict[str, Any]:
     draft = state.get("artifacts", {}).get(str(stage))
@@ -217,13 +220,46 @@ async def _human_review(
                     error = f"合同写入失败: {exc}"
                     continue
                 updates["task_contract"] = contract
+                table_operation = await propose_contract_table(dict(state), artifacts)
+                if table_operation.status == "awaiting_approval":
+                    choice = interrupt({
+                        "type": "decision_table_adjudication",
+                        "operation_id": table_operation.operation_id,
+                        "candidate": table_operation.candidate_rows,
+                        "existing": [row.to_dict() for row in (
+                            await table_service().revision(
+                                str(state["user_id"]), str(state["thread_id"]),
+                                table_operation.base_revision,
+                            )
+                        ).rows],
+                        "changes": table_operation.changes,
+                        "conflicts": [reason for check in table_operation.checks for reason in check.get("reasons", [])],
+                        "checks": table_operation.checks,
+                        "reason": table_operation.reason,
+                        "allowed_decisions": ["keep", "adopt"],
+                    })
+                    if not isinstance(choice, dict) or choice.get("decision") not in {"keep", "adopt"}:
+                        raise ValueError("决策表审批结论无效")
+                    table_operation = await table_service().decide(
+                        operation_id=table_operation.operation_id,
+                        actor=Actor(str(state["user_id"]), "user"),
+                        decision="approve" if choice["decision"] == "adopt" else "reject",
+                        reason="用户采纳承诺阶段候选表" if choice["decision"] == "adopt" else "用户保留旧表",
+                    )
+                updates["decision_table_operation"] = {
+                    "operation_id": table_operation.operation_id,
+                    "status": table_operation.status,
+                    "changes": table_operation.changes,
+                    "checks": table_operation.checks,
+                    "result_revision": table_operation.result_revision,
+                }
                 emit_commitment_trace(
                     actor="system",
                     event="artifact_completed",
                     title="人工确认的任务合同已写入",
                     status="completed",
                     stage=7,
-                    payload={"artifact_ref": artifact_ref},
+                    payload={"artifact_ref": artifact_ref, "decision_table_operation": updates["decision_table_operation"]},
                 )
             updates["messages"] = [
                 _replace_stage_tool_message(
@@ -235,6 +271,7 @@ async def _human_review(
                             "stage": stage,
                             "result": artifacts.get(str(stage)),
                             "artifact_ref": artifact_ref,
+                            "decision_table_operation": updates.get("decision_table_operation"),
                         }
                     ),
                 )

@@ -12,6 +12,7 @@
     (2) get_goal 只读；create_goal / update_goal(edit|pause|resume) 需直接人类回合
     (3) update_goal(complete|blocked) 允许直接人类或精确 goal 回合；blocked（goal 回合）需达阈值
     (4) goal 回合 complete/blocked 返回含收尾指令的结果文本
+示例：`tools = build_goal_tools(config.goal_mode)`。
 """
 
 import json
@@ -57,8 +58,8 @@ def _service(runtime: ToolRuntime) -> GoalService:
     store = runtime.store
     if store is None:
         raise GoalError("目标模式需要 LangGraph store", GOAL_TOOL_AUTHORITY_REQUIRED)
-    config_dict = runtime.config or {}
-    thread_id = (config_dict.get("configurable") or {}).get("thread_id")
+    from caspian.decision_governance.identity import logical_thread_id
+    thread_id = logical_thread_id(runtime)
     context = runtime.context if isinstance(runtime.context, dict) else {}
     user_id = context.get("user_id")
     if not user_id or not thread_id:

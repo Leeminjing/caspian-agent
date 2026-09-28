@@ -7,7 +7,7 @@
         仅在确认 /commit 触发承诺层时才被调用；未触发承诺层时不被调用，从而普通对话
         不依赖 Context7 是否可达。
     skill_names — 当前用户 enabled 技能名集合，用于剥离消息前导的 /name skill token。
-    AgentState / runtime — lead agent 当前消息状态和包含 thread_id 的运行时信息。
+    AgentState / runtime — lead agent 当前消息状态、逻辑 thread_id、用户和 Run 身份。
 
 输出:
     None — 已存在 task_contract、没有消息或未显式输入 /commit 指令时跳过承诺层。
@@ -168,7 +168,7 @@ def _parent_resume_value() -> tuple[Any | None, bool]:
     return value, value is not None
 
 
-def _subgraph_config(thread_id: str) -> dict[str, Any]:
+def _subgraph_config(thread_id: str, origin_run_id: str | None = None) -> dict[str, Any]:
     """构造承诺子图的隔离 checkpoint 配置。
 
     使用 thread_id 派生的隔离命名空间（{thread_id}:commitment），与父图 checkpoint
@@ -176,14 +176,14 @@ def _subgraph_config(thread_id: str) -> dict[str, Any]:
     未挂 checkpointer 的情况下仍可持久化与恢复。
     """
     configurable: dict[str, Any] = {
-        "thread_id": f"{thread_id}{_SUBGRAPH_THREAD_SUFFIX}",
+        "thread_id": f"{thread_id}{_SUBGRAPH_THREAD_SUFFIX}:{origin_run_id}" if origin_run_id else f"{thread_id}{_SUBGRAPH_THREAD_SUFFIX}",
     }
     if checkpointer := _parent_checkpointer():
         configurable[CONFIG_KEY_CHECKPOINTER] = checkpointer
     return {"configurable": configurable}
 
 
-def _load_decision_table_dict(thread_id: str, user_id: str | None = None) -> dict[str, Any]:
+async def _load_decision_table_dict(thread_id: str, user_id: str | None = None) -> dict[str, Any]:
     """读取当前 thread 的决策等级表并转为 JSON 兼容 dict（受保护 helper）。
 
     输入:
@@ -193,14 +193,15 @@ def _load_decision_table_dict(thread_id: str, user_id: str | None = None) -> dic
         dict — {"version", "updated", "rows": [{requirement, decision, priority}, ...]}；
                无等级表时返回空 dict
     """
-    from caspian.agents.commitment.decision_table import read_decision_table
+    from caspian.decision_governance.adapter import service
+    from caspian.decision_governance.policy import Actor
 
-    table = read_decision_table(str(thread_id), user_id=user_id)
-    if table is None:
-        return {}
+    if not user_id:
+        raise RuntimeError("承诺流程缺少认证用户，无法读取决策表")
+    table = await service().current(str(user_id), str(thread_id), Actor("lead", "agent"))
     return {
         "version": table.version,
-        "updated": table.updated,
+        "revision": table.revision,
         "rows": [
             {
                 "requirement": row.requirement,
@@ -219,6 +220,7 @@ def _seed_subgraph_input(
     thread_id: str,
     decision_table: dict[str, Any] | None = None,
     user_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """构造子图首次执行的种子输入：只含指令消息，不携带 /commit 前置历史。"""
     return {
@@ -229,6 +231,7 @@ def _seed_subgraph_input(
         "awaiting_human": None,
         "artifacts": {},
         "thread_id": str(thread_id),
+        "run_id": run_id,
         "user_id": user_id,
         "knowledge_files": [],
         "source_text": instruction,
@@ -306,7 +309,8 @@ class CommitmentMiddleware(AgentMiddleware):
             return None
         if trigger.id is None:
             raise ValueError("/commit 触发消息缺少 message id")
-        thread_id = getattr(getattr(runtime, "execution_info", None), "thread_id", None)
+        from caspian.decision_governance.identity import logical_thread_id
+        thread_id = logical_thread_id(runtime)
         if thread_id is None:
             raise ValueError("CommitmentMiddleware 无法获取 thread_id")
 
@@ -316,6 +320,9 @@ class CommitmentMiddleware(AgentMiddleware):
             raw_user_id = ctx.get("user_id")
             if raw_user_id:
                 user_id = str(raw_user_id)
+        config = getattr(runtime, "config", {})
+        configurable = config.get("configurable", {}) if isinstance(config, dict) else {}
+        run_id = configurable.get("run_id")
 
         # 确认为 /commit 触发后，才尝试加载 Context7 工具；不可用时优雅降级为说明消息。
         # 若 supervisor 已存在（如测试注入），视为工具已就绪，不重新要求 context7 loader。
@@ -333,7 +340,8 @@ class CommitmentMiddleware(AgentMiddleware):
         supervisor = await self._ensure_supervisor(context7_tools)
 
         instruction, uploads_tag = _extract_uploads_tag(instruction)
-        subgraph_config = _subgraph_config(str(thread_id))
+        origin_run_id = ctx.get("origin_run_id") if isinstance(ctx, dict) else None
+        subgraph_config = _subgraph_config(str(thread_id), origin_run_id)
 
         # 区分首次执行与 resume：父图 resume 重执行时 config 携带 resume 载荷，
         # 子图 checkpoint 必须与之对应存在；任一方向不一致都显式报错，不静默重放。
@@ -369,8 +377,9 @@ class CommitmentMiddleware(AgentMiddleware):
                 instruction,
                 uploads_tag,
                 str(thread_id),
-                _load_decision_table_dict(str(thread_id), user_id),
+                await _load_decision_table_dict(str(thread_id), user_id),
                 user_id,
+                run_id,
             )
 
         supervisor = await self._ensure_supervisor(context7_tools)

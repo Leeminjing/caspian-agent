@@ -1474,6 +1474,33 @@ textarea:focus-visible {
   font-size: 13px;
 }
 
+.decision-table-actions input,
+.decision-table-permissions textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.decision-table-history,
+.decision-table-permissions {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.decision-table-history button,
+.decision-table-permissions button {
+  display: block;
+  margin: 8px 0;
+  max-width: 100%;
+  text-align: left;
+}
+
+.decision-table-history pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+
 .knowledge-panel {
   margin: 8px 0 24px 38px;
   border: 1px solid #d9dfde;

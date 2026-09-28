@@ -14,17 +14,18 @@
     ToolMessage | Command — block 时返回拦截消息（不执行工具），warn 时返回执行结果+警示，其余原样返回
 
 具体工作流:
-    (1) 从 runtime.execution_info.thread_id 取 thread_id、从 runtime.context 取 user_id
-    (2) read_decision_table 读当前等级表；无表或无硬层条目（含 guards）→ 直接放行
+    (1) 从认证上下文取逻辑 thread_id 与 user_id，执行 checkpoint 使用独立物理线程
+    (2) 从权威快照读取当前等级表；已验证空表或无硬层条目时放行，读取失败时暂停
     (3) 对每个硬层条目按 guard 的 target 抽取工具字段文本，用 operator 匹配、kind 判方向
     (4) 命中取最高 priority 的条目：3 → block（返回 ToolMessage，不执行）、2 → warn、1 → 放行
-    (5) 每次调用现读表（不缓存），与 DecisionTableMiddleware.before_model 热加载语义一致
+    (5) 每次调用现读表（不缓存），与模型发送边界共同使用同一权威修订
 
 示例:
     middleware = DecisionTableGuardMiddleware()
     # 在 create_agent(middleware=[..., middleware]) 中使用
 """
 
+import asyncio
 import fnmatch
 import logging
 import re
@@ -36,7 +37,10 @@ from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from langgraph.types import Command
 
-from caspian.agents.commitment.decision_table import DecisionRow, Guard, read_decision_table
+from caspian.agents.commitment.decision_table import DecisionRow, Guard
+from caspian.decision_governance.adapter import service
+from caspian.decision_governance.identity import logical_thread_id
+from caspian.decision_governance.policy import Actor
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +168,7 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
 
     @staticmethod
     def _thread_id(request: ToolCallRequest) -> str | None:
-        return getattr(getattr(request.runtime, "execution_info", None), "thread_id", None)
+        return logical_thread_id(request.runtime)
 
     @staticmethod
     def _user_id(request: ToolCallRequest) -> str | None:
@@ -178,7 +182,7 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
             pass
         return None
 
-    def _classify(
+    async def _classify(
         self, request: ToolCallRequest
     ) -> tuple[str, DecisionRow | None, Guard | None]:
         """判定当前工具调用的处置（受保护 helper）。
@@ -191,13 +195,21 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
         """
         thread_id = self._thread_id(request)
         if thread_id is None:
-            return "pass", None, None
+            context = request.runtime.context if isinstance(request.runtime.context, dict) else {}
+            thread_id = context.get("thread_id")
+        user_id = self._user_id(request)
+        if thread_id is None or user_id is None:
+            raise RuntimeError("工具调用缺少会话或用户身份")
 
-        table = read_decision_table(str(thread_id), user_id=self._user_id(request))
-        if table is None:
-            return "pass", None, None
+        context = request.runtime.context if isinstance(request.runtime.context, dict) else {}
+        actor_id = "subagent" if context.get("is_subagent") else "lead"
+        table = await service().current(str(user_id), str(thread_id), Actor(actor_id, "agent"))
 
-        hard_entries = table.hard_entries()
+        hard_entries = [DecisionRow(
+            id=row.id, requirement=row.requirement, decision=row.decision,
+            priority=row.priority,
+            guards=[guard for value in row.guards if (guard := Guard.from_dict(value)) is not None],
+        ) for row in table.rows if row.guards]
         if not hard_entries:
             return "pass", None, None
 
@@ -243,6 +255,7 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
             ),
             tool_call_id=request.tool_call.get("id", ""),
             name=tool_name,
+            status="error",
         )
 
     @staticmethod
@@ -286,10 +299,9 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
             ToolMessage | Command — 拦截消息或执行结果
         """
         try:
-            disposition, row, guard = self._classify(request)
-        except Exception:
-            logger.error("DecisionTableGuard: 分类异常，fallback 放行", exc_info=True)
-            return handler(request)
+            disposition, row, guard = asyncio.run(self._classify(request))
+        except Exception as exc:
+            return self._make_failure_message(request, exc)
 
         if disposition == "block":
             return self._make_block_message(request, row, guard)
@@ -314,10 +326,9 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
             ToolMessage | Command — 拦截消息或执行结果
         """
         try:
-            disposition, row, guard = self._classify(request)
-        except Exception:
-            logger.error("DecisionTableGuard: 分类异常，fallback 放行", exc_info=True)
-            return await handler(request)
+            disposition, row, guard = await self._classify(request)
+        except Exception as exc:
+            return self._make_failure_message(request, exc)
 
         if disposition == "block":
             return self._make_block_message(request, row, guard)
@@ -326,3 +337,12 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
         if disposition == "warn":
             result = self._append_warning(result, row, guard)
         return result
+
+    @staticmethod
+    def _make_failure_message(request: ToolCallRequest, error: Exception) -> ToolMessage:
+        return ToolMessage(
+            content=f"[决策等级表] 动作未执行：当前表读取或校验失败：{type(error).__name__}: {error}",
+            tool_call_id=request.tool_call.get("id", ""),
+            name=request.tool_call.get("name", "unknown"),
+            status="error",
+        )

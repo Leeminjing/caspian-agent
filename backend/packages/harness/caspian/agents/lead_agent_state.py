@@ -14,6 +14,8 @@ merge_delegations: delegations 字段的 reducer，同 id 原位替换保首见�
 输入: 无 — 本文件为纯定义文件，不包含函数入口
 输出: LeadAgentState 类及辅助类型供 create_agent() 的 state_schema 参数使用
 
+工作流: LangGraph 通过字段 reducer 合并执行状态；shared_message_hashes 标记已合流消息，避免压缩后重灌旧历史。
+
 
 示例:
     from caspian.agents.lead_agent_state import LeadAgentState, merge_artifacts, merge_viewed_images
@@ -118,6 +120,7 @@ def merge_viewed_images(
 
 
 class LeadAgentState(AgentState):
+    shared_message_hashes: NotRequired[dict[str, str]]
     sandbox: NotRequired[SandboxState | None]
     title: NotRequired[str | None]
     artifacts: Annotated[list[str], merge_artifacts]

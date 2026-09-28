@@ -1,6 +1,8 @@
 """
 本文件对外提供 get_app_config、reload_app_config 两个公开函数，以及 AppConfig 配置聚合类。
 
+输入为 config.yaml、环境变量和可选刷新请求；输出为经过验证的 AppConfig 单例。
+
 AppConfig: 声明式配置数据模型，聚合 models / tools / skills / sandbox / commitment / runtime 与持久化配置
 get_app_config: 组合根入口，将 config.yaml 加载为全局单例 AppConfig 对象
 reload_app_config: 强制刷新全局单例，修改 config.yaml 后立即生效
@@ -9,6 +11,8 @@ reload_app_config: 强制刷新全局单例，修改 config.yaml 后立即生效
 _load_yaml 读取 YAML 文件 → _resolve_env_vars 解析 $ENV_VAR 环境变量引用
 → AppConfig.model_validate 由 dict 递归生成 AppConfig + 子 Pydantic 对象
 → 写入模块级 _app_config 单例缓存，后续 get_app_config 直接返回
+
+示例：`config = get_app_config(); review = config.decision_review`。
 """
 
 import os
@@ -23,6 +27,7 @@ from caspian.config.checkpointer_config import CheckpointerConfig
 from caspian.config.commitment_config import CommitmentConfig
 from caspian.config.context_compression_config import ContextCompressionConfig
 from caspian.config.database_config import DatabaseConfig
+from caspian.config.decision_review_config import DecisionReviewConfig
 from caspian.config.extensions_config import ExtensionsConfig
 from caspian.config.goal_mode_config import GoalModeConfig
 from caspian.config.knowledge_config import KnowledgeConfig
@@ -52,6 +57,7 @@ class AppConfig(BaseModel):
     extensions: ExtensionsConfig = ExtensionsConfig(mcp_servers={})
     commitment: CommitmentConfig = CommitmentConfig()
     context_compression: ContextCompressionConfig = ContextCompressionConfig()
+    decision_review: DecisionReviewConfig = DecisionReviewConfig()
     subagents: SubagentsAppConfig = SubagentsAppConfig()
     agent: AgentConfig = AgentConfig()
     plan_mode: PlanModeConfig = PlanModeConfig()
