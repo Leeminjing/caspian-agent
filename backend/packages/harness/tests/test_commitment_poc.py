@@ -9,6 +9,7 @@
 
 工作流: 模拟承诺层依赖，提交阶段请求并断言结果与恢复行为。
 示例：`pytest tests/test_commitment_poc.py`。
+示例：`pytest tests/test_commitment_poc.py`。
 """
 
 import asyncio
@@ -1097,9 +1098,7 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
                 "ToolErrorMiddleware",
                 "UploadsMiddleware",
                 "DecisionTableEditMiddleware",
-                "DecisionTableGuardMiddleware",
                 "DecisionActionReviewMiddleware",
-                "SandboxAuditMiddleware",
                 "DecisionTableMiddleware",
             ],
         )
@@ -1119,10 +1118,8 @@ class CommitmentPocTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(type(result[0]).__name__, "ToolErrorMiddleware")
         self.assertEqual(type(result[1]).__name__, "UploadsMiddleware")
         self.assertEqual(type(result[2]).__name__, "DecisionTableEditMiddleware")
-        self.assertEqual(type(result[4]).__name__, "DecisionTableGuardMiddleware")
-        self.assertEqual(type(result[5]).__name__, "DecisionActionReviewMiddleware")
-        self.assertEqual(type(result[6]).__name__, "SandboxAuditMiddleware")
-        self.assertEqual(type(result[7]).__name__, "DecisionTableMiddleware")
+        self.assertEqual(type(result[4]).__name__, "DecisionActionReviewMiddleware")
+        self.assertEqual(type(result[5]).__name__, "DecisionTableMiddleware")
 
     async def test_reviewed_delegator_retries_without_exposing_failures(self):
         delegator = StubDelegator([False, True])

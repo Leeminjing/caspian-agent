@@ -1,8 +1,9 @@
 """
-本文件对外提供 `SandboxAuditMiddleware` 类，作为 shell 命令安全审计中间件。
+本文件对外提供 evaluate_sandbox 纯判定函数及兼容的 SandboxAuditMiddleware。
 
 对外提供:
-    SandboxAuditMiddleware(AgentMiddleware) — 覆盖 wrap_tool_call / awrap_tool_call 钩子，
+    evaluate_sandbox(tool_name, args) 与 path_warning_required(command) — 供统一动作闸门判定 shell 风险并追加警告。
+    SandboxAuditMiddleware(AgentMiddleware) — 独立兼容包装器，覆盖 wrap_tool_call / awrap_tool_call 钩子，
     对 shell 工具（bash_tool / powershell_tool / cmd_tool / sh_tool）的命令进行安全审计
 
 输入:
@@ -233,6 +234,7 @@ class SandboxAuditMiddleware(AgentMiddleware):
             ),
             tool_call_id=request.tool_call.get("id", ""),
             name=tool_name,
+            status="error",
         )
 
     @staticmethod
@@ -257,6 +259,7 @@ class SandboxAuditMiddleware(AgentMiddleware):
                 content=(result.content or "") + warning,
                 tool_call_id=result.tool_call_id,
                 name=getattr(result, "name", None),
+                status=result.status,
             )
         # Command 类型不追加 warning（避免破坏控制流语义），直接返回
         return result
@@ -282,6 +285,7 @@ class SandboxAuditMiddleware(AgentMiddleware):
                 content=(result.content or "") + warning,
                 tool_call_id=result.tool_call_id,
                 name=getattr(result, "name", None),
+                status=result.status,
             )
         # Command 类型不追加 warning（避免破坏控制流语义），直接返回
         return result
@@ -372,3 +376,17 @@ class SandboxAuditMiddleware(AgentMiddleware):
         except Exception:
             logger.error("SandboxAudit: awrap_tool_call 审计异常，fallback 放行", exc_info=True)
             return await handler(request)
+
+
+def evaluate_sandbox(tool_name: str, args: dict) -> str:
+    shell_type = SandboxAuditMiddleware._shell_type_from_name(tool_name)
+    if shell_type is None:
+        return "pass"
+    command = args.get("command") if isinstance(args, dict) else None
+    if not isinstance(command, str) or not command.strip():
+        return "block"
+    return _classify(shell_type, command)
+
+
+def path_warning_required(command: str) -> bool:
+    return bool(_PATH_PATTERN.search(command))

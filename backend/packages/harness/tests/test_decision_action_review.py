@@ -9,6 +9,8 @@ import asyncio
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
+
 from langchain.agents.middleware.types import ToolCallRequest
 from langchain_core.messages import ToolMessage
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -16,10 +18,19 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from caspian.agents.middlewares.decision_action_review_middleware import DecisionActionReviewMiddleware
 from caspian.decision_governance.review_store import read_reviews, register_review, update_review
 from caspian.decision_governance.review_protocol import ActionBinding
+from caspian.decision_governance.action_risk import context_fingerprint
 from caspian.decision_governance.domain import Row
 from caspian.decision_governance.policy import Actor
 from caspian.decision_governance.service import DecisionTableService
 from caspian.persistence.base import Base
+
+
+@pytest.fixture(autouse=True)
+def _controlled_risk():
+    async def high_risk(*_args, **_kwargs):
+        return {"risk": "high", "reason": "当前命令可能产生持久影响"}
+    with patch("caspian.agents.middlewares.decision_action_review_middleware.assess_risk", high_risk):
+        yield
 
 
 def test_critical_tool_waits_for_review_and_binding_deduplicates():
@@ -69,7 +80,7 @@ def test_critical_tool_waits_for_review_and_binding_deduplicates():
                 running = asyncio.create_task(middleware.awrap_tool_call(request, handler))
                 await entered.wait()
                 assert executions == 0
-                assert (await read_reviews(factory, "u", "t"))[0].status == "pending_review"
+                assert (await read_reviews(factory, "u", "t"))[0].status == "review_pending"
                 release.set()
                 result = await running
                 assert result.content == "done"
@@ -110,6 +121,8 @@ def test_unexecuted_review_becomes_stale_when_table_revision_changes():
                 tool_call_id="call", binding=ActionBinding.create("bash_tool", {"command": "echo"}, "lead", 0),
                 content_hash="old", action_args={"command": "echo"},
             )
+            await update_review(factory, old.review_id, status="review_pending")
+            await update_review(factory, old.review_id, status="reviewed")
             await update_review(factory, old.review_id, status="awaiting_human")
             new = await register_review(
                 factory, user_id="u", thread_id="t", run_id="run",
@@ -118,7 +131,7 @@ def test_unexecuted_review_becomes_stale_when_table_revision_changes():
             )
             assert new.review_id != old.review_id
             reviews = await read_reviews(factory, "u", "t")
-            assert {item.table_revision: item.status for item in reviews} == {0: "stale", 1: "pending_review"}
+            assert {item.table_revision: item.status for item in reviews} == {0: "stale", 1: "risk_pending"}
         finally:
             await engine.dispose()
     asyncio.run(scenario())
@@ -272,7 +285,7 @@ def test_review_failure_keeps_critical_tool_paused_with_visible_reason():
                 assert result.status == "error" and "review model unavailable" in result.content
                 assert executions == 0
                 review = (await read_reviews(factory, "u", "t"))[0]
-                assert review.status == "pending_review"
+                assert review.status == "review_pending"
                 assert "review model unavailable" in review.error
         finally:
             await engine.dispose()
@@ -291,12 +304,13 @@ def test_two_branches_cannot_claim_and_execute_same_review(tmp_path):
             return ()
         table_service = DecisionTableService(factory, checker=no_findings)
         table = await table_service.current("u", "t", Actor("u", "user"))
-        binding = ActionBinding.create("bash_tool", {"command": "echo"}, "lead", table.revision)
+        binding = ActionBinding.create("bash_tool", {"command": "echo"}, "lead", table.revision, context_fingerprint([], {"user_id": "u", "run_id": "run", "thread_id": "t"}))
         review = await register_review(
             factory, user_id="u", thread_id="t", run_id="run", tool_call_id="call",
             binding=binding, content_hash=table.content_hash,
             action_args={"command": "echo"},
         )
+        await update_review(factory, review.review_id, status="review_pending")
         await update_review(factory, review.review_id, status="reviewed", conclusion={
             "action_name": binding.action_name, "args_hash": binding.args_hash,
             "actor_id": binding.actor_id, "table_revision": binding.table_revision,

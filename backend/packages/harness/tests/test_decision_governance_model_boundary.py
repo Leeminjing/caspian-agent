@@ -217,6 +217,8 @@ def test_sent_model_call_keeps_old_revision_while_new_table_governs_tool():
                 "related_rows": ["r"], "conflict": "none", "decision": "keep",
                 "reason": "已按新修订核对具体动作和必须加密条目",
             }
+        async def high_risk(*_args, **_kwargs):
+            return {"risk": "high", "reason": "当前命令可能固化执行决策"}
         async def execute(request):
             nonlocal executions
             executions += 1
@@ -226,7 +228,8 @@ def test_sent_model_call_keeps_old_revision_while_new_table_governs_tool():
                 "caspian.agents.middlewares.decision_table_middleware.get_session", factory
             ), patch("caspian.agents.middlewares.decision_action_review_middleware.service", return_value=table_service), patch(
                 "caspian.agents.middlewares.decision_action_review_middleware.get_session", factory
-            ), patch("caspian.agents.middlewares.decision_action_review_middleware.review_action", review):
+            ), patch("caspian.agents.middlewares.decision_action_review_middleware.review_action", review), patch(
+                "caspian.agents.middlewares.decision_action_review_middleware.assess_risk", high_risk):
                 await DecisionTableMiddleware().awrap_model_call(model_request, answer)
                 await table_service.submit(
                     user_id="u", thread_id="t", actor=Actor("u", "user"),

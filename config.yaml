@@ -89,14 +89,8 @@ context_compression:
 decision_review:
   enabled: true
   reminder_interval: 5
-  critical_tools:
-    - bash_tool
-    - powershell_tool
-    - cmd_tool
-    - sh_tool
-    - write_file_tool
-    - task_tool
-    - task
+  risk_timeout_seconds: 15
+  review_timeout_seconds: 60
 
 subagents:
   # 内置 subagent 的默认超时秒数（自定义类型用自身值）

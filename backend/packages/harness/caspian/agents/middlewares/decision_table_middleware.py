@@ -67,7 +67,7 @@ class DecisionTableMiddleware(AgentMiddleware):
         review = getattr(app_config, "decision_review", DecisionReviewConfig())
         reminder_reason = None
         if review.enabled:
-            previous = await count_model_calls(get_session, user_id, thread_id, run_id)
+            previous = await count_model_calls(get_session, user_id, thread_id, run_id, self._actor_id)
             if previous > 0 and previous % review.reminder_interval == 0:
                 reminder_reason = "periodic"
                 bound = bound.override(system_message=SystemMessage(content=(

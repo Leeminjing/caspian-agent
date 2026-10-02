@@ -1,7 +1,7 @@
 """本文件对外提供模型调用使用的决策表修订记录与查询。
 
-输入为 Run、最终模型请求和权威快照；输出为持久 call_id、修订及调用终态。
-工作流在发送模型请求前写入已验证版本，模型返回或失败后更新同一条记录。
+输入为 Run、模型请求、调用主体和权威快照；输出为持久 call_id、修订、调用终态及可按主体统计的轮次。
+工作流在发送模型请求前写入已验证版本，模型返回或失败后更新同一条记录；内部风险与复核调用不增加主 Agent 周期计数。
 示例：`call_id = await begin_model_call(factory, ...)`。
 """
 
@@ -42,14 +42,18 @@ async def begin_model_call(
 
 async def count_model_calls(
     factory: Callable[[], AsyncSession], user_id: str, thread_id: str, run_id: str,
+    actor_id: str | None = None,
 ) -> int:
     async with factory() as session:
-        return int(await session.scalar(select(func.count()).select_from(TableModelCall).where(
+        query = select(func.count()).select_from(TableModelCall).where(
             TableModelCall.user_id == user_id,
             TableModelCall.thread_id == thread_id,
             TableModelCall.run_id == run_id,
             TableModelCall.status != "prepared",
-        )) or 0)
+        )
+        if actor_id is not None:
+            query = query.where(TableModelCall.actor_id == actor_id)
+        return int(await session.scalar(query) or 0)
 
 
 async def mark_model_call_sent(factory: Callable[[], AsyncSession], call_id: str) -> None:

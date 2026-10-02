@@ -1,7 +1,7 @@
 """本文件对外提供决策表当前快照、操作历史和权限策略的 HTTP 路由。
 
-输入为认证用户、线程 ID、操作 ID 或权限配置；输出为权威修订、差异、审批和明确读取错误。
-工作流先核对线程所有权，再经治理服务读取或修改；空表与故障以不同状态返回。
+输入为认证用户、线程 ID、操作 ID 或权限配置；输出为权威修订、差异、审批、两阶段动作审计和明确读取错误。
+工作流先核对线程所有权，再经治理服务读取或修改；动作审计包含风险原因、表版本及最终执行状态，空表与故障以不同状态返回。
 示例：`GET /api/threads/{thread_id}/decision-table/operations`。
 """
 
@@ -147,10 +147,15 @@ async def get_decision_table_action_reviews(thread_id: str, request: Request) ->
         "actor_id": review.actor_id,
         "table_revision": review.table_revision,
         "content_hash": review.content_hash,
+        "context_hash": review.context_hash,
         "trigger_reason": review.trigger_reason,
+        "risk_outcome": review.risk_outcome,
+        "risk_reason": review.risk_reason,
+        "risk_checked_at": review.risk_checked_at.isoformat() if review.risk_checked_at else None,
         "status": review.status, "conclusion": review.conclusion,
         "result": review.result, "error": review.error,
         "created_at": review.created_at.isoformat() if review.created_at else None,
+        "completed_at": review.completed_at.isoformat() if review.completed_at else None,
     } for review in reviews]}
 
 

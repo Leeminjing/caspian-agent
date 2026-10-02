@@ -1,7 +1,7 @@
 """本文件对外提供待执行动作绑定和结构化复核结论验证。
 
-输入为工具名、实际参数、主体、表修订及模型返回；输出为稳定绑定摘要和可放行的结论。
-工作流检查动作、检查过的具体参数、修订及相关行精确匹配；空泛理由、冲突或不确定结论不能直接 keep。
+输入为工具名、实际参数、主体、表修订、上下文指纹及模型返回；输出为稳定绑定摘要和可放行的结论。
+工作流检查动作、实际参数、修订、上下文及相关行精确匹配；空泛理由、冲突或不确定结论不能直接 keep。
 示例：`conclusion = parse_conclusion(raw, binding, {"row-1"}, {"command": "echo hi"})`。
 """
 
@@ -21,10 +21,11 @@ class ActionBinding:
     args_hash: str
     actor_id: str
     table_revision: int
+    context_hash: str = ""
 
     @classmethod
-    def create(cls, action_name: str, args: dict, actor_id: str, table_revision: int):
-        return cls(action_name, digest(args), actor_id, table_revision)
+    def create(cls, action_name: str, args: dict, actor_id: str, table_revision: int, context_hash: str = ""):
+        return cls(action_name, digest(args), actor_id, table_revision, context_hash)
 
 
 def _argument_values(args: Any) -> list[str]:
@@ -49,6 +50,8 @@ def parse_conclusion(raw: str, binding: ActionBinding, row_ids: set[str], args: 
         raise ValueError("复核结论未绑定动作主体")
     if value.get("table_revision") != binding.table_revision:
         raise ValueError("复核结论使用了其他决策表修订")
+    if binding.context_hash and value.get("context_hash") != binding.context_hash:
+        raise ValueError("复核结论未绑定当前工作上下文")
     if not isinstance(value.get("examined_args"), dict) or digest(value["examined_args"]) != binding.args_hash:
         raise ValueError("复核结论未展示实际检查的动作参数")
     related = value.get("related_rows")

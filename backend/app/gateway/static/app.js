@@ -6,7 +6,7 @@
 具体工作流为：restoreSession() 以 GET /api/auth/me 取本地单用户
 身份，loadThreads() 以 GET /api/contexts/tree 为事实源装载会话全集，经 CaspianThreadList
 合并本地未入库会话并按最近活跃倒序渲染；提交任务后逐帧消费 SSE，按事件类型分派到正文、
-推理、工具卡与中断评审面板；恢复请求保留原 Run ID，决策表面板展示当前表、权限、操作历史和动作复核记录。
+推理、工具卡与中断评审面板；恢复请求保留原 Run ID，决策表面板展示当前表、权限、操作历史及两阶段动作风险与执行记录。
 
 会话列表的事实源是服务端；localStorage["caspian.threads"] 仅作离线降级缓存（保存前
 先排序再截断最近 20 条），localStorage["caspian.current_thread"] 记住当前选中会话。
@@ -2465,7 +2465,9 @@ async function loadDecisionExecutionAudit(host) {
     for (const review of reviews.slice(-20).reverse()) {
       const detail = document.createElement("details");
       const summary = document.createElement("summary");
-      summary.textContent = `${review.action_name} · ${review.status} · Run ${review.run_id} · 表修订 ${review.table_revision}`;
+      const phase = review.risk_outcome === "low" ? "低风险直行" : review.risk_outcome === "high" ? "高影响复核" : review.risk_outcome === "uncertain" ? "风险不确定，完整复核" : review.trigger_reason === "action_risk" ? "等待风险判断" : "旧版复核";
+      const outcome = review.status === "executed" ? "已执行" : review.status === "indeterminate" || review.status === "executing" ? "结果未确认" : review.status === "modified" ? "原动作未执行，需重新提交" : review.status === "cancelled" ? "已取消，未执行" : review.status === "awaiting_human" ? "等待人工处理，未执行" : review.status === "paused" ? "已暂停，未执行" : review.status === "execution_failed" ? "执行失败" : "未执行";
+      summary.textContent = `${review.action_name} · ${phase} · ${outcome} · Run ${review.run_id} · 表修订 ${review.table_revision}${review.risk_reason ? ` · ${review.risk_reason}` : ""}`;
       const body = document.createElement("pre");
       body.textContent = JSON.stringify(review, null, 2);
       detail.append(summary, body);

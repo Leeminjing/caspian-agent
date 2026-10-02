@@ -51,7 +51,7 @@ def test_decision_panel_shows_current_history_approval_permissions_and_audit():
         }]},
         "/api/threads/t/decision-table/operations/op-1": detail,
         "/api/threads/t/decision-table/model-calls": {"calls": [{"call_id": "call-1", "run_id": "run-a", "table_revision": 0, "status": "completed", "reminder_reason": None}]},
-        "/api/threads/t/decision-table/action-reviews": {"reviews": [{"review_id": "review-1", "action_name": "bash_tool", "action_args": {"command": "echo checked"}, "run_id": "run-a", "table_revision": 1, "status": "executed"}]},
+        "/api/threads/t/decision-table/action-reviews": {"reviews": [{"review_id": "review-1", "action_name": "bash_tool", "action_args": {"command": "echo checked"}, "run_id": "run-a", "table_revision": 1, "status": "executed"}, {"review_id": "review-2", "action_name": "bash_tool", "action_args": {"command": "alembic upgrade head"}, "run_id": "run-a", "table_revision": 1, "risk_outcome": "high", "risk_reason": "数据库迁移会改变持久资源", "status": "paused"}]},
     }
 
     def route_request(route):
@@ -82,8 +82,9 @@ def test_decision_panel_shows_current_history_approval_permissions_and_audit():
             page.locator("#decision-table-version").get_by_text("当前为空表 · 修订 0").wait_for()
             page.get_by_text("改表权限 · 修订 1").wait_for()
             page.get_by_text("模型 call-1").wait_for()
-            page.get_by_text("bash_tool · executed").wait_for()
-            page.get_by_text("bash_tool · executed").click()
+            page.get_by_text("bash_tool · 旧版复核 · 已执行", exact=False).wait_for()
+            page.get_by_text("bash_tool · 高影响复核 · 已暂停，未执行", exact=False).wait_for()
+            page.get_by_text("bash_tool · 旧版复核 · 已执行", exact=False).click()
             page.get_by_text('"command": "echo checked"').wait_for()
             page.get_by_role("button", name="已生效 · 加强保密 · Run run-b").click()
             page.get_by_text('"kind": "decision_edit"').wait_for()

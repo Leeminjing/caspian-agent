@@ -84,7 +84,10 @@ def test_parallel_edit_recovery_and_action_review_agree_across_five_records():
                 "caspian.agents.middlewares.decision_table_middleware.get_session", factory
             ), patch("caspian.agents.middlewares.decision_action_review_middleware.service", return_value=table_service), patch(
                 "caspian.agents.middlewares.decision_action_review_middleware.get_session", factory
-            ), patch("caspian.agents.middlewares.decision_action_review_middleware.review_action", reviewer):
+            ), patch("caspian.agents.middlewares.decision_action_review_middleware.review_action", reviewer), patch(
+                "caspian.agents.middlewares.decision_action_review_middleware.assess_risk",
+                new=lambda *_args, **_kwargs: asyncio.sleep(0, result={"risk": "high", "reason": "当前命令可能固化执行决策"}),
+            ):
                 model_task = asyncio.create_task(DecisionTableMiddleware().awrap_model_call(model_request, model_handler))
                 await model_entered.wait()
                 committed = await table_service.submit(

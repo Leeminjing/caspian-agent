@@ -53,3 +53,34 @@ def test_migration_roundtrip_and_operation_identity_constraint():
                 audit_migration.downgrade()
             migration.downgrade()
             assert "decision_table_heads" not in inspect(connection).get_table_names()
+
+
+def test_action_risk_migration_preserves_completed_records_and_rechecks_pending():
+    base = importlib.import_module("caspian.persistence.migrations.versions.d8e9f0a1b2c3_decision_table_governance")
+    audit = importlib.import_module("caspian.persistence.migrations.versions.e9f0a1b2c3d4_decision_run_audit")
+    risk = importlib.import_module("caspian.persistence.migrations.versions.f0a1b2c3d4e5_action_risk_gate")
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        operations = Operations(MigrationContext.configure(connection))
+        with patch.object(base, "op", operations), patch.object(audit, "op", operations), patch.object(risk, "op", operations):
+            base.upgrade()
+            audit.upgrade()
+            fields = {
+                "user_id": "u", "thread_id": "t", "run_id": "r", "tool_call_id": "c",
+                "action_name": "bash_tool", "args_hash": "hash", "actor_id": "lead",
+                "table_revision": 0, "content_hash": "content", "trigger_reason": "critical_tool",
+            }
+            for review_id, status in (("done", "executed"), ("pending", "pending_review")):
+                record = {**fields, "review_id": review_id, "tool_call_id": review_id, "status": status}
+                columns = ", ".join(record)
+                placeholders = ", ".join(f":{key}" for key in record)
+                connection.execute(text(f"INSERT INTO decision_table_action_reviews ({columns}) VALUES ({placeholders})"), record)
+            risk.upgrade()
+            columns = {item["name"] for item in inspect(connection).get_columns("decision_table_action_reviews")}
+            assert {"context_hash", "risk_outcome", "risk_reason", "risk_checked_at"} <= columns
+            rows = connection.execute(text("SELECT review_id, status, trigger_reason FROM decision_table_action_reviews ORDER BY review_id")).all()
+            assert rows == [("done", "executed", "legacy_tool_list"), ("pending", "risk_pending", "legacy_tool_list")]
+            risk.downgrade()
+            audit.downgrade()
+            base.downgrade()
+            assert "decision_table_action_reviews" not in inspect(connection).get_table_names()

@@ -1,7 +1,7 @@
 """本文件对外提供决策表治理的 SQLAlchemy 持久化模型。
 
-输入为会话、操作、审批、动作参数、Run 身份与事件字段；输出为可事务提交和查询的关系表。
-工作流以表头锁定修订，保存不可变快照、操作事件、动作复核和 Run 状态，并用 outbox 交付会话投影。
+输入为会话、操作、审批、动作参数、风险判断、上下文指纹、Run 身份与事件字段；输出为可事务提交和查询的关系表。
+工作流以表头锁定修订，保存不可变快照、操作事件、两阶段动作审计和 Run 状态，并用 outbox 交付会话投影。
 示例：`await session.get(TableHead, {"user_id": user_id, "thread_id": thread_id})`。
 """
 
@@ -192,7 +192,7 @@ class TableModelCall(Base):
 class TableActionReview(Base):
     __tablename__ = "decision_table_action_reviews"
     __table_args__ = (
-        UniqueConstraint("run_id", "tool_call_id", "action_name", "args_hash", "actor_id", "table_revision", name="uq_decision_action_binding"),
+        UniqueConstraint("run_id", "tool_call_id", "action_name", "args_hash", "actor_id", "table_revision", "context_hash", name="uq_decision_action_binding"),
     )
 
     review_id: Mapped[str] = mapped_column(String(36), primary_key=True)
@@ -206,7 +206,11 @@ class TableActionReview(Base):
     actor_id: Mapped[str] = mapped_column(String(64), nullable=False)
     table_revision: Mapped[int] = mapped_column(Integer, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    context_hash: Mapped[str] = mapped_column(String(64), nullable=False, default="")
     trigger_reason: Mapped[str] = mapped_column(String(64), nullable=False)
+    risk_outcome: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    risk_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    risk_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     conclusion: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

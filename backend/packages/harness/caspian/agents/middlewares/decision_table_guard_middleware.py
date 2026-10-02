@@ -1,8 +1,9 @@
 """
-本文件对外提供 `DecisionTableGuardMiddleware` 类，作为决策等级表的行为强制守卫中间件。
+本文件对外提供 evaluate_guard 纯判定函数及兼容的 DecisionTableGuardMiddleware。
 
 对外提供:
-    DecisionTableGuardMiddleware(AgentMiddleware) — 覆盖 wrap_tool_call / awrap_tool_call，
+    evaluate_guard(table, tool_name, args) — 供统一动作闸门在认领执行前判定硬层规则。
+    DecisionTableGuardMiddleware(AgentMiddleware) — 独立兼容包装器，覆盖 wrap_tool_call / awrap_tool_call，
     对工具调用按当前 thread 决策等级表的硬层 guard 做确定性匹配：priority 3 拦截、2 警告、1 放行
 
 输入:
@@ -164,6 +165,22 @@ def _row_violation(row: DecisionRow, tool_name: str, args: dict) -> Guard | None
     return None
 
 
+def evaluate_guard(table, tool_name: str, args: dict) -> tuple[str, DecisionRow | None, Guard | None]:
+    entries = [DecisionRow(
+        id=row.id, requirement=row.requirement, decision=row.decision,
+        priority=row.priority,
+        guards=[guard for value in row.guards if (guard := Guard.from_dict(value)) is not None],
+    ) for row in table.rows if row.guards]
+    best: tuple[int, DecisionRow, Guard] | None = None
+    for row in entries:
+        guard = _row_violation(row, tool_name, args)
+        if guard is not None and (best is None or row.priority > best[0]):
+            best = (row.priority, row, guard)
+    if best is None or best[0] == 1:
+        return "pass", None, None
+    return ("block" if best[0] == 3 else "warn"), best[1], best[2]
+
+
 class DecisionTableGuardMiddleware(AgentMiddleware):
 
     @staticmethod
@@ -205,32 +222,9 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
         actor_id = "subagent" if context.get("is_subagent") else "lead"
         table = await service().current(str(user_id), str(thread_id), Actor(actor_id, "agent"))
 
-        hard_entries = [DecisionRow(
-            id=row.id, requirement=row.requirement, decision=row.decision,
-            priority=row.priority,
-            guards=[guard for value in row.guards if (guard := Guard.from_dict(value)) is not None],
-        ) for row in table.rows if row.guards]
-        if not hard_entries:
-            return "pass", None, None
-
         tool_name = request.tool_call.get("name", "")
         args = request.tool_call.get("args", {}) or {}
-
-        best: tuple[int, DecisionRow, Guard] | None = None
-        for row in hard_entries:
-            guard = _row_violation(row, tool_name, args)
-            if guard is not None and (best is None or row.priority > best[0]):
-                best = (row.priority, row, guard)
-
-        if best is None:
-            return "pass", None, None
-
-        priority, row, guard = best
-        if priority == 1:
-            return "pass", None, None
-        if priority == 3:
-            return "block", row, guard
-        return "warn", row, guard
+        return evaluate_guard(table, tool_name, args)
 
     @staticmethod
     def _make_block_message(request: ToolCallRequest, row: DecisionRow, guard: Guard) -> ToolMessage:
@@ -281,6 +275,7 @@ class DecisionTableGuardMiddleware(AgentMiddleware):
                 content=(result.content or "") + warning,
                 tool_call_id=result.tool_call_id,
                 name=getattr(result, "name", None),
+                status=result.status,
             )
         return result
 
